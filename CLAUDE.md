@@ -78,6 +78,22 @@ Valid `layout` values: `image-top`, `image-bottom`, `image-full`, `text-only`.
 1. **Add a generic `examples/` directory** with sample `book.json` + placeholder/public-domain images so new users have something to run out of the box.
 2. **Implement `src/pdf_ingest.py`** — convert a PDF draft (scanned handwriting + drawings) into `book.json` + extracted `images/`. Wire it into `build.py` via `--from-pdf <path>`. This is the project's main feature goal.
 
+## Commit convention
+
+This project uses **[Conventional Commits](https://www.conventionalcommits.org/)**. Every commit message (by humans or by Claude) MUST follow the format:
+
+```
+<type>[optional scope]: <short summary>
+
+[optional body]
+
+[optional footer, e.g. BREAKING CHANGE: ...]
+```
+
+Allowed types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
+
+When Claude creates a commit, it MUST invoke the **`generating-conventional-commits`** skill to analyze staged changes and produce the message. Do not hand-write commit messages without going through that skill.
+
 ## Development notes
 
 - Platform: Windows 11, bash shell (Unix paths: `/c/Users/...`).
