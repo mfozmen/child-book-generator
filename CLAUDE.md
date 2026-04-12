@@ -78,6 +78,19 @@ Valid `layout` values: `image-top`, `image-bottom`, `image-full`, `text-only`.
 1. **Add a generic `examples/` directory** with sample `book.json` + placeholder/public-domain images so new users have something to run out of the box.
 2. **Implement `src/pdf_ingest.py`** — convert a PDF draft (scanned handwriting + drawings) into `book.json` + extracted `images/`. Wire it into `build.py` via `--from-pdf <path>`. This is the project's main feature goal.
 
+## Core principle: the child is the author
+
+This project exists so a **child feels like a real author**. The child's original words are sacred. Claude's default instinct to "improve" prose is the single biggest risk to that goal and must be actively suppressed at every layer — prompts, code transforms, edit passes, OCR cleanup.
+
+Before touching any text that originated from a child author (OCR output, `book.json` page text, cover/back-cover text), Claude MUST invoke the project-level **`preserve-child-voice`** skill (`.claude/skills/preserve-child-voice/`) and follow its allowed/forbidden-edit rules.
+
+## Skills used in this project
+
+- **`preserve-child-voice`** (project-level, in `.claude/skills/`) — guardrail for any edit touching the child's text. Invoke before OCR post-processing, `book.json` edits, or any "polish" task.
+- **`pdf-processing-pro`** (user-level) — production PDF toolkit with OCR/forms/tables. Used by the upcoming `src/pdf_ingest.py`.
+- **`generating-conventional-commits`** (user-level) — required for every commit in this repo.
+- **`superpowers:test-driven-development`** — required for all new production code (see Testing section).
+
 ## Commit convention
 
 This project uses **[Conventional Commits](https://www.conventionalcommits.org/)**. Every commit message (by humans or by Claude) MUST follow the format:

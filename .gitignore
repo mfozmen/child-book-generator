@@ -24,5 +24,7 @@ fonts/
 .DS_Store
 Thumbs.db
 
-# Claude Code local settings
-.claude/
+# Claude Code local settings (keep project-level skills tracked)
+.claude/*
+!.claude/skills/
+!.claude/skills/**
