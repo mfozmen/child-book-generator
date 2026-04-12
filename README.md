@@ -7,7 +7,23 @@
 [![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=mfozmen_child-book-generator&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=mfozmen_child-book-generator)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A print-ready PDF generator for children's picture books. The goal is simple: **a child should feel like a real author.** Feed it a JSON description (title, author, page texts, illustrations) and it produces an A5 picture book plus an optional A4 imposed booklet ready to fold and staple.
+Turn a child's picture-book **draft PDF** (scanned handwriting + drawings) into a print-ready A5 book, plus an optional A4 imposed booklet ready to fold and staple. The goal is simple: **a child should feel like a real author** — their original words are preserved end-to-end.
+
+## How it works
+
+1. You scan or export the child's draft to a PDF — one illustration + one short text per page.
+2. The tool extracts the pages and builds an internal `book.json` (title, author, page text, image paths, layout hints).
+3. If anything required is missing from the PDF (book title, author name, cover image, etc.), the tool **asks you interactively** and fills it in.
+4. It renders a polished A5 picture book PDF, plus an optional A4 imposed booklet for home printing.
+
+`book.json` is an intermediate checkpoint you can also hand-edit if you want fine control — it isn't the primary input.
+
+## Status
+
+- ✅ Renderer: `book.json` → A5 PDF / A4 booklet works today.
+- 🚧 PDF ingestion + interactive gap-fill — in active development. See `docs/` for open tasks.
+
+Until PDF ingestion lands, the current usage below takes a `book.json` directly.
 
 ## Install
 
@@ -17,7 +33,7 @@ pip install -r requirements.txt
 
 DejaVu Sans is located automatically on Windows / Linux / macOS. If it cannot be found, drop `DejaVuSans.ttf` and `DejaVuSans-Bold.ttf` into a `fonts/` folder next to `build.py`.
 
-## Usage
+## Usage (current)
 
 ```bash
 # A5 picture book only
@@ -30,15 +46,20 @@ python build.py book.json --impose
 python build.py book.json -o output/my-book.pdf
 ```
 
-## Try the example
-
-A minimal, self-contained example lives under `examples/`. Run:
+A minimal, self-contained example lives under `examples/`:
 
 ```bash
 python build.py examples/book.json -o output/example.pdf
 ```
 
-This produces a 2-page A5 picture book from the sample `examples/book.json` and the placeholder illustrations in `examples/images/`. Use it as a template for your own book.
+## Usage (coming: PDF-driven)
+
+```bash
+# Planned — not yet implemented
+python build.py --from-pdf drafts/my-child-draft.pdf
+```
+
+This will extract pages, synthesize `book.json`, interactively ask for any missing fields, and render — all in one command.
 
 ## Project layout
 
