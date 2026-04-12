@@ -75,8 +75,14 @@ Valid `layout` values: `image-top`, `image-bottom`, `image-full`, `text-only`.
 
 ## Open TODOs
 
-1. **Add a generic `examples/` directory** with sample `book.json` + placeholder/public-domain images so new users have something to run out of the box.
-2. **Implement `src/pdf_ingest.py`** — convert a PDF draft (scanned handwriting + drawings) into `book.json` + extracted `images/`. Wire it into `build.py` via `--from-pdf <path>`. This is the project's main feature goal.
+Planning notes live in `docs/` — one Markdown file per open task (`docs/p<phase>-<nn>-<slug>.md`). **When a task ships, delete the file.** The set of files in `docs/` is the authoritative list of open work.
+
+Current phases:
+
+- **Phase 1** — PDF-first ingestion: extract pages + images from a PDF, synthesize `book.json`, ask the user interactively for anything missing (title, author, cover), then render. See `docs/p1-*.md`.
+- **Phase 2** — Layout improvements. Deferred until Phase 1 is done. See `docs/p2-*.md`.
+
+`README.md` is user-facing (what the project is, how to use it) — don't put internal plans there.
 
 ## Core principle: the child is the author
 

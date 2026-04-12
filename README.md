@@ -76,17 +76,6 @@ pytest                               # full suite
 pytest --cov=src --cov=build         # with coverage (reported to SonarCloud)
 ```
 
-## Roadmap
-
-The next milestone is a **dynamic ingestion pipeline**: drop in a PDF draft (scanned handwriting + drawings) and get a polished book automatically — with the child's original words preserved as the source of truth.
-
-- [x] Static pipeline: `book.json` → A5 PDF / A4 booklet
-- [x] `src/pdf_ingest.extract_pages()` — raw per-page text extraction
-- [ ] Embedded image extraction from PDF
-- [ ] `book.json` synthesis from extracted content
-- [ ] `build.py --from-pdf <path>` CLI integration
-- [ ] Handwriting OCR (opt-in, behind a flag — mechanical misread fixes only, never rewrites)
-
 ## License
 
 MIT — see [LICENSE](LICENSE).
