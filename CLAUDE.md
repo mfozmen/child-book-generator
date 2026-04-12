@@ -53,7 +53,19 @@ Valid `layout` values: `image-top`, `image-bottom`, `image-full`, `text-only`.
 - `reportlab>=4.0.0` — PDF generation
 - `Pillow>=10.0.0` — image handling
 - `pypdf>=4.0.0` — A4 booklet imposition
+- `pytest>=8.0.0` — test runner (dev)
 - **DejaVu Sans** font (auto-discovered on the system; otherwise place in `fonts/`)
+
+## Testing (TDD)
+
+**All new production code is written test-first.** No feature, bug fix, or refactor lands without a failing test written first and watched fail.
+
+- Tests live in `tests/`, mirroring `src/` (e.g. `src/schema.py` → `tests/test_schema.py`).
+- Run: `pytest` (whole suite) or `pytest tests/test_schema.py -k name` (single test).
+- Workflow per change: **RED** (write one minimal failing test, run it, confirm it fails for the right reason) → **GREEN** (minimal code to pass) → **REFACTOR** (clean up, tests stay green).
+- Tests use real code and real files (small fixtures under `tests/fixtures/`) — mocks only when a dependency is unavoidable (filesystem edges, subprocesses, external services).
+- Bug fixes start with a regression test that reproduces the bug.
+- Exceptions (throwaway prototypes, generated code, pure config) require explicit agreement from the maintainer.
 
 ## Current state
 
