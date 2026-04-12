@@ -93,6 +93,7 @@ Before touching any text that originated from a child author (OCR output, `book.
 ## Skills used in this project
 
 - **`preserve-child-voice`** (project-level, in `.claude/skills/`) — guardrail for any edit touching the child's text. Invoke before OCR post-processing, `book.json` edits, or any "polish" task.
+- **`select-page-layout`** (project-level, in `.claude/skills/`) — pixel-perfect layout decisions per page. Invoke before writing `layout` into `book.json`, especially during PDF ingestion synthesis or when text/image content changes.
 - **`pdf-processing-pro`** (user-level) — production PDF toolkit with OCR/forms/tables. Used by the upcoming `src/pdf_ingest.py`.
 - **`generating-conventional-commits`** (project-level, in `.claude/skills/`) — required for every commit in this repo. Encodes the type-selection rules (notably: CI config changes are `ci:`, never `fix(ci):`).
 - **`superpowers:test-driven-development`** — required for all new production code (see Testing section).
