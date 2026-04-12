@@ -23,6 +23,16 @@ python build.py book.json --impose
 python build.py book.json -o output/my-book.pdf
 ```
 
+## Try the example
+
+A minimal, self-contained example lives under `examples/`. Run:
+
+```bash
+python build.py examples/book.json -o output/example.pdf
+```
+
+This produces a 2-page A5 picture book from the sample `examples/book.json` and the placeholder illustrations in `examples/images/`. Use it as a template for your own book.
+
 ## Project layout
 
 - `book.json` — book content (title, author, per-page text and image paths)

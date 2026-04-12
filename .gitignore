@@ -8,8 +8,9 @@ env/
 .env
 
 # User inputs (book content is per-user, not part of the generator)
-book.json
-images/
+# Root-anchored so examples/book.json and examples/images/ stay tracked.
+/book.json
+/images/
 
 # Generated outputs
 output/
