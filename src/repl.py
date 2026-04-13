@@ -61,6 +61,7 @@ class Repl:
             "pages": _cmd_pages,
             "title": _cmd_title,
             "author": _cmd_author,
+            "render": _cmd_render,
         }
 
     @property
@@ -303,6 +304,35 @@ def _cmd_author(repl: Repl, args: str) -> None:
         return None
     repl.draft.author = new
     repl._console.print(f"[green]Author set:[/green] {new}")
+    return None
+
+
+def _cmd_render(repl: Repl, args: str) -> None:
+    """Render the loaded draft into a finished A5 PDF."""
+    if not _require_draft(repl):
+        return None
+    if not repl.draft.title.strip():
+        repl._console.print(
+            "[yellow]The draft has no title.[/yellow] "
+            "Set one with [cyan]/title <name>[/cyan], then try again."
+        )
+        return None
+
+    from src.builder import build_pdf
+    from src.draft import slugify, to_book
+
+    source_dir = (repl._session_root or Path.cwd()) / ".book-gen"
+    if args.strip():
+        out_path = Path(args.strip()).expanduser()
+    else:
+        out_path = source_dir / "output" / f"{slugify(repl.draft.title)}.pdf"
+    try:
+        book = to_book(repl.draft, source_dir)
+        build_pdf(book, out_path)
+    except Exception as e:
+        repl._console.print(f"[red]Render failed:[/red] {e}")
+        return None
+    repl._console.print(f"[green]Wrote[/green] {out_path}")
     return None
 
 

@@ -30,6 +30,7 @@ Phase plan lives under `docs/`. Shipped so far:
 - ✅ LLM provider picker (Claude, GPT, Gemini, Ollama, or offline) with masked API-key entry, live validation for Claude (re-prompts on a bad key), and `/model` to switch. Your choice is remembered per working directory in `.book-gen/session.json` (gitignored); API keys are re-prompted each launch until keyring support lands.
 - ✅ Embedded-image extraction from PDF drafts.
 - ✅ `/load <pdf>` slash command that ingests a draft into the session (text verbatim + drawings extracted to `.book-gen/images/`).
+- ✅ End-to-end: `/load` → `/title` → `/author` → `/render` writes an A5 PDF under `.book-gen/output/`.
 
 In flight / planned:
 
@@ -82,6 +83,7 @@ You'll see a `>` prompt. Today's slash commands:
 | `/pages` | list every page in the draft with a drawing marker and a text preview |
 | `/title [name]` | show or set the book's title |
 | `/author [name]` | show or set the book's author |
+| `/render [path]` | build the A5 picture-book PDF from the loaded draft |
 | `/exit` | leave the session (Ctrl-D also exits) |
 
 On first launch the shell asks which provider to use. Picking Claude / GPT / Gemini also prompts for the provider's API key, which is read silently (nothing echoed to the terminal) and held only in memory for the session. Picking "No model (offline)" or Ollama skips the key entirely.
