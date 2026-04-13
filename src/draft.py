@@ -30,6 +30,8 @@ class DraftPage:
 class Draft:
     source_pdf: Path
     pages: list[DraftPage] = field(default_factory=list)
+    title: str = ""
+    author: str = ""
 
 
 def from_pdf(pdf_path: Path, images_dir: Path) -> Draft:

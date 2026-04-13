@@ -58,6 +58,9 @@ class Repl:
             "exit": _cmd_exit,
             "model": _cmd_model,
             "load": _cmd_load,
+            "pages": _cmd_pages,
+            "title": _cmd_title,
+            "author": _cmd_author,
         }
 
     @property
@@ -247,6 +250,59 @@ def _cmd_model(repl: Repl, _args: str) -> None:
         repl._console.print("[dim]model unchanged[/dim]")
         return None
     repl._activate(*chosen)
+    return None
+
+
+_PAGE_PREVIEW_CHARS = 60
+
+
+def _require_draft(repl: Repl) -> bool:
+    if repl.draft is not None:
+        return True
+    repl._console.print(
+        "[yellow]No draft loaded.[/yellow] Use [cyan]/load <pdf>[/cyan] first."
+    )
+    return False
+
+
+def _cmd_pages(repl: Repl, _args: str) -> None:
+    """List every page in the loaded draft with an image flag and a preview."""
+    if not _require_draft(repl):
+        return None
+    for i, page in enumerate(repl.draft.pages, start=1):
+        preview = page.text.strip().replace("\n", " ")
+        if len(preview) > _PAGE_PREVIEW_CHARS:
+            preview = preview[: _PAGE_PREVIEW_CHARS - 1] + "…"
+        marker = "[magenta]drawing[/magenta]" if page.image else "[dim]no image[/dim]"
+        repl._console.print(f"  {i:>2}. {marker}  {preview}")
+    return None
+
+
+def _cmd_title(repl: Repl, args: str) -> None:
+    """Show or set the draft's title."""
+    if not _require_draft(repl):
+        return None
+    new = args.strip()
+    if not new:
+        current = repl.draft.title or "(unset)"
+        repl._console.print(f"Title: [green]{current}[/green]")
+        return None
+    repl.draft.title = new
+    repl._console.print(f"[green]Title set:[/green] {new}")
+    return None
+
+
+def _cmd_author(repl: Repl, args: str) -> None:
+    """Show or set the draft's author."""
+    if not _require_draft(repl):
+        return None
+    new = args.strip()
+    if not new:
+        current = repl.draft.author or "(unset)"
+        repl._console.print(f"Author: [green]{current}[/green]")
+        return None
+    repl.draft.author = new
+    repl._console.print(f"[green]Author set:[/green] {new}")
     return None
 
 

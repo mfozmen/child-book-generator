@@ -79,6 +79,9 @@ You'll see a `>` prompt. Today's slash commands:
 | `/help` | list available commands |
 | `/model` | switch the active LLM provider (re-prompts for an API key if required) |
 | `/load <pdf>` | ingest a PDF draft into the session (text + embedded illustrations) |
+| `/pages` | list every page in the draft with a drawing marker and a text preview |
+| `/title [name]` | show or set the book's title |
+| `/author [name]` | show or set the book's author |
 | `/exit` | leave the session (Ctrl-D also exits) |
 
 On first launch the shell asks which provider to use. Picking Claude / GPT / Gemini also prompts for the provider's API key, which is read silently (nothing echoed to the terminal) and held only in memory for the session. Picking "No model (offline)" or Ollama skips the key entirely.
