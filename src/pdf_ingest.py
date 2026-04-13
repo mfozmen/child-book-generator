@@ -33,8 +33,19 @@ def extract_images(pdf_path: Path, out_dir: Path) -> list[Path | None]:
             results.append(None)
             continue
         src = images[0]
-        suffix = Path(src.name).suffix or ".png"
-        dest = out_dir / f"page-{i:02d}{suffix}"
+        ext = _extension_for(src)
+        dest = out_dir / f"page-{i:02d}.{ext}"
         dest.write_bytes(src.data)
         results.append(dest)
     return results
+
+
+def _extension_for(image_file) -> str:
+    """Pick a file extension that matches the raw bytes, not the PDF's label.
+
+    pypdf's ``image_file.name`` can be extensionless on some PDFs (e.g. ``Im0``),
+    which would make a ``.name``-based suffix silently save JPEG bytes under
+    ``.png``. Derive from PIL's detected format instead.
+    """
+    fmt = (getattr(image_file.image, "format", None) or "PNG").lower()
+    return "jpg" if fmt == "jpeg" else fmt

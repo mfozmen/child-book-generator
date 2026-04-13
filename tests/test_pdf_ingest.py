@@ -115,3 +115,26 @@ def test_extract_images_creates_out_dir_if_missing(tmp_path):
 
     assert out_dir.exists()
     assert result[0] is not None
+
+
+def test_extract_images_uses_extension_matching_image_bytes(tmp_path):
+    """JPEG-embedded PDFs must produce .jpg/.jpeg files, not .png.
+
+    pypdf's image name can be extensionless on some PDFs, which used to
+    make the fallback ".png" fire for JPEG bytes.
+    """
+    src = tmp_path / "_src.jpg"
+    Image.new("RGB", (80, 60), (200, 100, 50)).save(src, "JPEG", quality=90)
+    pdf_path = tmp_path / "draft.pdf"
+    c = canvas.Canvas(str(pdf_path), pagesize=A5)
+    c.drawImage(ImageReader(str(src)), 50, 200, width=200, height=150)
+    c.showPage()
+    c.save()
+
+    result = extract_images(pdf_path, tmp_path / "out")
+
+    assert result[0] is not None
+    saved = Image.open(result[0])
+    # Extension on disk must match the actual byte format.
+    ext_to_format = {".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG"}
+    assert ext_to_format[result[0].suffix.lower()] == saved.format
