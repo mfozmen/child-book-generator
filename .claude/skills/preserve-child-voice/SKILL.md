@@ -5,11 +5,16 @@ description: Guardrail for any edit touching the child's original text (OCR outp
 
 # Preserve the child's voice
 
-This project exists so a child feels like a **real author**. The child's original words are sacred. Claude's default instinct to "improve" prose is the single biggest risk to that goal and must be actively suppressed.
+This project exists so a child feels like a **real author**. The app may act as a light copy-editor, but never as a co-author. The child's **story** — plot, characters, ideas, voice, word choice — is sacred. Surface-level typing mistakes are not.
 
 ## The rule
 
-**Never rewrite, restructure, or "polish" text that originated from the child.** Not in `book.json`, not in OCR output, not in a draft review, not "just a small fix."
+Two hard lines, in this order:
+
+1. **The story never changes.** Plot, events, characters, meaning, sentence intent, emphasis, made-up words, repetition, voice — untouchable.
+2. **Mechanical surface fixes are fine.** Typos, OCR misreads, missing punctuation, stray whitespace — treat these like a copy-editor would. The child would correct them too if they noticed.
+
+If a change could plausibly shift what the story *says* or *means*, it is a story change. Stop.
 
 ## What counts as the child's voice
 
@@ -20,29 +25,30 @@ This project exists so a child feels like a **real author**. The child's origina
 
 When in doubt, assume text is the child's and protect it.
 
-## Allowed edits (strictly mechanical)
+## Allowed edits (mechanical — OK by default, logged)
 
-These are the ONLY edits Claude may suggest without explicit permission:
+These may be applied without asking, but must be logged so the maintainer can audit:
 
-1. **Clear OCR misreads** — e.g. OCR outputs "rn" for "m", or "0" for "o". These are transcription errors, not the child's choice. Flag them and show both options.
-2. **Obvious typos the child would also correct** — a letter plainly missing ("hte" → "the"), double-struck key ("catt" → "cat"). Only when the child's intent is unambiguous.
-3. **Page/line breaks and whitespace** — purely layout, no semantic change.
+1. **Clear OCR misreads** — "rn" → "m", "0" → "o", "l" ↔ "I". Transcription errors, not the child's choice.
+2. **Obvious typos** — missing letter ("hte" → "the"), doubled key ("catt" → "cat"), swapped adjacent letters ("teh" → "the"). Only when the intended word is unambiguous.
+3. **Missing sentence-ending punctuation** — add a period/question mark if the sentence clearly ends there and the child simply forgot. Never change ! to . or vice versa (that's tone, not mechanics).
+4. **Whitespace** — collapse double spaces, strip trailing whitespace, normalize line breaks.
+5. **Capitalize the first letter of a sentence** — only if the child used it inconsistently and the capital is clearly intended.
 
-Even these require:
-- Showing the diff (before → after) before applying
-- Noting which rule triggered the edit
-- One-at-a-time review, never bulk auto-fixes
+If unsure whether a fix is mechanical or a story change, **treat it as a story change** — ask before applying.
 
-## Forbidden edits (never do these silently)
+## Forbidden edits (never, even silently)
 
-- **Grammar "corrections"** that change sentence structure. A 6-year-old writing "the dragon he was sad" is not a mistake — that is voice.
-- **Word substitutions** for richness ("nice" → "delightful"). Off-limits.
-- **Reordering sentences** for flow.
-- **Adding descriptive detail** the child did not write.
-- **Translating** between languages without explicit maintainer instruction.
-- **Expanding** short sentences into longer ones.
+- **Grammar "corrections"** that change sentence structure. A 6-year-old writing "the dragon he was sad" is voice, not a mistake.
+- **Word substitutions** for richness or clarity ("nice" → "delightful", "the thing" → "the creature"). Off-limits.
+- **Reordering** sentences or clauses for flow.
+- **Adding** descriptive detail, dialogue tags, or connective tissue the child did not write.
 - **Removing** repetition. Repetition is often deliberate in children's storytelling.
-- **Standardising** invented spelling of made-up creatures/places.
+- **Translating** between languages without explicit maintainer instruction.
+- **Expanding** short sentences into longer ones, or **shortening** long ones.
+- **Standardising** invented spelling of made-up creatures/places ("draganosaurus" stays).
+- **Changing tense** or point of view.
+- **Replacing** exclamation marks with periods (or vice versa) — punctuation carries tone.
 
 ## When the maintainer asks for an "edit pass"
 
