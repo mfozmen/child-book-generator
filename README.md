@@ -11,19 +11,30 @@ Turn a child's picture-book **draft PDF** (scanned handwriting + drawings) into 
 
 ## How it works
 
+`child-book-generator` is an **interactive CLI**. You launch it, point it at a PDF draft, and it walks you through turning that draft into a finished book — asking questions when it needs your decision, never rewriting the child's story on its own.
+
 1. You scan or export the child's draft to a PDF — one illustration + one short text per page.
-2. The tool extracts the pages and builds an internal `book.json` (title, author, page text, image paths, layout hints).
-3. If anything required is missing from the PDF (book title, author name, cover image, etc.), the tool **asks you interactively** and fills it in.
+2. You run `child-book-generator`, pick an LLM provider (or skip AI entirely), and drop it the PDF.
+3. The tool extracts pages + drawings, proposes typo fixes for your approval, and asks for anything missing (title, author, cover image). For pages without a drawing, it can generate an illustration — always with your per-page consent.
 4. It renders a polished A5 picture book PDF, plus an optional A4 imposed booklet for home printing.
 
-`book.json` is an intermediate checkpoint you can also hand-edit if you want fine control — it isn't the primary input.
+`book.json` is an intermediate checkpoint the tool writes along the way. You can also hand-edit it or hand it directly to the renderer.
 
 ## Status
 
-- ✅ Renderer: `book.json` → A5 PDF / A4 booklet works today.
-- 🚧 PDF ingestion + interactive gap-fill — in active development. See `docs/` for open tasks.
+Phase plan lives under `docs/`. Shipped so far:
 
-Until PDF ingestion lands, the current usage below takes a `book.json` directly.
+- ✅ A5 + A4 booklet renderer (hand-authored `book.json` → PDF).
+- ✅ `child-book-generator` console entry point with `--version` / `--help`.
+- ✅ Interactive REPL skeleton with slash-command dispatch (`/help`, `/exit`).
+- ✅ Embedded-image extraction from PDF drafts.
+
+In flight / planned:
+
+- 🚧 LLM provider selection (Claude / GPT / Gemini / Ollama).
+- 🚧 Agent loop + tool suite (typo proposals, layout choice, render, ...).
+- 🚧 Illustration generation per page & cover, opt-in.
+- 🚧 OCR for handwritten scans.
 
 ## Install & run
 
@@ -50,7 +61,26 @@ child-book-generator --version
 
 DejaVu Sans is located automatically on Windows / Linux / macOS. If it cannot be found, drop `DejaVuSans.ttf` and `DejaVuSans-Bold.ttf` into a `fonts/` folder next to `build.py`.
 
-## Usage (current)
+## Usage — interactive (primary)
+
+Launch the shell and follow the prompts:
+
+```bash
+child-book-generator
+```
+
+You'll see a `>` prompt. Today's slash commands:
+
+| Command | What it does |
+|---|---|
+| `/help` | list available commands |
+| `/exit` | leave the session (Ctrl-D also exits) |
+
+The agent, provider selection, and file commands wire up across upcoming PRs.
+
+## Usage — direct renderer (still works)
+
+If you already have a `book.json`, you can skip the REPL:
 
 ```bash
 # A5 picture book only
@@ -68,15 +98,6 @@ A minimal, self-contained example lives under `examples/`:
 ```bash
 python build.py examples/book.json -o output/example.pdf
 ```
-
-## Usage (coming: PDF-driven)
-
-```bash
-# Planned — not yet implemented
-python build.py --from-pdf drafts/my-child-draft.pdf
-```
-
-This will extract pages, synthesize `book.json`, interactively ask for any missing fields, and render — all in one command.
 
 ## Project layout
 
