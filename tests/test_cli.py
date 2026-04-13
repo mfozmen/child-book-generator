@@ -38,8 +38,12 @@ def test_cli_help_exits_zero(capsys):
     assert "child-book-generator" in captured.out.lower()
 
 
-def test_cli_noargs_launches_repl_and_exits_on_eof(monkeypatch):
+def test_cli_noargs_launches_repl_and_exits_on_eof(tmp_path, monkeypatch):
     # No arguments drops the user into the REPL; EOF on stdin exits cleanly.
+    # Run from tmp_path so the REPL's session state stays isolated from the
+    # dev tree (which may carry a local .book-gen/ from manual smoke-tests).
+    monkeypatch.chdir(tmp_path)
+
     def eof(_prompt=""):
         raise EOFError
 
@@ -47,12 +51,13 @@ def test_cli_noargs_launches_repl_and_exits_on_eof(monkeypatch):
     assert cli.main([]) == 0
 
 
-def test_cli_reads_api_keys_through_getpass_not_input(monkeypatch):
+def test_cli_reads_api_keys_through_getpass_not_input(tmp_path, monkeypatch):
     """Picking a key-requiring provider must route the key through getpass.
 
     Regression guard: if someone ever rewires read_secret to use input(),
     the key would echo to the terminal on the way in.
     """
+    monkeypatch.chdir(tmp_path)
     inputs = iter(["2", "/exit"])  # pick Anthropic, then leave
     secrets = iter(["sk-test-key"])
 

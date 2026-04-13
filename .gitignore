@@ -35,3 +35,6 @@ Thumbs.db
 .claude/*
 !.claude/skills/
 !.claude/skills/**
+
+# Per-project REPL session state (provider choice, future: edit log, etc.)
+.book-gen/

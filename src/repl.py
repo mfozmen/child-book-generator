@@ -8,11 +8,13 @@ input lands in Phase 2 (``docs/p2-01``).
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable
 
 from rich.console import Console
 
-from src.providers.llm import SPECS, ProviderSpec
+from src import session as session_mod
+from src.providers.llm import SPECS, ProviderSpec, find
 
 
 SlashHandler = Callable[["Repl", str], int | None]
@@ -37,12 +39,14 @@ class Repl:
         *,
         read_secret: Callable[[], str] | None = None,
         provider: ProviderSpec | None = None,
+        session_root: Path | None = None,
     ) -> None:
         self._read = read_line
         self._read_secret = read_secret or read_line
         self._console = console
         self._provider = provider
         self._api_key: str | None = None
+        self._session_root = Path(session_root) if session_root is not None else None
         self._commands: dict[str, SlashHandler] = {
             "help": _cmd_help,
             "exit": _cmd_exit,
@@ -67,7 +71,7 @@ class Repl:
             "Type [cyan]/help[/cyan] for commands, [cyan]/exit[/cyan] to leave.\n"
         )
         if self._provider is None:
-            chosen = self._prompt_for_provider()
+            chosen = self._resume_or_pick()
             if chosen is None:
                 return 0
             self._activate(*chosen)
@@ -87,6 +91,38 @@ class Repl:
         self._provider = spec
         self._api_key = api_key
         self._console.print(f"[green]Active model:[/green] {spec.display_name}\n")
+        self._persist()
+
+    def _persist(self) -> None:
+        if self._session_root is None or self._provider is None:
+            return
+        session_mod.save(
+            self._session_root, session_mod.Session(provider=self._provider.name)
+        )
+
+    def _resume_or_pick(self) -> tuple[ProviderSpec, str | None] | None:
+        """Try to restore the saved provider; fall back to the interactive picker.
+
+        API keys aren't persisted in this slice, so a saved key-requiring
+        provider still prompts for the key. Unknown or corrupt saved state
+        silently falls through to the picker.
+        """
+        if self._session_root is not None:
+            saved = session_mod.load(self._session_root).provider
+            spec = find(saved) if saved else None
+            if spec is not None:
+                api_key: str | None = None
+                if spec.requires_api_key:
+                    self._console.print(
+                        f"Resuming with [green]{spec.display_name}[/green]. "
+                        "Enter API key:"
+                    )
+                    try:
+                        api_key = self._read_secret().strip()
+                    except EOFError:
+                        return None
+                return spec, api_key
+        return self._prompt_for_provider()
 
     def _prompt_for_provider(self) -> tuple[ProviderSpec, str | None] | None:
         """Interactive picker. Returns ``(spec, api_key)`` or ``None`` on abort.

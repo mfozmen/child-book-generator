@@ -27,7 +27,7 @@ Phase plan lives under `docs/`. Shipped so far:
 - ✅ A5 + A4 booklet renderer (hand-authored `book.json` → PDF).
 - ✅ `child-book-generator` console entry point with `--version` / `--help`.
 - ✅ Interactive REPL skeleton with slash-command dispatch (`/help`, `/exit`).
-- ✅ LLM provider picker (Claude, GPT, Gemini, Ollama, or offline) with masked API-key entry and `/model` to switch.
+- ✅ LLM provider picker (Claude, GPT, Gemini, Ollama, or offline) with masked API-key entry and `/model` to switch. Your choice is remembered per working directory in `.book-gen/session.json` (gitignored); API keys are re-prompted each launch until keyring support lands.
 - ✅ Embedded-image extraction from PDF drafts.
 
 In flight / planned:

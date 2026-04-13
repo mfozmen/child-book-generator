@@ -27,6 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.parse_args(argv)
 
     import getpass
+    from pathlib import Path
 
     from rich.console import Console
 
@@ -39,7 +40,10 @@ def main(argv: list[str] | None = None) -> int:
         return getpass.getpass("")
 
     return Repl(
-        read_line=read_line, console=Console(), read_secret=read_secret
+        read_line=read_line,
+        console=Console(),
+        read_secret=read_secret,
+        session_root=Path.cwd(),
     ).run()
 
 
