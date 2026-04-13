@@ -85,6 +85,10 @@ class NullProvider:
 # the two serve different purposes.
 _ANTHROPIC_CHAT_MODEL = "claude-opus-4-6"
 _ANTHROPIC_MAX_TOKENS = 2048
+# Bound the SDK call so a slow/hung network doesn't freeze the REPL.
+# The SDK default is ~600 s which is far too long for an interactive
+# loop. 60 s still leaves plenty of room for a reasonable reply.
+_ANTHROPIC_CHAT_TIMEOUT_SECONDS = 60.0
 
 
 class AnthropicProvider:
@@ -108,7 +112,10 @@ class AnthropicProvider:
         if anthropic is None:  # pragma: no cover — defensive
             raise ImportError("anthropic SDK not installed")
 
-        client = anthropic.Anthropic(api_key=self._api_key)
+        client = anthropic.Anthropic(
+            api_key=self._api_key,
+            timeout=_ANTHROPIC_CHAT_TIMEOUT_SECONDS,
+        )
         response = client.messages.create(
             model=self._model,
             max_tokens=self._max_tokens,

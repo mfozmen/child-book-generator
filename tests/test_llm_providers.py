@@ -30,6 +30,7 @@ def _fake_anthropic_module(reply_text="hello from claude"):
 
         def __init__(self, *, api_key, timeout=None):
             self.api_key = api_key
+            self.timeout = timeout
             self.messages = Messages()
             Client.last_client = self
 
@@ -66,6 +67,26 @@ def test_anthropic_provider_forwards_messages(monkeypatch):
     provider.chat(msgs)
 
     assert fake.Anthropic.last_client.messages.last_kwargs["messages"] == msgs
+
+
+def test_anthropic_provider_passes_bounded_timeout_to_sdk(monkeypatch):
+    """Regression guard: the SDK default timeout (~600 s) would freeze
+    the REPL on a flaky network. The chat client must be constructed with
+    a short, finite timeout — see PR #6 for the validator's equivalent."""
+    fake = _fake_anthropic_module()
+    monkeypatch.setitem(sys.modules, "anthropic", fake)
+
+    AnthropicProvider(api_key="sk").chat([{"role": "user", "content": "hi"}])
+
+    timeout = fake.Anthropic.last_client.api_key  # sanity — client was built
+    assert timeout == "sk"
+    # The keyword actually forwarded to Anthropic():
+    last = fake.Anthropic.last_client
+    # Stored on the fake in the last_kwargs of the builder — we need to
+    # inspect the constructor arg directly.
+    # Rebuild assertion: the fake client stores timeout alongside api_key.
+    assert hasattr(last, "timeout")
+    assert last.timeout is not None and 0 < last.timeout <= 300
 
 
 def test_anthropic_provider_without_sdk_raises_import_error(monkeypatch):
