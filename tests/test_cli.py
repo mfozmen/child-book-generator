@@ -38,6 +38,10 @@ def test_cli_help_exits_zero(capsys):
     assert "child-book-generator" in captured.out.lower()
 
 
-def test_cli_noargs_returns_zero(capsys):
-    # No subcommand yet: app greets and exits cleanly. REPL wiring lands in p1-01.
+def test_cli_noargs_launches_repl_and_exits_on_eof(monkeypatch):
+    # No arguments drops the user into the REPL; EOF on stdin exits cleanly.
+    def eof(_prompt=""):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", eof)
     assert cli.main([]) == 0

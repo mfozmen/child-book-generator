@@ -1,8 +1,8 @@
 """Entry point for the child-book-generator CLI.
 
-The interactive REPL lands in Phase 1 (see docs/p1-01-repl-and-provider-selection.md).
-For now this module only wires ``--version`` / ``--help`` so the console script
-exposed by ``pyproject.toml`` can be smoke-tested with ``uvx`` from day one.
+Parses ``--version`` / ``--help`` and drops the user into the interactive REPL
+(``src/repl.py``). The console script exposed by ``pyproject.toml`` calls
+``main()`` here, so ``uvx child-book-generator`` lands straight in the shell.
 """
 
 from __future__ import annotations
@@ -21,17 +21,19 @@ def _resolve_version() -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="child-book-generator",
-        description=(
-            "Turn a child's picture-book draft PDF into a print-ready book. "
-            "Interactive REPL coming in Phase 1."
-        ),
+        description="Turn a child's picture-book draft PDF into a print-ready book.",
     )
     parser.add_argument("--version", action="version", version=_resolve_version())
     parser.parse_args(argv)
 
-    print("child-book-generator is installed. The interactive REPL ships in Phase 1.")
-    print("See https://github.com/mfozmen/child-book-generator for progress.")
-    return 0
+    from rich.console import Console
+
+    from src.repl import Repl
+
+    def read_line() -> str:
+        return input("> ")
+
+    return Repl(read_line=read_line, console=Console()).run()
 
 
 if __name__ == "__main__":
