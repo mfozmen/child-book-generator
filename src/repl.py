@@ -13,7 +13,9 @@ from typing import Callable
 
 from rich.console import Console
 
+from src import draft as draft_mod
 from src import session as session_mod
+from src.draft import Draft
 from src.providers.llm import SPECS, ProviderSpec, find
 from src.providers.validator import KeyValidationError, ProviderUnavailable
 
@@ -50,10 +52,12 @@ class Repl:
         self._api_key: str | None = None
         self._session_root = Path(session_root) if session_root is not None else None
         self._validate = validate
+        self._draft: Draft | None = None
         self._commands: dict[str, SlashHandler] = {
             "help": _cmd_help,
             "exit": _cmd_exit,
             "model": _cmd_model,
+            "load": _cmd_load,
         }
 
     @property
@@ -63,6 +67,16 @@ class Repl:
     @property
     def api_key(self) -> str | None:
         return self._api_key
+
+    @property
+    def draft(self) -> Draft | None:
+        return self._draft
+
+    def _images_dir(self) -> Path:
+        """Where extracted / generated images live. Session-scoped so
+        ``.gitignore``'s ``.book-gen/`` rule covers them automatically."""
+        root = self._session_root or Path.cwd()
+        return root / ".book-gen" / "images"
 
     @property
     def commands(self) -> dict[str, SlashHandler]:
@@ -233,4 +247,28 @@ def _cmd_model(repl: Repl, _args: str) -> None:
         repl._console.print("[dim]model unchanged[/dim]")
         return None
     repl._activate(*chosen)
+    return None
+
+
+def _cmd_load(repl: Repl, args: str) -> None:
+    """Ingest a PDF draft into the REPL session."""
+    path_str = args.strip()
+    if not path_str:
+        repl._console.print("Usage: /load <path-to-pdf>")
+        return None
+    pdf_path = Path(path_str).expanduser()
+    if not pdf_path.is_file():
+        repl._console.print(f"[red]File not found:[/red] {pdf_path}")
+        return None
+    try:
+        draft = draft_mod.from_pdf(pdf_path, repl._images_dir())
+    except Exception as e:  # pypdf raises several flavours of error; treat as one.
+        repl._console.print(f"[red]Could not read PDF:[/red] {e}")
+        return None
+    repl._draft = draft
+    with_images = sum(1 for p in draft.pages if p.image is not None)
+    repl._console.print(
+        f"[green]Loaded {len(draft.pages)} pages[/green] from {pdf_path.name} "
+        f"({with_images} with an embedded illustration)."
+    )
     return None

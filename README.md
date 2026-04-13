@@ -29,6 +29,7 @@ Phase plan lives under `docs/`. Shipped so far:
 - ✅ Interactive REPL skeleton with slash-command dispatch (`/help`, `/exit`).
 - ✅ LLM provider picker (Claude, GPT, Gemini, Ollama, or offline) with masked API-key entry, live validation for Claude (re-prompts on a bad key), and `/model` to switch. Your choice is remembered per working directory in `.book-gen/session.json` (gitignored); API keys are re-prompted each launch until keyring support lands.
 - ✅ Embedded-image extraction from PDF drafts.
+- ✅ `/load <pdf>` slash command that ingests a draft into the session (text verbatim + drawings extracted to `.book-gen/images/`).
 
 In flight / planned:
 
@@ -77,6 +78,7 @@ You'll see a `>` prompt. Today's slash commands:
 |---|---|
 | `/help` | list available commands |
 | `/model` | switch the active LLM provider (re-prompts for an API key if required) |
+| `/load <pdf>` | ingest a PDF draft into the session (text + embedded illustrations) |
 | `/exit` | leave the session (Ctrl-D also exits) |
 
 On first launch the shell asks which provider to use. Picking Claude / GPT / Gemini also prompts for the provider's API key, which is read silently (nothing echoed to the terminal) and held only in memory for the session. Picking "No model (offline)" or Ollama skips the key entirely.
