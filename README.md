@@ -27,11 +27,11 @@ Phase plan lives under `docs/`. Shipped so far:
 - ✅ A5 + A4 booklet renderer (hand-authored `book.json` → PDF).
 - ✅ `child-book-generator` console entry point with `--version` / `--help`.
 - ✅ Interactive REPL skeleton with slash-command dispatch (`/help`, `/exit`).
+- ✅ LLM provider picker (Claude, GPT, Gemini, Ollama, or offline) with masked API-key entry and `/model` to switch.
 - ✅ Embedded-image extraction from PDF drafts.
 
 In flight / planned:
 
-- 🚧 LLM provider selection (Claude / GPT / Gemini / Ollama).
 - 🚧 Agent loop + tool suite (typo proposals, layout choice, render, ...).
 - 🚧 Illustration generation per page & cover, opt-in.
 - 🚧 OCR for handwritten scans.
@@ -74,9 +74,12 @@ You'll see a `>` prompt. Today's slash commands:
 | Command | What it does |
 |---|---|
 | `/help` | list available commands |
+| `/model` | switch the active LLM provider (re-prompts for an API key if required) |
 | `/exit` | leave the session (Ctrl-D also exits) |
 
-The agent, provider selection, and file commands wire up across upcoming PRs.
+On first launch the shell asks which provider to use. Picking Claude / GPT / Gemini also prompts for the provider's API key, which is read silently (nothing echoed to the terminal) and held only in memory for the session. Picking "No model (offline)" or Ollama skips the key entirely.
+
+The agent loop and file commands wire up across upcoming PRs.
 
 ## Usage — direct renderer (still works)
 

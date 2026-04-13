@@ -2,6 +2,7 @@ import io
 
 from rich.console import Console
 
+from src.providers.llm import find
 from src.repl import Repl
 
 
@@ -18,9 +19,14 @@ def _scripted_reader(lines):
 
 
 def _make(lines):
+    # These tests focus on the command loop itself; pre-select the offline
+    # provider so the first-run picker doesn't fire on every case.
     buf = io.StringIO()
     console = Console(file=buf, force_terminal=False, width=100, no_color=True)
-    return Repl(read_line=_scripted_reader(lines), console=console), buf
+    return (
+        Repl(read_line=_scripted_reader(lines), console=console, provider=find("none")),
+        buf,
+    )
 
 
 def test_slash_exit_returns_zero():

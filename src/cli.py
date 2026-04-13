@@ -26,6 +26,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=_resolve_version())
     parser.parse_args(argv)
 
+    import getpass
+
     from rich.console import Console
 
     from src.repl import Repl
@@ -33,7 +35,12 @@ def main(argv: list[str] | None = None) -> int:
     def read_line() -> str:
         return input("> ")
 
-    return Repl(read_line=read_line, console=Console()).run()
+    def read_secret() -> str:
+        return getpass.getpass("")
+
+    return Repl(
+        read_line=read_line, console=Console(), read_secret=read_secret
+    ).run()
 
 
 if __name__ == "__main__":
