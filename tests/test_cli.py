@@ -45,3 +45,25 @@ def test_cli_noargs_launches_repl_and_exits_on_eof(monkeypatch):
 
     monkeypatch.setattr("builtins.input", eof)
     assert cli.main([]) == 0
+
+
+def test_cli_reads_api_keys_through_getpass_not_input(monkeypatch):
+    """Picking a key-requiring provider must route the key through getpass.
+
+    Regression guard: if someone ever rewires read_secret to use input(),
+    the key would echo to the terminal on the way in.
+    """
+    inputs = iter(["2", "/exit"])  # pick Anthropic, then leave
+    secrets = iter(["sk-test-key"])
+
+    def fake_input(_prompt=""):
+        return next(inputs)
+
+    def fake_getpass(_prompt=""):
+        return next(secrets)
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    monkeypatch.setattr("getpass.getpass", fake_getpass)
+    assert cli.main([]) == 0
+    # getpass should be drained exactly once; input only for the two lines.
+    assert list(secrets) == []
