@@ -12,16 +12,27 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class ProviderSpec:
-    """Describes an LLM provider the user can pick in the REPL."""
+    """Describes an LLM provider the user can pick in the REPL.
+
+    ``validation_model`` is the cheapest model id the key-validation ping
+    can call. Kept on the spec (not hardcoded in the validator) so model
+    retirements are a one-line change in this file.
+    """
 
     name: str
     display_name: str
     requires_api_key: bool
+    validation_model: str | None = None
 
 
 SPECS: tuple[ProviderSpec, ...] = (
     ProviderSpec("none", "No model (offline)", requires_api_key=False),
-    ProviderSpec("anthropic", "Claude (Anthropic)", requires_api_key=True),
+    ProviderSpec(
+        "anthropic",
+        "Claude (Anthropic)",
+        requires_api_key=True,
+        validation_model="claude-haiku-4-5-20251001",
+    ),
     ProviderSpec("openai", "GPT (OpenAI)", requires_api_key=True),
     ProviderSpec("google", "Gemini (Google)", requires_api_key=True),
     ProviderSpec("ollama", "Ollama (local)", requires_api_key=False),

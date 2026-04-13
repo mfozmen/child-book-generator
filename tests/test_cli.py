@@ -69,6 +69,8 @@ def test_cli_reads_api_keys_through_getpass_not_input(tmp_path, monkeypatch):
 
     monkeypatch.setattr("builtins.input", fake_input)
     monkeypatch.setattr("getpass.getpass", fake_getpass)
+    # The test focuses on I/O wiring; skip the actual Anthropic network ping.
+    monkeypatch.setattr("src.providers.validator.validate_key", lambda _s, _k: None)
     assert cli.main([]) == 0
     # getpass should be drained exactly once; input only for the two lines.
     assert list(secrets) == []

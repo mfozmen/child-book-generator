@@ -31,6 +31,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from rich.console import Console
 
+    from src.providers.validator import validate_key
     from src.repl import Repl
 
     def read_line() -> str:
@@ -44,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
         console=Console(),
         read_secret=read_secret,
         session_root=Path.cwd(),
+        validate=validate_key,
     ).run()
 
 

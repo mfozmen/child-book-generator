@@ -15,6 +15,7 @@ from rich.console import Console
 
 from src import session as session_mod
 from src.providers.llm import SPECS, ProviderSpec, find
+from src.providers.validator import KeyValidationError, ProviderUnavailable
 
 
 SlashHandler = Callable[["Repl", str], int | None]
@@ -40,6 +41,7 @@ class Repl:
         read_secret: Callable[[], str] | None = None,
         provider: ProviderSpec | None = None,
         session_root: Path | None = None,
+        validate: Callable[[ProviderSpec, str], None] | None = None,
     ) -> None:
         self._read = read_line
         self._read_secret = read_secret or read_line
@@ -47,6 +49,7 @@ class Repl:
         self._provider = provider
         self._api_key: str | None = None
         self._session_root = Path(session_root) if session_root is not None else None
+        self._validate = validate
         self._commands: dict[str, SlashHandler] = {
             "help": _cmd_help,
             "exit": _cmd_exit,
@@ -117,9 +120,8 @@ class Repl:
                         f"Resuming with [green]{spec.display_name}[/green]. "
                         "Enter API key:"
                     )
-                    try:
-                        api_key = self._read_secret().strip()
-                    except EOFError:
+                    api_key = self._read_and_validate_key(spec)
+                    if api_key is None:
                         return None
                 return spec, api_key
         return self._prompt_for_provider()
@@ -140,11 +142,37 @@ class Repl:
         api_key: str | None = None
         if spec.requires_api_key:
             self._console.print(f"Enter API key for {spec.display_name}:")
+            api_key = self._read_and_validate_key(spec)
+            if api_key is None:
+                return None
+        return spec, api_key
+
+    def _read_and_validate_key(self, spec: ProviderSpec) -> str | None:
+        """Read a key, run the injected validator, re-prompt until accepted.
+
+        Returns ``None`` on EOF so the caller can treat that as abort.
+        If no validator was injected the key is accepted as-is.
+        """
+        while True:
             try:
                 api_key = self._read_secret().strip()
             except EOFError:
                 return None
-        return spec, api_key
+            if self._validate is None:
+                return api_key
+            try:
+                self._validate(spec, api_key)
+            except ProviderUnavailable as e:
+                # SDK missing, broken install, etc. Re-prompting won't help.
+                self._console.print(f"[red]{e}[/red]")
+                return None
+            except KeyValidationError as e:
+                self._console.print(f"[red]{e}[/red]")
+                self._console.print(
+                    f"Enter API key for {spec.display_name} again:"
+                )
+                continue
+            return api_key
 
     def _read_spec_choice(self) -> ProviderSpec | None:
         while True:
