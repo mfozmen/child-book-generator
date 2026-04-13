@@ -32,9 +32,7 @@ jobs:
         uses: python-semantic-release/python-semantic-release@v9.15.2
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Publish artifacts to GitHub Release
-        if: steps.release.outputs.released == 'true'
-        uses: python-semantic-release/publish-action@v9.15.2
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+        # No artifacts yet — PSR just bumps the version, writes
+        # CHANGELOG.md, tags, and cuts a GitHub Release with the
+        # auto-generated notes. The publish-action step is added back
+        # when PyPI publishing (or another artifact target) lands.

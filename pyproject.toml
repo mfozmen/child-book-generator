@@ -61,10 +61,14 @@ testpaths = ["tests"]
 version_toml = ["pyproject.toml:project.version"]
 branch = "main"
 commit_message = "chore(release): {version} [skip ci]"
-build_command = "python -m pip install build && python -m build"
 changelog_file = "CHANGELOG.md"
+# No build, no artifact upload until PyPI publishing lands. PSR still bumps
+# the version, writes CHANGELOG.md, tags, and cuts a GitHub Release with
+# the auto-generated notes. When we're ready to publish, flip these flags
+# and add a build_command that runs inside the PSR container's venv.
+build_command = ""
 upload_to_pypi = false
-upload_to_release = true
+upload_to_release = false
 
 [tool.semantic_release.commit_parser_options]
 allowed_tags = ["feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"]
