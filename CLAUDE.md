@@ -124,6 +124,12 @@ Every feature and bug fix gets its **own branch** off `main`, and lands via a **
 - Exception: docs-only / planning-only changes (under `docs/`, `README.md`, `CLAUDE.md`, skill files) **may** go directly to `main` if the maintainer agrees. When in doubt, open a PR.
 - Never force-push to `main`. Branches may be rebased before merge.
 
+## README stays current
+
+Every PR that ships a **user-visible change** (new command, new slash command, new flag, new install path, new dependency the user must know about, behaviour change, or removed feature) MUST update `README.md` in the **same PR**. Do not defer to a follow-up docs PR. Internal-only work (refactors, CI, test-only, packaging-internal) is exempt.
+
+Before closing out any feature PR, scan the Status / How-it-works / Usage sections and update them to match what the PR actually delivers. If the feature is a first slice of a larger feature, say that under Status (shipped vs. in-flight).
+
 ## Development notes
 
 - Platform: Windows 11, bash shell (Unix paths: `/c/Users/...`).
