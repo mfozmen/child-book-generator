@@ -114,6 +114,16 @@ Allowed types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `buil
 
 When Claude creates a commit, it MUST invoke the **`generating-conventional-commits`** skill to analyze staged changes and produce the message. Do not hand-write commit messages without going through that skill.
 
+## Branch & PR workflow
+
+Every feature and bug fix gets its **own branch** off `main`, and lands via a **pull request** for code review. No direct-to-main commits for production code.
+
+- Branch naming: `<type>/<slug>` (e.g. `feat/packaging-pyproject`, `fix/schema-empty-title`), where `<type>` matches the Conventional Commit type of the work.
+- Workflow: `git checkout -b <type>/<slug>` → commit(s) → `git push -u origin <branch>` → `gh pr create`.
+- The PR description must include a summary, context (why), and a test plan.
+- Exception: docs-only / planning-only changes (under `docs/`, `README.md`, `CLAUDE.md`, skill files) **may** go directly to `main` if the maintainer agrees. When in doubt, open a PR.
+- Never force-push to `main`. Branches may be rebased before merge.
+
 ## Development notes
 
 - Platform: Windows 11, bash shell (Unix paths: `/c/Users/...`).
