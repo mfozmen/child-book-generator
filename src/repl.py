@@ -16,7 +16,14 @@ from rich.console import Console
 from src import draft as draft_mod
 from src import session as session_mod
 from src.draft import Draft
-from src.providers.llm import SPECS, ProviderSpec, find
+from src.providers.llm import (
+    SPECS,
+    LLMProvider,
+    NullProvider,
+    ProviderSpec,
+    create_provider,
+    find,
+)
 from src.providers.validator import KeyValidationError, ProviderUnavailable
 
 
@@ -44,6 +51,7 @@ class Repl:
         provider: ProviderSpec | None = None,
         session_root: Path | None = None,
         validate: Callable[[ProviderSpec, str], None] | None = None,
+        llm_factory: Callable[[ProviderSpec, str | None], LLMProvider] | None = None,
     ) -> None:
         self._read = read_line
         self._read_secret = read_secret or read_line
@@ -52,6 +60,12 @@ class Repl:
         self._api_key: str | None = None
         self._session_root = Path(session_root) if session_root is not None else None
         self._validate = validate
+        self._llm_factory = llm_factory or create_provider
+        # Spin up the LLM immediately when a provider was pre-selected
+        # (tests do this; the CLI goes through _activate which rebuilds it).
+        self._llm: LLMProvider = (
+            self._llm_factory(provider, None) if provider is not None else NullProvider()
+        )
         self._draft: Draft | None = None
         self._commands: dict[str, SlashHandler] = {
             "help": _cmd_help,
@@ -111,6 +125,7 @@ class Repl:
     def _activate(self, spec: ProviderSpec, api_key: str | None) -> None:
         self._provider = spec
         self._api_key = api_key
+        self._llm = self._llm_factory(spec, api_key)
         self._console.print(f"[green]Active model:[/green] {spec.display_name}\n")
         self._persist()
 
@@ -217,10 +232,22 @@ class Repl:
     def _dispatch(self, line: str) -> int | None:
         if line.startswith("/"):
             return self._dispatch_slash(line)
-        # Non-slash input will be routed through the LLM agent in p2-01. For
-        # now the user sees a clear placeholder so the REPL feels honest
-        # rather than broken.
-        self._console.print(f"[dim](agent wiring lands in p2-01)[/dim] {line}")
+        return self._dispatch_chat(line)
+
+    def _dispatch_chat(self, line: str) -> int | None:
+        """Send a non-slash line through the active LLM. preserve-child-voice:
+        the user's text is forwarded verbatim — no rewriting on the way in."""
+        if isinstance(self._llm, NullProvider):
+            self._console.print(
+                f"[dim](no model selected — pick one with /model)[/dim] {line}"
+            )
+            return None
+        try:
+            reply = self._llm.chat([{"role": "user", "content": line}])
+        except Exception as e:
+            self._console.print(f"[red]LLM error:[/red] {e}")
+            return None
+        self._console.print(reply)
         return None
 
     def _dispatch_slash(self, line: str) -> int | None:

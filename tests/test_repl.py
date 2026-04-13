@@ -59,12 +59,12 @@ def test_blank_lines_are_ignored():
     assert repl.run() == 0
 
 
-def test_non_slash_input_echoes_with_agent_placeholder():
-    # The agent loop lands in p2-01. Until then, non-slash input is echoed
-    # with a clear placeholder so the user knows why it isn't acting on it.
+def test_non_slash_input_with_offline_provider_shows_placeholder():
+    # With the offline provider the REPL tells the user no model is
+    # selected rather than silently dropping the message.
     repl, buf = _make(["load draft.pdf", "/exit"])
     repl.run()
 
     out = buf.getvalue()
     assert "load draft.pdf" in out
-    assert "agent" in out.lower()
+    assert "no model" in out.lower() or "/model" in out

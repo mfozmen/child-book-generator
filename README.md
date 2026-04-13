@@ -32,9 +32,11 @@ Phase plan lives under `docs/`. Shipped so far:
 - ✅ `/load <pdf>` slash command that ingests a draft into the session (text verbatim + drawings extracted to `.book-gen/images/`).
 - ✅ End-to-end: `/load` → `/title` → `/author` → `/render [--impose]` writes an A5 PDF under `.book-gen/output/` (and an A4 booklet when `--impose` is passed).
 
+- ✅ Plain chat: when Claude is the active model, non-slash input is forwarded verbatim and the reply is printed back. Single-turn for now; conversation memory and tool use come with the agent loop.
+
 In flight / planned:
 
-- 🚧 Agent loop + tool suite (typo proposals, layout choice, render, ...).
+- 🚧 Agent loop + tool suite (typo proposals, layout choice, render as tools, ...).
 - 🚧 Illustration generation per page & cover, opt-in.
 - 🚧 OCR for handwritten scans.
 
