@@ -134,6 +134,7 @@ Before closing out any feature PR, scan the Status / How-it-works / Usage sectio
 
 - Platform: Windows 11, bash shell (Unix paths: `/c/Users/...`).
 - **All code, comments, documentation, CLI output, and user-facing strings must be in English.** The project is open source and intended for a global audience. (The maintainer chats in Turkish, but nothing Turkish goes into the repo.)
+  - **Exception — non-English test fixtures.** Tests may use non-English (including Turkish) strings as *input data* when the test's purpose is to verify handling of non-ASCII / non-English content (e.g. Unicode echo, OCR on a Turkish manuscript, preserve-child-voice round-trips). The surrounding code — test names, comments, docstrings, assertion messages — must still be English. Do not flag non-English fixture strings as a CLAUDE.md violation in code review.
 - New layouts require paired changes in `schema.py` (`VALID_LAYOUTS`) and `pages.py` (drawing function).
 - Children's-book aesthetics: generous margins, large body type (14pt default), image-led pages — all knobs live in `src/config.py`.
 - `.gitignore` excludes user inputs (`book.json`, `images/`), generated outputs (`output/`, `*.pdf`), local fonts (`fonts/`), and editor/OS/Claude state.
