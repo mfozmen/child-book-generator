@@ -3,7 +3,11 @@ from reportlab.lib.pagesizes import A5
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
-from src.draft import Draft, DraftPage, from_pdf
+from pathlib import Path
+
+import pytest
+
+from src.draft import Draft, DraftPage, from_pdf, slugify, to_book
 
 
 def _make_png(path, color):
@@ -95,3 +99,67 @@ def test_from_pdf_parses_the_file_only_once(tmp_path, monkeypatch):
     draft_mod.from_pdf(pdf, tmp_path / "images")
 
     assert counter["n"] == 1
+
+
+def test_to_book_marks_imageless_pages_as_text_only():
+    """select-page-layout rule 1: no image → layout must be 'text-only'.
+
+    Leaving the schema default 'image-top' on an imageless page renders
+    an empty image slot and lies in the stored book.json.
+    """
+    draft = Draft(
+        source_pdf=Path("x.pdf"),
+        title="Book",
+        pages=[
+            DraftPage(text="no drawing on this page"),
+            DraftPage(text="this one has one", image=Path("images/p.png")),
+        ],
+    )
+
+    book = to_book(draft, Path("."))
+
+    assert book.pages[0].layout == "text-only"
+    assert book.pages[1].layout == "image-top"
+
+
+def test_to_book_requires_title(tmp_path):
+    draft = Draft(source_pdf=tmp_path / "x.pdf", pages=[DraftPage(text="hi")])
+    # Empty title and whitespace-only title both rejected.
+    with pytest.raises(ValueError, match="title"):
+        to_book(draft, tmp_path)
+    draft.title = "   "
+    with pytest.raises(ValueError, match="title"):
+        to_book(draft, tmp_path)
+
+
+def test_to_book_keeps_images_outside_source_dir_as_absolute(tmp_path):
+    # Unusual but possible: user /load'd from one dir and images were
+    # extracted elsewhere (future --images-dir flag, etc.). The renderer
+    # should still be able to resolve them. relative_to() raises ValueError
+    # when the image isn't under source_dir, and to_book falls back to the
+    # absolute path.
+    outside_img = tmp_path / "elsewhere" / "page-01.png"
+    outside_img.parent.mkdir(parents=True)
+    outside_img.write_bytes(b"")
+
+    draft = Draft(
+        source_pdf=tmp_path / "d.pdf",
+        pages=[DraftPage(text="hi", image=outside_img)],
+        title="Book",
+    )
+    source_dir = tmp_path / ".book-gen"
+    source_dir.mkdir()
+
+    book = to_book(draft, source_dir)
+    # Absolute path preserved because relative_to(source_dir) raises.
+    assert book.pages[0].image == str(outside_img)
+
+
+def test_slugify_falls_back_to_book_when_only_symbols():
+    assert slugify("***") == "book"
+    assert slugify("") == "book"
+
+
+def test_slugify_lowercases_and_ascii_folds_turkish():
+    assert slugify("Küçük Ejderha") == "kucuk_ejderha"
+    assert slugify("ÖZNUR") == "oznur"

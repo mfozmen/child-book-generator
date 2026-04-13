@@ -18,6 +18,7 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from src.pdf_ingest import extract_images, extract_pages
+from src.schema import Book, Page
 
 
 @dataclass
@@ -57,3 +58,55 @@ def from_pdf(pdf_path: Path, images_dir: Path) -> Draft:
         for i in range(n)
     ]
     return Draft(source_pdf=pdf_path, pages=pages)
+
+
+def slugify(text: str) -> str:
+    """Produce a filesystem-safe filename from a title.
+
+    Mirrors ``build._slugify`` but exposed for the REPL to share. Keep the
+    two in sync until the duplicate is consolidated in a follow-up PR.
+    """
+    table = str.maketrans(
+        {
+            "ı": "i", "İ": "I", "ğ": "g", "Ğ": "G", "ü": "u", "Ü": "U",
+            "ş": "s", "Ş": "S", "ö": "o", "Ö": "O", "ç": "c", "Ç": "C",
+            " ": "_",
+        }
+    )
+    cleaned = text.translate(table)
+    return (
+        "".join(ch for ch in cleaned if ch.isalnum() or ch in "_-").lower() or "book"
+    )
+
+
+def to_book(draft: Draft, source_dir: Path) -> Book:
+    """Project a ``Draft`` into the strict ``Book`` shape the renderer wants.
+
+    Image paths on ``DraftPage`` are absolute; this helper rewrites them
+    relative to ``source_dir`` (where the renderer resolves them).
+    Images outside ``source_dir`` fall back to their absolute path so
+    an external drawing still renders — preserve-child-voice also covers
+    the child's drawings, which must not be dropped silently.
+    """
+    if not draft.title.strip():
+        raise ValueError("Draft is missing a title.")
+    source_dir = Path(source_dir)
+    schema_pages: list[Page] = []
+    for p in draft.pages:
+        image_str: str | None = None
+        if p.image is not None:
+            try:
+                image_str = str(p.image.relative_to(source_dir)).replace("\\", "/")
+            except ValueError:
+                image_str = str(p.image)
+        # Rule 1 of .claude/skills/select-page-layout: pages with no image
+        # must render as text-only. Other pages keep the schema default
+        # (image-top) until the full parametric selector lands (p5-01).
+        layout = "text-only" if image_str is None else "image-top"
+        schema_pages.append(Page(text=p.text, image=image_str, layout=layout))
+    return Book(
+        title=draft.title.strip(),
+        author=draft.author.strip(),
+        pages=schema_pages,
+        source_dir=source_dir,
+    )
