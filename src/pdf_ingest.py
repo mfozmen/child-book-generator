@@ -10,13 +10,20 @@ from pathlib import Path
 from pypdf import PdfReader
 
 
-def extract_pages(pdf_path: Path) -> list[str]:
-    """Return the raw text of each page, in order, with no transformations."""
-    reader = PdfReader(str(pdf_path))
+def extract_pages(pdf_path: Path, *, reader: PdfReader | None = None) -> list[str]:
+    """Return the raw text of each page, in order, with no transformations.
+
+    Callers who also need ``extract_images`` on the same PDF should open
+    a single ``PdfReader`` and pass it to both functions to avoid parsing
+    the file twice.
+    """
+    reader = reader or PdfReader(str(pdf_path))
     return [page.extract_text() or "" for page in reader.pages]
 
 
-def extract_images(pdf_path: Path, out_dir: Path) -> list[Path | None]:
+def extract_images(
+    pdf_path: Path, out_dir: Path, *, reader: PdfReader | None = None
+) -> list[Path | None]:
     """Extract the first embedded image of each PDF page into out_dir.
 
     Returns one entry per page: a Path to the saved image, or None when the
@@ -25,7 +32,7 @@ def extract_images(pdf_path: Path, out_dir: Path) -> list[Path | None]:
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    reader = PdfReader(str(pdf_path))
+    reader = reader or PdfReader(str(pdf_path))
     results: list[Path | None] = []
     for i, page in enumerate(reader.pages, start=1):
         images = list(page.images)

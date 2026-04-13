@@ -73,3 +73,25 @@ def test_from_pdf_preserves_child_voice_verbatim(tmp_path):
 def test_draft_page_image_defaults_to_none():
     p = DraftPage(text="hello")
     assert p.image is None
+
+
+def test_from_pdf_parses_the_file_only_once(tmp_path, monkeypatch):
+    """Regression guard: ``from_pdf`` must share a single ``PdfReader``
+    between text and image extraction. A fresh reader per call is wasteful
+    on large scanned drafts (flagged in review of #1 and #7)."""
+    pdf = _write_pdf(tmp_path, [{"text": "one", "image": (255, 0, 0)}])
+
+    from src import draft as draft_mod
+
+    counter = {"n": 0}
+    real = draft_mod.PdfReader
+
+    def counting_reader(*args, **kwargs):
+        counter["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(draft_mod, "PdfReader", counting_reader)
+
+    draft_mod.from_pdf(pdf, tmp_path / "images")
+
+    assert counter["n"] == 1

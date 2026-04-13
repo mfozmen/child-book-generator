@@ -256,7 +256,7 @@ def _cmd_load(repl: Repl, args: str) -> None:
     if not path_str:
         repl._console.print("Usage: /load <path-to-pdf>")
         return None
-    pdf_path = Path(path_str)
+    pdf_path = Path(path_str).expanduser()
     if not pdf_path.is_file():
         repl._console.print(f"[red]File not found:[/red] {pdf_path}")
         return None

@@ -123,6 +123,24 @@ def test_loading_twice_replaces_previous_draft(tmp_path):
     assert repl.draft.source_pdf == pdf_b
 
 
+def test_load_expands_tilde_in_path(tmp_path, monkeypatch):
+    # Make ~ resolve to a directory we control so the test doesn't touch the
+    # developer's real home directory.
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))  # Windows
+
+    pdf = _write_pdf(fake_home, [{"text": "hello from home"}])
+    assert pdf.parent == fake_home
+
+    repl, _ = _make(tmp_path, [f"/load ~/{pdf.name}", "/exit"])
+    repl.run()
+
+    assert repl.draft is not None
+    assert len(repl.draft.pages) == 1
+
+
 def test_load_quoted_path_with_spaces(tmp_path):
     spaced_dir = tmp_path / "my drafts"
     spaced_dir.mkdir()

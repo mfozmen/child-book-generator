@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pypdf import PdfReader
+
 from src.pdf_ingest import extract_images, extract_pages
 
 
@@ -39,8 +41,11 @@ def from_pdf(pdf_path: Path, images_dir: Path) -> Draft:
     images stay ``None``.
     """
     pdf_path = Path(pdf_path)
-    texts = extract_pages(pdf_path)
-    images = extract_images(pdf_path, images_dir)
+    # Parse the PDF once and thread the reader through both extractors —
+    # a fresh PdfReader per call is wasteful on large scanned drafts.
+    reader = PdfReader(str(pdf_path))
+    texts = extract_pages(pdf_path, reader=reader)
+    images = extract_images(pdf_path, images_dir, reader=reader)
     n = max(len(texts), len(images))
     pages = [
         DraftPage(
