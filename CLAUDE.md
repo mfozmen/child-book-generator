@@ -11,7 +11,7 @@ Planned: `src/pdf_ingest.py` converting a PDF into `book.json` + `images/`, wire
 ## Commands
 
 ```bash
-pip install -r requirements.txt
+pip install -e '.[dev]'
 
 python build.py book.json                 # A5 picture book
 python build.py book.json --impose        # A5 + A4 imposed booklet

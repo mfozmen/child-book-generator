@@ -25,10 +25,27 @@ Turn a child's picture-book **draft PDF** (scanned handwriting + drawings) into 
 
 Until PDF ingestion lands, the current usage below takes a `book.json` directly.
 
-## Install
+## Install & run
+
+Zero-install (recommended once published to PyPI):
 
 ```bash
-pip install -r requirements.txt
+uvx child-book-generator           # uv does the fetch + run
+pipx run child-book-generator      # or pipx if you prefer
+```
+
+Traditional:
+
+```bash
+pip install child-book-generator
+child-book-generator
+```
+
+From a local checkout:
+
+```bash
+pip install -e '.[dev]'            # dev environment with pytest
+child-book-generator --version
 ```
 
 DejaVu Sans is located automatically on Windows / Linux / macOS. If it cannot be found, drop `DejaVuSans.ttf` and `DejaVuSans-Bold.ttf` into a `fonts/` folder next to `build.py`.
