@@ -1,13 +1,108 @@
 # CHANGELOG
 
 
+## v1.0.0 (2026-04-15)
+
+### Documentation
+
+- Mark littlepress-ai rename PR as shipped in PLAN.md
+  ([`5873448`](https://github.com/mfozmen/littlepress-ai/commit/5873448cd504342907c7715067fc3f7ebbf3e3de))
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- Rename project to littlepress-ai ([#19](https://github.com/mfozmen/littlepress-ai/pull/19),
+  [`409d418`](https://github.com/mfozmen/littlepress-ai/commit/409d418d6de2921153513b9c06da21ecca6c580c))
+
+* chore: rename project to littlepress-ai
+
+Package name: child-book-generator → littlepress-ai (PyPI name). Primary command: littlepress, with
+  a littlepress-ai alias so that `uvx littlepress-ai` and `pipx run littlepress-ai` work without
+  --from. Brand / title: Littlepress.
+
+BREAKING CHANGE: the `child-book-generator` console script is gone. Users who had it installed
+  should `pip install littlepress-ai` and type `littlepress` (or `littlepress-ai`) instead.
+
+Keyring migration: SERVICE moves to "littlepress"; load_key transparently reads any key stored under
+  the legacy "child-book-generator" service on first call and moves it to the new name — users who
+  already pasted a key don't have to re-paste. Tests cover the migration happy path, the "both
+  stores populated" case (current wins), and a read-only keyring that blocks the move but still
+  yields the legacy value for this session.
+
+Sonar project key in sonar-project.properties and the README badges are updated to
+  mfozmen_littlepress-ai — they'll 404 until SonarCloud binds the renamed GitHub repo (or the
+  project is manually renamed in SonarCloud).
+
+GitHub URLs in README / CLAUDE.md / docs all updated. CHANGELOG.md historical URLs are left on the
+  old name: GitHub redirects keep them working, and they're accurate about what the repo was called
+  at the time.
+
+244 tests still green; both `littlepress` and `littlepress-ai` console scripts resolve to
+  src.cli:main.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* test: lift coverage on fonts/pages + fix five Sonar code smells
+
+Coverage: total goes from 98% to 99% with the fonts.py missing-fonts
+
+branch and every pages.py layout branch now exercised.
+
+- tests/test_fonts.py — assert register_fonts raises a FileNotFoundError with the DejaVu download
+  link when no .ttf is on the search path, and that _find returns None when SEARCH_DIRS doesn't
+  contain the file. Closes the 80% -> 100% gap on src/fonts.py. - tests/test_pages.py — drive each
+  draw_page layout (image-full with and without text, image-bottom, image-top, text-only, image-*
+  with no image falling back to text-only) plus _wrap edge cases (blank paragraphs surviving, a word
+  too wide for the line starting a fresh one) and _draw_text_block's non-centered align path.
+
+Refactors triggered by SonarCloud critical code-smell findings (no behaviour change, all 255 tests
+  stay green):
+
+1. src/agent_tools.py — duplicated "(unset — ask the user)" and "No draft loaded. Ask the user to
+  provide a PDF first." literals collapse to _MSG_UNSET / _MSG_NO_DRAFT module constants. 2.
+  src/agent_tools.py — propose_typo_fix_tool.handler split into _reject_typo_fix / _find_typo_match
+  / _build_typo_prompt helpers to bring cognitive complexity under the 15 limit. 3. src/repl.py —
+  _resume_or_pick split into _saved_spec + _resume_with_key; each helper has one responsibility and
+  fits in the complexity budget. 4. src/pages.py — _wrap split into _wrap_paragraph; the outer loop
+  is now a two-branch paragraph iterator.
+
+* fix(keyring): sweep orphaned legacy entries + keep child-book-generator alias
+
+Addresses review feedback on #19 for the two real issues.
+
+1. Keyring legacy entries could orphan forever. load_key used to do the legacy → current migration
+  only when the current service had no entry. If set_password(current) succeeded but delete_password
+  (legacy) failed, the next load_key would find the current entry first and short-circuit before
+  re-entering the migration loop — the stale legacy credential then lived in the OS keychain
+  indefinitely. Fix: every load_key now sweeps any legacy entry sitting next to a valid current one,
+  and delete_key (used by /logout) clears legacy entries too.
+
+2. Dropping the child-book-generator console script with no alias silently broke editable installs
+  that had the old name on their PATH. Add child-book-generator as a deprecated alias in
+  [project.scripts] for one release; plan to remove in the next minor bump.
+
+Two new regression tests pin the sweep behaviour on both load_key and delete_key paths. 257 tests
+  green.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### BREAKING CHANGES
+
+- The `child-book-generator` console script is gone. Users who had it installed should `pip install
+  littlepress-ai` and type `littlepress` (or `littlepress-ai`) instead.
+
+
 ## v0.7.0 (2026-04-15)
 
 ### Chores
 
-- Consolidate slugify and refresh docs
-  ([#17](https://github.com/mfozmen/child-book-generator/pull/17),
-  [`365ca46`](https://github.com/mfozmen/child-book-generator/commit/365ca46ab9aeb2f40b37a118accc76e2f1355b0f))
+- Consolidate slugify and refresh docs ([#17](https://github.com/mfozmen/littlepress-ai/pull/17),
+  [`365ca46`](https://github.com/mfozmen/littlepress-ai/commit/365ca46ab9aeb2f40b37a118accc76e2f1355b0f))
 
 * chore: consolidate slugify and refresh CLAUDE.md + README
 
@@ -49,10 +144,13 @@ Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
+- **release**: 0.7.0 [skip ci]
+  ([`00886c1`](https://github.com/mfozmen/littlepress-ai/commit/00886c1e897be0eac6cc18c518217290e9bac515))
+
 ### Documentation
 
 - Mark agent-first pivot plan as shipped
-  ([`bbcd84c`](https://github.com/mfozmen/child-book-generator/commit/bbcd84cbd7970a104c46fa62f84ce232c047ebb5))
+  ([`bbcd84c`](https://github.com/mfozmen/littlepress-ai/commit/bbcd84cbd7970a104c46fa62f84ce232c047ebb5))
 
 All five PRs (#13-#17) from docs/PLAN.md merged. Rewrite the file as a status record of what
   shipped, which earlier cleanup candidates were intentionally kept (with reasoning), and which
@@ -65,8 +163,8 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 ### Features
 
 - **repl**: Guided API-key setup + keyring so users paste only once
-  ([#18](https://github.com/mfozmen/child-book-generator/pull/18),
-  [`1a1ec9c`](https://github.com/mfozmen/child-book-generator/commit/1a1ec9c3bfe2b719a53fc6bcad98af6ed7527d3f))
+  ([#18](https://github.com/mfozmen/littlepress-ai/pull/18),
+  [`1a1ec9c`](https://github.com/mfozmen/littlepress-ai/commit/1a1ec9c3bfe2b719a53fc6bcad98af6ed7527d3f))
 
 * feat(repl): guided API-key setup + keyring so users paste only once
 
@@ -128,13 +226,13 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 ### Chores
 
 - **release**: 0.6.0 [skip ci]
-  ([`82066f0`](https://github.com/mfozmen/child-book-generator/commit/82066f05b2e00f917e832582d8821373c0bd0fb4))
+  ([`82066f0`](https://github.com/mfozmen/littlepress-ai/commit/82066f05b2e00f917e832582d8821373c0bd0fb4))
 
 ### Features
 
 - **memory**: Persist the draft so the next launch resumes
-  ([#16](https://github.com/mfozmen/child-book-generator/pull/16),
-  [`82e71a3`](https://github.com/mfozmen/child-book-generator/commit/82e71a398671396856cd00719a819ff8d69e238e))
+  ([#16](https://github.com/mfozmen/littlepress-ai/pull/16),
+  [`82e71a3`](https://github.com/mfozmen/littlepress-ai/commit/82e71a398671396856cd00719a819ff8d69e238e))
 
 * feat(memory): persist the draft so the next launch resumes
 
@@ -193,13 +291,13 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 ### Chores
 
 - **release**: 0.5.0 [skip ci]
-  ([`715bbf4`](https://github.com/mfozmen/child-book-generator/commit/715bbf49893a801fe1dab1c8b82312482ff13b62))
+  ([`715bbf4`](https://github.com/mfozmen/littlepress-ai/commit/715bbf49893a801fe1dab1c8b82312482ff13b62))
 
 ### Features
 
 - **agent**: Render_book tool — agent produces the finished PDF itself
-  ([#15](https://github.com/mfozmen/child-book-generator/pull/15),
-  [`781c52b`](https://github.com/mfozmen/child-book-generator/commit/781c52bcd991c77505880c2a9f0738e62066ea99))
+  ([#15](https://github.com/mfozmen/littlepress-ai/pull/15),
+  [`781c52b`](https://github.com/mfozmen/littlepress-ai/commit/781c52bcd991c77505880c2a9f0738e62066ea99))
 
 Ships PR #15 from docs/PLAN.md. Once the draft has a title (and ideally author + cover), the agent
   can call render_book itself instead of asking the user to type /render.
@@ -228,13 +326,13 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 ### Chores
 
 - **release**: 0.4.0 [skip ci]
-  ([`5901df2`](https://github.com/mfozmen/child-book-generator/commit/5901df26af9ab74488ca0bae2020392ad59d6760))
+  ([`5901df2`](https://github.com/mfozmen/littlepress-ai/commit/5901df26af9ab74488ca0bae2020392ad59d6760))
 
 ### Features
 
 - **agent**: Edit tools — typo fix, metadata, cover, layout
-  ([#14](https://github.com/mfozmen/child-book-generator/pull/14),
-  [`1c28559`](https://github.com/mfozmen/child-book-generator/commit/1c28559ebc44d2730484c9581105d57884954250))
+  ([#14](https://github.com/mfozmen/littlepress-ai/pull/14),
+  [`1c28559`](https://github.com/mfozmen/littlepress-ai/commit/1c28559ebc44d2730484c9581105d57884954250))
 
 * feat(agent): edit tools — typo fix, metadata, cover, layout
 
@@ -293,12 +391,12 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 ### Chores
 
 - **release**: 0.3.0 [skip ci]
-  ([`023c5ab`](https://github.com/mfozmen/child-book-generator/commit/023c5abef0fdd8f801e90d7231fb8a681f9194f5))
+  ([`023c5ab`](https://github.com/mfozmen/littlepress-ai/commit/023c5abef0fdd8f801e90d7231fb8a681f9194f5))
 
 ### Documentation
 
 - Replace phase files with agent-first PLAN.md
-  ([`928ec6f`](https://github.com/mfozmen/child-book-generator/commit/928ec6f8c3ce1bd8210ae3809eb1b6bfaaa139bf))
+  ([`928ec6f`](https://github.com/mfozmen/littlepress-ai/commit/928ec6f8c3ce1bd8210ae3809eb1b6bfaaa139bf))
 
 Drop the p0-p5 phase files that described the old slash-command-heavy roadmap. The project is
   pivoting to an agent-first CLI — the user points at a PDF, a model walks the conversation, the
@@ -316,8 +414,8 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 ### Features
 
 - **agent**: Tool-use agent loop with read_draft tool
-  ([#13](https://github.com/mfozmen/child-book-generator/pull/13),
-  [`af2b5fd`](https://github.com/mfozmen/child-book-generator/commit/af2b5fd81831f80ccd608b3288b27b9164657e67))
+  ([#13](https://github.com/mfozmen/littlepress-ai/pull/13),
+  [`af2b5fd`](https://github.com/mfozmen/littlepress-ai/commit/af2b5fd81831f80ccd608b3288b27b9164657e67))
 
 * feat(cli): accept a PDF path positionally and auto-load it
 
@@ -378,13 +476,13 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 ### Chores
 
 - **release**: 0.2.0 [skip ci]
-  ([`086efcc`](https://github.com/mfozmen/child-book-generator/commit/086efcc94ec8cb3c2a275acc3defb43935cd80bd))
+  ([`086efcc`](https://github.com/mfozmen/littlepress-ai/commit/086efcc94ec8cb3c2a275acc3defb43935cd80bd))
 
 ### Features
 
 - **repl**: Forward non-slash input to the active LLM
-  ([#12](https://github.com/mfozmen/child-book-generator/pull/12),
-  [`17fbee4`](https://github.com/mfozmen/child-book-generator/commit/17fbee470a226ebbce59fc09271853d2dcb22b3d))
+  ([#12](https://github.com/mfozmen/littlepress-ai/pull/12),
+  [`17fbee4`](https://github.com/mfozmen/littlepress-ai/commit/17fbee470a226ebbce59fc09271853d2dcb22b3d))
 
 * feat(repl): forward non-slash input to the active LLM for single-turn chat
 
@@ -437,7 +535,7 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 ### Bug Fixes
 
 - **ci**: Correct action major versions
-  ([`d42bef5`](https://github.com/mfozmen/child-book-generator/commit/d42bef5297dd6563b171dde8fd1d08e43dbba097))
+  ([`d42bef5`](https://github.com/mfozmen/littlepress-ai/commit/d42bef5297dd6563b171dde8fd1d08e43dbba097))
 
 actions/setup-python v7 does not exist — revert to v6 (current latest). Bump
   SonarSource/sonarqube-scan-action v6 → v7 (current latest).
@@ -447,12 +545,12 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 ### Chores
 
 - **release**: 0.1.0 [skip ci]
-  ([`8c47e96`](https://github.com/mfozmen/child-book-generator/commit/8c47e96e118f8d6279665eb3505bd21959e0aaee))
+  ([`8c47e96`](https://github.com/mfozmen/littlepress-ai/commit/8c47e96e118f8d6279665eb3505bd21959e0aaee))
 
 ### Continuous Integration
 
 - Bump GitHub Actions to latest major versions
-  ([`a46d0bd`](https://github.com/mfozmen/child-book-generator/commit/a46d0bd911202fe4d5fd15291b6f4960856a0ecb))
+  ([`a46d0bd`](https://github.com/mfozmen/littlepress-ai/commit/a46d0bd911202fe4d5fd15291b6f4960856a0ecb))
 
 Update actions/checkout v4→v6, actions/setup-python v5→v7, and SonarSource/sonarqube-scan-action
   v4→v6.
@@ -460,8 +558,8 @@ Update actions/checkout v4→v6, actions/setup-python v5→v7, and SonarSource/s
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - Stop running the PSR build step until we actually publish
-  ([#11](https://github.com/mfozmen/child-book-generator/pull/11),
-  [`e3dbf03`](https://github.com/mfozmen/child-book-generator/commit/e3dbf038817ae45b105abf594ee42fe61b51bfe9))
+  ([#11](https://github.com/mfozmen/littlepress-ai/pull/11),
+  [`e3dbf03`](https://github.com/mfozmen/littlepress-ai/commit/e3dbf038817ae45b105abf594ee42fe61b51bfe9))
 
 The release workflow was failing on every push to main because PSR's default build_command (python
   -m pip install build && python -m build) couldn't install into the /psr/.venv inside the action's
@@ -482,7 +580,7 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 ### Documentation
 
 - Add SonarCloud badges and refresh README
-  ([`5905f50`](https://github.com/mfozmen/child-book-generator/commit/5905f50287d91579403e6d2f3dee8185926cb93f))
+  ([`5905f50`](https://github.com/mfozmen/littlepress-ai/commit/5905f50287d91579403e6d2f3dee8185926cb93f))
 
 Add Quality Gate, Coverage, Maintainability, Reliability, Security, and License badges linked to the
   SonarCloud project. Update the Project layout section to reflect the current tree (examples/,
@@ -493,7 +591,7 @@ Add Quality Gate, Coverage, Maintainability, Reliability, Security, and License 
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - Adopt Conventional Commits convention
-  ([`a6a79d8`](https://github.com/mfozmen/child-book-generator/commit/a6a79d85eb8adf4f0d9ee2ae915e8c8716f3fa99))
+  ([`a6a79d8`](https://github.com/mfozmen/littlepress-ai/commit/a6a79d85eb8adf4f0d9ee2ae915e8c8716f3fa99))
 
 Require the generating-conventional-commits skill for every commit in this repo so messages stay
   standardized and automation-friendly.
@@ -501,7 +599,7 @@ Require the generating-conventional-commits skill for every commit in this repo 
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - Allow non-English strings as test fixture input data
-  ([`0704e90`](https://github.com/mfozmen/child-book-generator/commit/0704e90eaa3a9cc042fe051694c2c2d8ab2d1675))
+  ([`0704e90`](https://github.com/mfozmen/littlepress-ai/commit/0704e90eaa3a9cc042fe051694c2c2d8ab2d1675))
 
 Codify the rule the maintainer set on 2026-04-13 after review feedback confused Turkish/emoji
   fixture strings for an English-only violation. Test fixture input (Unicode content, OCR Turkish
@@ -511,7 +609,7 @@ Codify the rule the maintainer set on 2026-04-13 after review feedback confused 
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - Move roadmap into per-task files under docs/
-  ([`6340658`](https://github.com/mfozmen/child-book-generator/commit/63406580210972dd5cdb550761f0d67770793f18))
+  ([`6340658`](https://github.com/mfozmen/littlepress-ai/commit/63406580210972dd5cdb550761f0d67770793f18))
 
 Keep README focused on what the project is and how to use it. Move internal planning into docs/ —
   one Markdown file per open task, deleted when the task ships.
@@ -523,7 +621,7 @@ Phase 1 tasks drafted: image extraction, book.json synthesis, interactive gap-fi
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - Pivot plan to AI-first interactive CLI
-  ([`ecd9a31`](https://github.com/mfozmen/child-book-generator/commit/ecd9a31e42a83e9f4dccd1bf466843dccb4de3ed))
+  ([`ecd9a31`](https://github.com/mfozmen/littlepress-ai/commit/ecd9a31e42a83e9f4dccd1bf466843dccb4de3ed))
 
 Replace the old Phase 1-2 task files with a new phase plan covering: packaging/zero-install launch
   (p0), REPL + provider selection (p1), tool suite + agent loop (p2), illustration generation (p3),
@@ -533,7 +631,7 @@ Replace the old Phase 1-2 task files with a new phase plan covering: packaging/z
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - Promote conventional-commits skill to project-level
-  ([`da9c98c`](https://github.com/mfozmen/child-book-generator/commit/da9c98c15d3b3b6f10535b70a51659d17177faad))
+  ([`da9c98c`](https://github.com/mfozmen/littlepress-ai/commit/da9c98c15d3b3b6f10535b70a51659d17177faad))
 
 Move generating-conventional-commits from user-level to .claude/skills/ so the repo-specific
   type-selection rules (notably: CI config is `ci:`, never `fix(ci):`) travel with the project.
@@ -541,7 +639,7 @@ Move generating-conventional-commits from user-level to .claude/skills/ so the r
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - Reframe README around PDF-driven ingestion
-  ([`29a007e`](https://github.com/mfozmen/child-book-generator/commit/29a007ef29804d021e803c281481a61096828ec6))
+  ([`29a007e`](https://github.com/mfozmen/littlepress-ai/commit/29a007ef29804d021e803c281481a61096828ec6))
 
 The primary input is a child's draft PDF, not a hand-authored book.json. Update the tagline, add a
   "How it works" section, mark the current JSON-only flow as temporary, and preview the coming
@@ -550,7 +648,7 @@ The primary input is a child's draft PDF, not a hand-authored book.json. Update 
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - Require one branch and PR per feature or fix
-  ([`23a5e67`](https://github.com/mfozmen/child-book-generator/commit/23a5e67ec06d923aac9d2f9a84587e3b88a38ef1))
+  ([`23a5e67`](https://github.com/mfozmen/littlepress-ai/commit/23a5e67ec06d923aac9d2f9a84587e3b88a38ef1))
 
 Codify the branch-and-PR workflow that the maintainer adopted on 2026-04-13: no direct-to-main
   commits for production code, every
@@ -563,8 +661,8 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 ### Features
 
 - **cli**: Ship child-book-generator console entry point
-  ([#2](https://github.com/mfozmen/child-book-generator/pull/2),
-  [`2eba7b3`](https://github.com/mfozmen/child-book-generator/commit/2eba7b3c213a8727992d9375729e4264cba91122))
+  ([#2](https://github.com/mfozmen/littlepress-ai/pull/2),
+  [`2eba7b3`](https://github.com/mfozmen/littlepress-ai/commit/2eba7b3c213a8727992d9375729e4264cba91122))
 
 * feat(cli): ship child-book-generator console entry point
 
@@ -606,7 +704,7 @@ Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - **examples**: Add runnable example book
-  ([`9dcbc53`](https://github.com/mfozmen/child-book-generator/commit/9dcbc53d5096b6c5abddf09534734314c9968a1e))
+  ([`9dcbc53`](https://github.com/mfozmen/littlepress-ai/commit/9dcbc53d5096b6c5abddf09534734314c9968a1e))
 
 Adds examples/book.json plus four placeholder PNG illustrations so new users can produce a PDF
   immediately with: python build.py examples/book.json
@@ -617,8 +715,8 @@ Root-anchor the book.json and images/ gitignore patterns so the private user con
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - **pdf-ingest**: Extract embedded images per PDF page
-  ([#1](https://github.com/mfozmen/child-book-generator/pull/1),
-  [`83dde82`](https://github.com/mfozmen/child-book-generator/commit/83dde8286d3a09fd48db378022197e3d8f8c7319))
+  ([#1](https://github.com/mfozmen/littlepress-ai/pull/1),
+  [`83dde82`](https://github.com/mfozmen/littlepress-ai/commit/83dde8286d3a09fd48db378022197e3d8f8c7319))
 
 * feat(pdf-ingest): extract embedded images per PDF page
 
@@ -646,7 +744,7 @@ Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - **pdf-ingest**: Extract raw page text without transforming it
-  ([`4af1934`](https://github.com/mfozmen/child-book-generator/commit/4af1934969b394903577e11e0df21846aa255b34))
+  ([`4af1934`](https://github.com/mfozmen/littlepress-ai/commit/4af1934969b394903577e11e0df21846aa255b34))
 
 First step of the dynamic ingestion pipeline. extract_pages(pdf_path) returns each page's text via
   pypdf, in order, with no cleaning or rewriting — honouring the preserve-child-voice contract.
@@ -656,8 +754,8 @@ TDD: RED via NotImplementedError stub, GREEN via minimal pypdf call.
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - **repl**: /load slash command ingests a PDF draft
-  ([#7](https://github.com/mfozmen/child-book-generator/pull/7),
-  [`36208d6`](https://github.com/mfozmen/child-book-generator/commit/36208d6a12925cdd052a852c06fb2496d3f86fc9))
+  ([#7](https://github.com/mfozmen/littlepress-ai/pull/7),
+  [`36208d6`](https://github.com/mfozmen/littlepress-ai/commit/36208d6a12925cdd052a852c06fb2496d3f86fc9))
 
 * feat(repl): /load slash command ingests a PDF draft into the session
 
@@ -704,8 +802,8 @@ Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - **repl**: /pages introspection plus /title and /author metadata setters
-  ([#8](https://github.com/mfozmen/child-book-generator/pull/8),
-  [`d3c8885`](https://github.com/mfozmen/child-book-generator/commit/d3c8885697bd9c239869d6d7f433592611c5c206))
+  ([#8](https://github.com/mfozmen/littlepress-ai/pull/8),
+  [`d3c8885`](https://github.com/mfozmen/littlepress-ai/commit/d3c8885697bd9c239869d6d7f433592611c5c206))
 
 Add three slash commands that operate on the in-memory draft:
 
@@ -727,8 +825,8 @@ Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - **repl**: /render --impose writes the A4 booklet alongside the A5
-  ([#10](https://github.com/mfozmen/child-book-generator/pull/10),
-  [`b457453`](https://github.com/mfozmen/child-book-generator/commit/b45745345c0eda3a9293c57bd7de1cc4d199b271))
+  ([#10](https://github.com/mfozmen/littlepress-ai/pull/10),
+  [`b457453`](https://github.com/mfozmen/littlepress-ai/commit/b45745345c0eda3a9293c57bd7de1cc4d199b271))
 
 * feat(repl): /render --impose also writes the A4 saddle-stitch booklet
 
@@ -767,8 +865,8 @@ Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - **repl**: /render builds the A5 PDF from the loaded draft
-  ([#9](https://github.com/mfozmen/child-book-generator/pull/9),
-  [`62671c0`](https://github.com/mfozmen/child-book-generator/commit/62671c06f54439908b6af955bffc77bf380f4ecb))
+  ([#9](https://github.com/mfozmen/littlepress-ai/pull/9),
+  [`62671c0`](https://github.com/mfozmen/littlepress-ai/commit/62671c06f54439908b6af955bffc77bf380f4ecb))
 
 * feat(repl): /render builds the A5 PDF from the loaded draft
 
@@ -813,8 +911,8 @@ Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - **repl**: Interactive shell skeleton with slash-command dispatch
-  ([#3](https://github.com/mfozmen/child-book-generator/pull/3),
-  [`e1f05c7`](https://github.com/mfozmen/child-book-generator/commit/e1f05c79b6fb86d176c95cedd7e2f1b79abaf905))
+  ([#3](https://github.com/mfozmen/littlepress-ai/pull/3),
+  [`e1f05c7`](https://github.com/mfozmen/littlepress-ai/commit/e1f05c79b6fb86d176c95cedd7e2f1b79abaf905))
 
 * feat(repl): add interactive shell skeleton with slash-command dispatch
 
@@ -848,8 +946,8 @@ Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - **repl**: Persist provider choice across launches via .book-gen/session.json
-  ([#5](https://github.com/mfozmen/child-book-generator/pull/5),
-  [`4470795`](https://github.com/mfozmen/child-book-generator/commit/4470795b3e03839b4a5a41445d80cdbdedf16a2e))
+  ([#5](https://github.com/mfozmen/littlepress-ai/pull/5),
+  [`4470795`](https://github.com/mfozmen/littlepress-ai/commit/4470795b3e03839b4a5a41445d80cdbdedf16a2e))
 
 Introduce src/session.py with a small Session dataclass and atomic save/load helpers. The REPL
   accepts an optional session_root; when set, it writes the selected provider to
@@ -874,8 +972,8 @@ Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - **repl**: Provider picker with masked API-key entry and /model command
-  ([#4](https://github.com/mfozmen/child-book-generator/pull/4),
-  [`b7126cd`](https://github.com/mfozmen/child-book-generator/commit/b7126cda0f88ecffa6d2dd0e394d495a4bf18dd3))
+  ([#4](https://github.com/mfozmen/littlepress-ai/pull/4),
+  [`b7126cd`](https://github.com/mfozmen/littlepress-ai/commit/b7126cda0f88ecffa6d2dd0e394d495a4bf18dd3))
 
 * feat(repl): provider picker with masked API-key entry and /model command
 
@@ -916,8 +1014,8 @@ Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - **repl**: Validate API keys against the provider before accepting them
-  ([#6](https://github.com/mfozmen/child-book-generator/pull/6),
-  [`4cc8965`](https://github.com/mfozmen/child-book-generator/commit/4cc89657157402d05f75a75e447ab9635d21f5f9))
+  ([#6](https://github.com/mfozmen/littlepress-ai/pull/6),
+  [`4cc8965`](https://github.com/mfozmen/littlepress-ai/commit/4cc89657157402d05f75a75e447ab9635d21f5f9))
 
 * feat(repl): validate API keys against the provider before accepting them
 
@@ -963,7 +1061,7 @@ Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - **skills**: Add select-page-layout guardrail for pixel-perfect page composition
-  ([`c0062fe`](https://github.com/mfozmen/child-book-generator/commit/c0062fee0436491fb2f72b2afb9f5e76c6f10e5a))
+  ([`c0062fe`](https://github.com/mfozmen/littlepress-ai/commit/c0062fee0436491fb2f72b2afb9f5e76c6f10e5a))
 
 Project-level skill codifying how a page in a child's picture book should be laid out. Works
   alongside preserve-child-voice: layout decisions never touch the child's words, only where those
@@ -986,7 +1084,7 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 ### Testing
 
 - Characterize existing behavior across schema, imposition, build, pdf-ingest
-  ([`3031643`](https://github.com/mfozmen/child-book-generator/commit/303164364267f80d4b6648f28ba20fcde466c1f3))
+  ([`3031643`](https://github.com/mfozmen/littlepress-ai/commit/303164364267f80d4b6648f28ba20fcde466c1f3))
 
 Grows the suite from 2 to 18 tests (coverage 92%):
 
