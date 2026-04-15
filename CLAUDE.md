@@ -30,7 +30,7 @@ Primary flow is `child-book-generator draft.pdf` → interactive agent → print
 - `src/agent_tools.py` — tools registered with the agent: `read_draft`, `propose_typo_fix`, `set_metadata`, `set_cover`, `choose_layout`, `render_book`. **This is where preserve-child-voice is enforced** — no tool rewrites page text freely.
 - `src/providers/llm.py` — `LLMProvider` protocol + `NullProvider` + `AnthropicProvider`. `chat()` for one-shot text, `turn()` for the tool-use loop.
 - `src/providers/validator.py` — provider key-validation pings (Anthropic implemented; rest no-op for now).
-- `src/draft.py` — `Draft` / `DraftPage`: lenient in-memory working shape. `from_pdf` ingests; `to_book` projects to the strict `Book` the renderer wants. `slugify` is shared by the REPL's `/render` and `build.py`.
+- `src/draft.py` — `Draft` / `DraftPage`: lenient in-memory working shape. `from_pdf` ingests; `to_book` projects to the strict `Book` the renderer wants. `slugify` is the single source of truth for output filenames, shared by the agent's `render_book` tool, the REPL's `/render`, and `build.py`.
 - `src/memory.py` — per-project persistence at `.book-gen/draft.json`. Atomic write, fsync, schema-versioned.
 - `src/session.py` — per-working-directory session state (active provider, etc.) at `.book-gen/session.json`.
 - `src/schema.py` — strict `Book` / `Page` / `Cover` / `BackCover` dataclasses + `book.json` loader used by the renderer.
