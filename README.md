@@ -31,14 +31,14 @@ Phase plan lives under `docs/`. Shipped so far:
 - ✅ Embedded-image extraction from PDF drafts.
 - ✅ `/load <pdf>` slash command that ingests a draft into the session (text verbatim + drawings extracted to `.book-gen/images/`).
 - ✅ End-to-end: `/load` → `/title` → `/author` → `/render [--impose]` writes an A5 PDF under `.book-gen/output/` (and an A4 booklet when `--impose` is passed).
+- ✅ Plain chat: when Claude is the active model, non-slash input is forwarded to the agent, which replies in whatever language you use.
+- ✅ Agent core: drop a PDF on the command line (`child-book-generator draft.pdf`) and Claude reads the draft through a `read_draft` tool and greets you.
 
-- ✅ Plain chat: when Claude is the active model, non-slash input is forwarded verbatim and the reply is printed back. Single-turn for now; conversation memory and tool use come with the agent loop.
+In flight / planned (see `docs/PLAN.md`):
 
-In flight / planned:
-
-- 🚧 Agent loop + tool suite (typo proposals, layout choice, render as tools, ...).
-- 🚧 Illustration generation per page & cover, opt-in.
-- 🚧 OCR for handwritten scans.
+- 🚧 Agent edit tools: propose typo fixes, set metadata / cover / layout through user-approved tool calls.
+- 🚧 Agent render tool so the agent itself builds the final PDF when ready.
+- 🚧 Per-project memory so re-opening a draft doesn't re-ask every decision.
 
 ## Install & run
 
@@ -69,13 +69,23 @@ DejaVu Sans is located automatically on Windows / Linux / macOS. If it cannot be
 
 ## Usage — interactive (primary)
 
-Launch the shell and follow the prompts:
+Fastest path, with a PDF draft in hand:
+
+```bash
+child-book-generator path/to/draft.pdf
+```
+
+On first launch you'll be asked which LLM provider to use (Claude recommended). With a real provider active, Claude reads the draft through a `read_draft` tool and greets you in whatever language you'll type in. Say what you want, ask what you're unsure about, and the agent walks you to a finished book.
+
+Without a PDF argument:
 
 ```bash
 child-book-generator
 ```
 
-You'll see a `>` prompt. Today's slash commands:
+drops you into the same shell; load a PDF later with `/load <pdf>`.
+
+Today's slash commands (still available as escape hatches):
 
 | Command | What it does |
 |---|---|
@@ -89,8 +99,6 @@ You'll see a `>` prompt. Today's slash commands:
 | `/exit` | leave the session (Ctrl-D also exits) |
 
 On first launch the shell asks which provider to use. Picking Claude / GPT / Gemini also prompts for the provider's API key, which is read silently (nothing echoed to the terminal) and held only in memory for the session. Picking "No model (offline)" or Ollama skips the key entirely.
-
-The agent loop and file commands wire up across upcoming PRs.
 
 ## Usage — direct renderer (still works)
 

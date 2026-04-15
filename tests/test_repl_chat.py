@@ -1,25 +1,34 @@
-"""REPL integration tests for non-slash input going through the LLM."""
+"""REPL integration tests for non-slash input going through the agent/LLM."""
 
 import io
 
 from rich.console import Console
 
+from src.agent import AgentResponse
 from src.providers.llm import LLMProvider, find
 from src.repl import Repl
 
 
 class _StubLLM:
-    """Deterministic LLM for REPL tests — no SDKs, no network."""
+    """Deterministic LLM for REPL tests — no SDKs, no network.
+
+    Implements ``turn()`` (what the agent uses). Every ``turn`` call
+    returns a single text block by default; set ``reply`` to an
+    exception to have it raised instead.
+    """
 
     def __init__(self, reply="stubbed reply"):
         self.reply = reply
         self.received: list[list[dict]] = []
 
-    def chat(self, messages):
+    def turn(self, messages, _tools):
         self.received.append(list(messages))
         if isinstance(self.reply, Exception):
             raise self.reply
-        return self.reply
+        return AgentResponse(
+            content=[{"type": "text", "text": self.reply}],
+            stop_reason="end_turn",
+        )
 
 
 def _scripted(lines):
