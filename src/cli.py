@@ -58,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.pdf:
-        pdf_path = Path(args.pdf).expanduser()
+        pdf_path = Path(args.pdf).expanduser().resolve(strict=False)
         if not pdf_path.is_file():
             print(f"Error: file not found: {pdf_path}")
             return 1

@@ -1,17 +1,32 @@
 """Per-project memory — persist the Draft between launches.
 
-Writes ``.book-gen/draft.json`` after every agent turn so that running
+Writes ``.book-gen/draft.json`` after each user interaction (slash
+command or agent tool call) so that running
 ``child-book-generator same-draft.pdf`` again picks up where the last
-session left off: title/author/cover/per-page layouts/already-approved
-typo fixes all survive. The idea is the agent "doesn't learn the book
-from scratch every time" (per the pivot plan in ``docs/PLAN.md``).
+session left off: title/author/cover/per-page layouts and any typo
+fixes the user approved (those live in ``DraftPage.text`` itself)
+survive. The agent re-reads the draft via ``read_draft`` and only
+asks about what's still missing — per ``docs/PLAN.md``.
 
-Atomic write via ``tempfile`` + ``os.replace`` so a crash mid-write can't
-leave a half-written file behind. Corrupt or missing files degrade to
-``load_draft() -> None`` so the REPL can fall back to a fresh ingest.
+Crash-safety:
 
-Preserve-child-voice: the child's page text, cover subtitle, and
-back-cover text round-trip verbatim through JSON.
+- ``tempfile.mkstemp`` + ``f.flush()`` + ``os.fsync()`` + ``os.replace``
+  so a crash after ``replace`` still sees a fully-written file.
+- Every ``save_draft`` call also sweeps any stale ``.draft.*.tmp``
+  siblings left by a prior SIGKILL between ``mkstemp`` and ``replace``.
+- Corrupt / missing / non-object JSON and unknown schema versions
+  degrade to ``load_draft() -> None``; the REPL falls back to a fresh
+  ingest rather than crashing or applying stale fields.
+
+Path handling: every path serialised is ``.resolve()``-d first so
+resuming from a different cwd still finds the images, and the CLI's
+cwd/form of the PDF argument can't accidentally mismatch the saved
+``source_pdf``.
+
+Preserve-child-voice: whitespace on ``cover_subtitle`` /
+``back_cover_text`` and Unicode text on every field round-trip
+verbatim (``ensure_ascii=False``), so peeking at ``draft.json`` shows
+the child's actual words, not ``\\u00e7`` escapes.
 """
 
 from __future__ import annotations
@@ -25,6 +40,9 @@ from src.draft import Draft, DraftPage
 
 MEMORY_DIR = ".book-gen"
 MEMORY_FILE = "draft.json"
+TMP_PREFIX = ".draft."
+TMP_SUFFIX = ".tmp"
+SCHEMA_VERSION = 1
 
 
 def path(root: Path) -> Path:
@@ -35,12 +53,26 @@ def save_draft(root: Path, draft: Draft) -> None:
     """Atomically write ``draft`` to ``root/.book-gen/draft.json``."""
     target = path(root)
     target.parent.mkdir(parents=True, exist_ok=True)
+
+    # Sweep any tmp files a prior crash left behind before creating a new one.
+    for stale in target.parent.glob(f"{TMP_PREFIX}*{TMP_SUFFIX}"):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+
     fd, tmp_name = tempfile.mkstemp(
-        prefix=".draft.", suffix=".tmp", dir=str(target.parent)
+        prefix=TMP_PREFIX, suffix=TMP_SUFFIX, dir=str(target.parent)
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(_to_dict(draft), f, indent=2)
+            json.dump(_to_dict(draft), f, indent=2, ensure_ascii=False)
+            # Flush user-space buffer + fsync kernel buffer so the bytes
+            # reach disk before the rename. Without this a power loss
+            # between replace() and writeback can leave a zero-byte
+            # draft.json and the session's whole state vanishes.
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp_name, target)
     except Exception:
         Path(tmp_name).unlink(missing_ok=True)
@@ -52,9 +84,11 @@ def load_draft(
 ) -> Draft | None:
     """Read the saved draft under ``root``, or ``None`` if missing / corrupt.
 
-    If ``expected_source`` is given and the memory's ``source_pdf`` doesn't
-    match, returns ``None`` so the REPL doesn't silently apply one book's
-    metadata to another.
+    If ``expected_source`` is given and the memory's ``source_pdf``
+    doesn't match (compared as resolved absolute paths), returns
+    ``None`` so the REPL doesn't silently apply one book's metadata to
+    another. ``./book.pdf`` and ``/abs/book.pdf`` referring to the same
+    file are treated as equal.
     """
     target = path(root)
     if not target.is_file():
@@ -65,27 +99,44 @@ def load_draft(
         return None
     if not isinstance(data, dict):
         return None
+    if data.get("version", SCHEMA_VERSION) != SCHEMA_VERSION:
+        # Unknown future shape — don't risk applying stale fields with
+        # new meanings. The user gets a fresh ingest.
+        return None
     try:
         draft = _from_dict(data)
     except (KeyError, TypeError, ValueError):
         return None
-    if expected_source is not None and draft.source_pdf != Path(expected_source):
-        return None
+    if expected_source is not None:
+        if _resolve(draft.source_pdf) != _resolve(Path(expected_source)):
+            return None
     return draft
+
+
+def _resolve(p: Path) -> Path:
+    """Best-effort absolute path. ``resolve(strict=False)`` so paths
+    whose target no longer exists still compare cleanly."""
+    try:
+        return p.resolve(strict=False)
+    except OSError:
+        return p.absolute()
 
 
 def _to_dict(draft: Draft) -> dict:
     return {
-        "source_pdf": str(draft.source_pdf),
+        "version": SCHEMA_VERSION,
+        "source_pdf": str(_resolve(draft.source_pdf)),
         "title": draft.title,
         "author": draft.author,
-        "cover_image": str(draft.cover_image) if draft.cover_image else None,
+        "cover_image": (
+            str(_resolve(draft.cover_image)) if draft.cover_image else None
+        ),
         "cover_subtitle": draft.cover_subtitle,
         "back_cover_text": draft.back_cover_text,
         "pages": [
             {
                 "text": p.text,
-                "image": str(p.image) if p.image else None,
+                "image": str(_resolve(p.image)) if p.image else None,
                 "layout": p.layout,
             }
             for p in draft.pages
