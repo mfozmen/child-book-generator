@@ -1,7 +1,134 @@
 # CHANGELOG
 
 
+## v0.7.0 (2026-04-15)
+
+### Chores
+
+- Consolidate slugify and refresh docs
+  ([#17](https://github.com/mfozmen/child-book-generator/pull/17),
+  [`365ca46`](https://github.com/mfozmen/child-book-generator/commit/365ca46ab9aeb2f40b37a118accc76e2f1355b0f))
+
+* chore: consolidate slugify and refresh CLAUDE.md + README
+
+Ships PR #17 from docs/PLAN.md (cleanup). Nothing behavioural changes; the codebase just shrinks a
+  bit and the docs stop describing the pre-agent world.
+
+- Drop build._slugify. build.py imports slugify from src.draft, which is the single source of truth
+  (the REPL's /render and the agent's render_book tool already use it). Their tests in
+  tests/test_draft.py cover every branch; the three duplicate tests in tests/test_build.py go away.
+  - CLAUDE.md Architecture section redrawn around the agent-first flow (cli → repl → agent → tools →
+  renderer). Adds the new modules (agent, agent_tools, memory, providers) that shipped between PRs
+  #13-#16. Old "Current state" section and the p1/p2 phase hint in Open TODOs are gone —
+  docs/PLAN.md is the single roadmap now. - README Status bullet list rewritten as a short "what it
+  does today" paragraph. The feature-by-feature ✅ list served the pivot era but isn't how users read
+  a README.
+
+225 tests green.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* docs: trim shipped items from PLAN.md and name the agent in slugify bullet
+
+Addresses both review findings on #17.
+
+1. PLAN.md still listed the slugify consolidation and the README/ CLAUDE.md refresh as pending work
+  even though this PR ships them. Remove both bullets. Convert the rest of the cleanup list
+  ("_CHECKERS placeholder", "Draft vs Book", "examples/", "slash commands") into "intentionally
+  kept" items so the decision is documented for future cleanup passes.
+
+2. CLAUDE.md said slugify was shared by "the REPL's /render and build.py" — skipped the agent's
+  render_book tool (arguably the primary caller in the agent-first flow). Reword to name all three
+  call sites.
+
+225 tests still green.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Documentation
+
+- Mark agent-first pivot plan as shipped
+  ([`bbcd84c`](https://github.com/mfozmen/child-book-generator/commit/bbcd84cbd7970a104c46fa62f84ce232c047ebb5))
+
+All five PRs (#13-#17) from docs/PLAN.md merged. Rewrite the file as a status record of what
+  shipped, which earlier cleanup candidates were intentionally kept (with reasoning), and which
+  items stay deferred unless the user asks. The "Done when" checklist is now all boxes checked.
+
+Docs-only; no code change.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- **repl**: Guided API-key setup + keyring so users paste only once
+  ([#18](https://github.com/mfozmen/child-book-generator/pull/18),
+  [`1a1ec9c`](https://github.com/mfozmen/child-book-generator/commit/1a1ec9c3bfe2b719a53fc6bcad98af6ed7527d3f))
+
+* feat(repl): guided API-key setup + keyring so users paste only once
+
+Ships PR #18. Two UX wins in one commit:
+
+1) Zero-extras install. anthropic and keyring move out of the [anthropic] optional extra and into
+  default dependencies, so `pip install child-book-generator` just works — no extra dance for the
+  user to remember.
+
+2) One-time key entry. - ProviderSpec gains key_url + key_steps so each cloud provider carries its
+  own onboarding text (Anthropic, OpenAI, Google). - _prompt_for_provider opens the provider's
+  key-creation page in the user's default browser and prints a numbered set of steps above the
+  secret prompt — new users aren't hunting for the link. - After a successful validation the REPL
+  writes the key to the OS credential manager via keyring (Windows Credential Manager / macOS
+  Keychain / Linux Secret Service). - _resume_or_pick reads the key back on the next launch and
+  re-validates silently. A valid key means the user never sees a prompt at all. If the key was
+  rotated/revoked, we delete it and drop back to the prompt. - New /logout command forgets the saved
+  key and drops the session to offline so the user can switch accounts. - All keyring failures
+  (headless Linux, locked-down containers) degrade silently — the REPL keeps working; the user just
+  has to re-paste next launch.
+
+Testing hardening: - tests/conftest.py auto-isolates the keyring (in-memory fake) so no test touches
+  the developer's OS credential manager, and auto-blocks webbrowser.open so a suite run doesn't
+  flood the browser with tabs.
+
+Coverage: src/keyring_store.py 100%, src/repl.py stays near 100%.
+
+Total 98%. 239 tests.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix(repl): close five review findings on #18
+
+1. _validate_silently used to catch every Exception and return False, so a transient network timeout
+  during silent resume-validation would silently delete the user's saved key. Narrow the deletion to
+  KeyValidationError only: other exceptions keep the saved key and surface a "couldn't verify"
+  warning — the key might still be valid, and forcing a re-paste over a flaky network is hostile. 2.
+  docs/PLAN.md: move keyring persistence out of "explicitly deferred" and into the shipped-PR table;
+  this PR is the one that lands it. 3. validator.py's missing-SDK install hint pointed at the old
+  [anthropic] optional extra, which this PR removes. Suggest pip install --force-reinstall instead.
+  4. keyring_store.delete_key used a fragile getattr(...).__dict__.get(...) guard for
+  PasswordDeleteError. A bare except Exception already followed and covered the real failure modes;
+  simplify to one clause. 5. _show_key_guidance assumed webbrowser.open either opens or raises, but
+  on headless Linux (no $DISPLAY / $BROWSER) it returns False silently. Check the return value and
+  only print "opened the page in your browser" when it actually did.
+
+Two new regression tests pin the transient-error and headless-browser behaviours. 241/241 green;
+  src/keyring_store.py stays 100% covered.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.6.0 (2026-04-15)
+
+### Chores
+
+- **release**: 0.6.0 [skip ci]
+  ([`82066f0`](https://github.com/mfozmen/child-book-generator/commit/82066f05b2e00f917e832582d8821373c0bd0fb4))
 
 ### Features
 
