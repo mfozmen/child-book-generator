@@ -15,6 +15,7 @@ from typing import Callable
 from rich.console import Console
 
 from src import draft as draft_mod
+from src import memory as memory_mod
 from src import session as session_mod
 from src.agent import Agent
 from src.agent_tools import (
@@ -146,6 +147,7 @@ class Repl:
                 self._agent.say(_AGENT_GREETING_HINT)
             except Exception as e:
                 self._console.print(f"[red]Agent error:[/red] {e}")
+            self._persist_draft()
         while True:
             try:
                 raw = self._read()
@@ -155,8 +157,21 @@ class Repl:
             if not line:
                 continue
             exit_code = self._dispatch(line)
+            self._persist_draft()
             if exit_code is not None:
                 return exit_code
+
+    def _persist_draft(self) -> None:
+        """Write the current draft to .book-gen/draft.json so the next
+        launch can resume. No-op when there's nothing to persist."""
+        if self._draft is None or self._session_root is None:
+            return
+        try:
+            memory_mod.save_draft(self._session_root, self._draft)
+        except Exception as e:
+            # Persistence failures are non-fatal — the user's session
+            # still works, they just won't resume next time.
+            self._console.print(f"[dim]Could not save draft memory: {e}[/dim]")
 
     def _activate(self, spec: ProviderSpec, api_key: str | None) -> None:
         self._provider = spec
