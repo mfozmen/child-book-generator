@@ -12,7 +12,7 @@ jobs:
   release:
     name: Semantic release
     runs-on: ubuntu-latest
-    if: github.repository == 'mfozmen/child-book-generator'
+    if: github.repository == 'mfozmen/littlepress-ai'
     permissions:
       contents: write
       id-token: write

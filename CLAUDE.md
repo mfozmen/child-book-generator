@@ -1,4 +1,4 @@
-# child-book-generator
+# littlepress-ai
 
 An open-source tool that turns a child's story draft into a print-ready picture book (A5 PDF + optional A4 imposed booklet for home printing).
 
@@ -22,9 +22,9 @@ Default output: `output/<slugified-title>.pdf`.
 
 ## Architecture
 
-Primary flow is `child-book-generator draft.pdf` → interactive agent → printable PDF. The deterministic pieces live under `src/`; the agent wraps them as narrow tools.
+Primary flow is `littlepress draft.pdf` → interactive agent → printable PDF. The deterministic pieces live under `src/`; the agent wraps them as narrow tools.
 
-- `src/cli.py` — `child-book-generator` console entry point. Pre-loads a PDF when given, restores memory if one matches.
+- `src/cli.py` — `littlepress` console entry point (also aliased as `littlepress-ai` matching the PyPI name). Pre-loads a PDF when given, restores memory if one matches.
 - `src/repl.py` — read loop, slash-command dispatch, provider picker, confirmation prompt. Owns the in-memory `Draft`.
 - `src/agent.py` — tool-use loop that drives the active LLM.
 - `src/agent_tools.py` — tools registered with the agent: `read_draft`, `propose_typo_fix`, `set_metadata`, `set_cover`, `choose_layout`, `render_book`. **This is where preserve-child-voice is enforced** — no tool rewrites page text freely.

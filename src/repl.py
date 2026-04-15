@@ -1,4 +1,4 @@
-"""Interactive shell loop for child-book-generator.
+"""Interactive shell loop for littlepress.
 
 Owns the read loop, slash-command dispatch, provider picker, and the
 in-memory draft. Non-slash input is routed through an ``Agent`` (see
@@ -132,7 +132,7 @@ class Repl:
         return self._commands
 
     def run(self) -> int:
-        self._console.print("[bold]child-book-generator[/bold]")
+        self._console.print("[bold]littlepress[/bold]")
         self._console.print(
             "Type [cyan]/help[/cyan] for commands, [cyan]/exit[/cyan] to leave.\n"
         )
@@ -220,40 +220,45 @@ class Repl:
 
     def _resume_or_pick(self) -> tuple[ProviderSpec, str | None] | None:
         """Try to restore the saved provider (with its stored key if any);
-        fall back to the interactive picker otherwise.
+        fall back to the interactive picker otherwise."""
+        spec = self._saved_spec()
+        if spec is None:
+            return self._prompt_for_provider()
+        if not spec.requires_api_key:
+            return spec, None
+        return self._resume_with_key(spec)
 
-        For key-requiring providers we read the key from the OS credential
-        store and re-validate silently. If validation passes, the user
-        never sees the prompt. If the saved key was rotated or revoked,
-        we drop it and fall through to ``_prompt_for_provider``.
-        """
-        if self._session_root is not None:
-            saved = session_mod.load(self._session_root).provider
-            spec = find(saved) if saved else None
-            if spec is not None:
-                if not spec.requires_api_key:
-                    return spec, None
-                saved_key = keyring_store.load_key(spec.name)
-                if saved_key:
-                    err = self._validate_silently(spec, saved_key)
-                    if err is None:
-                        return spec, saved_key
-                    if isinstance(err, KeyValidationError):
-                        # Key was rotated / revoked — drop it, re-prompt.
-                        keyring_store.delete_key(spec.name)
-                    else:
-                        # Transient error (network, 5xx, rate-limit). The
-                        # key might still be fine. Trust it for this
-                        # session and warn the user so the retry isn't
-                        # confusing. Only a real KeyValidationError
-                        # proves the saved key is dead.
-                        self._console.print(
-                            f"[yellow]Couldn't verify saved API key "
-                            f"({err}); using it anyway.[/yellow]"
-                        )
-                        return spec, saved_key
-                return self._prompt_for_key(spec)
-        return self._prompt_for_provider()
+    def _saved_spec(self) -> ProviderSpec | None:
+        """The last-used provider for this working directory, if any."""
+        if self._session_root is None:
+            return None
+        saved = session_mod.load(self._session_root).provider
+        return find(saved) if saved else None
+
+    def _resume_with_key(
+        self, spec: ProviderSpec
+    ) -> tuple[ProviderSpec, str | None] | None:
+        """Try the keyring, silently validate. If the key is rotated we
+        drop it and re-prompt; a transient error keeps the key with a
+        warning; no saved key falls through to the prompt."""
+        saved_key = keyring_store.load_key(spec.name)
+        if not saved_key:
+            return self._prompt_for_key(spec)
+        err = self._validate_silently(spec, saved_key)
+        if err is None:
+            return spec, saved_key
+        if isinstance(err, KeyValidationError):
+            # Key was rotated / revoked — drop it, re-prompt.
+            keyring_store.delete_key(spec.name)
+            return self._prompt_for_key(spec)
+        # Transient error (network, 5xx, rate-limit). The key might
+        # still be fine; trust it for this session and warn the user
+        # so the silence isn't confusing.
+        self._console.print(
+            f"[yellow]Couldn't verify saved API key ({err}); "
+            "using it anyway.[/yellow]"
+        )
+        return spec, saved_key
 
     def _validate_silently(
         self, spec: ProviderSpec, api_key: str

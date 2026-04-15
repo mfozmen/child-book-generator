@@ -8,7 +8,7 @@ All five PRs from the original plan merged:
 
 | PR | Branch | What it shipped |
 |---|---|---|
-| #13 | `feat/agent-core` | `src/agent.py` tool-use loop; `read_draft` tool; `child-book-generator draft.pdf` auto-loads the draft. |
+| #13 | `feat/agent-core` | `src/agent.py` tool-use loop; `read_draft` tool; `littlepress draft.pdf` auto-loads the draft. |
 | #14 | `feat/agent-edit-tools` | `propose_typo_fix` (bounded + user y/n), `set_metadata`, `set_cover`, `choose_layout`. **preserve-child-voice enforced at the tool surface** — no tool rewrites page text. |
 | #15 | `feat/agent-render` | `render_book` tool produces the A5 PDF and optional A4 booklet. |
 | #16 | `feat/project-memory` | `.book-gen/draft.json` persists title / author / cover / layouts / edits across launches; atomic write, schema-versioned, path-normalised. |
@@ -17,7 +17,7 @@ All five PRs from the original plan merged:
 
 ## "Done when" checklist
 
-- [x] `child-book-generator some-draft.pdf` produces a printable A5 (and optional A4 booklet) in 5-10 minutes of conversation.
+- [x] `littlepress some-draft.pdf` produces a printable A5 (and optional A4 booklet) in 5-10 minutes of conversation.
 - [x] The child's story text is never silently rewritten (no tool allows it).
 - [x] Re-running on the same draft uses remembered choices and asks only about what changed.
 - [x] Codebase stays small enough for one person to hold in their head (~13 `src/` modules, each with a single clear role).

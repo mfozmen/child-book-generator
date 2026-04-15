@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "child-book-generator"
+name = "littlepress-ai"
 version = "0.7.0"
-description = "Turn a child's picture-book draft PDF into a print-ready A5 book and A4 booklet, preserving the child's voice."
+description = "Littlepress turns a child's picture-book draft PDF into a print-ready A5 book and A4 booklet. An AI agent walks the conversation; the child's voice is preserved end-to-end."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
@@ -30,7 +30,7 @@ dependencies = [
   "Pillow>=10.0.0",
   "pypdf>=4.0.0",
   "rich>=13.0.0",
-  # Bundled by default so `pip install child-book-generator` just works —
+  # Bundled by default so `pip install littlepress-ai` just works —
   # the app talks to Claude out of the box; no separate extra to remember.
   "anthropic>=0.30.0",
   # Stores the Anthropic key in the OS credential manager so the user
@@ -42,12 +42,20 @@ dependencies = [
 dev = ["pytest>=8.0.0", "pytest-cov>=5.0.0"]
 
 [project.scripts]
+# Primary command users actually type.
+littlepress = "src.cli:main"
+# Alias matching the PyPI package name so `uvx littlepress-ai` and
+# `pipx run littlepress-ai` work without `--from`.
+littlepress-ai = "src.cli:main"
+# Deprecated alias for the pre-rename name; keep for one release so
+# editable installs that already had it keep working. Plan to remove
+# in the next minor bump.
 child-book-generator = "src.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/mfozmen/child-book-generator"
-Repository = "https://github.com/mfozmen/child-book-generator"
-Issues = "https://github.com/mfozmen/child-book-generator/issues"
+Homepage = "https://github.com/mfozmen/littlepress-ai"
+Repository = "https://github.com/mfozmen/littlepress-ai"
+Issues = "https://github.com/mfozmen/littlepress-ai/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]

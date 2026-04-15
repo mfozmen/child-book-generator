@@ -56,7 +56,7 @@ SPECS: tuple[ProviderSpec, ...] = (
         key_url="https://console.anthropic.com/settings/keys",
         key_steps=(
             "Sign in to Anthropic Console (create a free account if you don't have one).",
-            "Click [bold]Create Key[/bold] and give it a name (e.g. \"child-book-generator\").",
+            "Click [bold]Create Key[/bold] and give it a name (e.g. \"littlepress\").",
             "Copy the key (starts with [cyan]sk-ant-[/cyan]) and paste it below.",
         ),
     ),
