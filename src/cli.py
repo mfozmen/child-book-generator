@@ -38,6 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     from rich.console import Console
 
     from src import draft as draft_mod
+    from src import memory as memory_mod
     from src.providers.validator import validate_key
     from src.repl import Repl
 
@@ -57,16 +58,24 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.pdf:
-        pdf_path = Path(args.pdf).expanduser()
+        pdf_path = Path(args.pdf).expanduser().resolve(strict=False)
         if not pdf_path.is_file():
             print(f"Error: file not found: {pdf_path}")
             return 1
-        images_dir = session_root / ".book-gen" / "images"
-        try:
-            repl.set_draft(draft_mod.from_pdf(pdf_path, images_dir))
-        except Exception as e:
-            print(f"Error: could not read PDF: {e}")
-            return 1
+        # Prefer a saved draft for this PDF if we have one — otherwise
+        # the agent would re-ask every decision the user already made.
+        restored = memory_mod.load_draft(
+            session_root, expected_source=pdf_path
+        )
+        if restored is not None:
+            repl.set_draft(restored)
+        else:
+            images_dir = session_root / ".book-gen" / "images"
+            try:
+                repl.set_draft(draft_mod.from_pdf(pdf_path, images_dir))
+            except Exception as e:
+                print(f"Error: could not read PDF: {e}")
+                return 1
 
     return repl.run()
 

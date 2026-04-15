@@ -35,10 +35,11 @@ Phase plan lives under `docs/`. Shipped so far:
 - ✅ Agent core: drop a PDF on the command line (`child-book-generator draft.pdf`) and Claude reads the draft through a `read_draft` tool and greets you.
 - ✅ Agent edit tools: the agent can propose a typo fix (user y/n), set title / author / cover subtitle / back-cover text, choose one of the page drawings as the cover, and set per-page layouts. Page text is **only** changed via `propose_typo_fix`, bounded to 3 words and 30 chars per side — no tool rewrites the child's story.
 - ✅ Agent render tool: once title (and ideally cover + author) are set, the agent calls `render_book` itself and writes the A5 PDF to `.book-gen/output/`. Asking for a booklet writes the A4 2-up alongside.
+- ✅ Project memory: the draft's title, author, cover, per-page layouts and edits are saved to `.book-gen/draft.json` after every turn. Re-running `child-book-generator same-draft.pdf` resumes the session — the agent only asks about what's still missing.
 
 In flight / planned (see `docs/PLAN.md`):
 
-- 🚧 Per-project memory so re-opening a draft doesn't re-ask every decision.
+- 🚧 Cleanup PR: trim slash-command paths / duplicate helpers the agent makes redundant.
 
 ## Install & run
 
