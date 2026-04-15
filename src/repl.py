@@ -37,7 +37,11 @@ from src.providers.llm import (
     create_provider,
     find,
 )
-from src.providers.validator import KeyValidationError, ProviderUnavailable
+from src.providers.validator import (
+    KeyValidationError,
+    ProviderUnavailable,
+    TransientValidationError,
+)
 
 
 SlashHandler = Callable[["Repl", str], int | None]
@@ -362,6 +366,18 @@ class Repl:
                 self._console.print(f"[red]{e}[/red]")
                 self._console.print(
                     f"Enter API key for {spec.display_name} again:"
+                )
+                continue
+            except TransientValidationError as e:
+                # Key is probably fine but the call failed (billing / rate
+                # / 5xx / network). Re-prompting the same key will hit the
+                # same error — surface the message and let the user either
+                # try again (after fixing the underlying cause) or Ctrl-D
+                # out.
+                self._console.print(f"[yellow]{e}[/yellow]")
+                self._console.print(
+                    f"Press Enter to retry, or Ctrl-D to cancel and come "
+                    f"back for {spec.display_name} later:"
                 )
                 continue
             return api_key

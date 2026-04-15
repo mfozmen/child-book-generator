@@ -117,6 +117,15 @@ def test_picker_hides_the_offline_none_option():
     assert "offline" not in rendered.lower()
 
 
+def test_none_spec_remains_available_as_internal_default():
+    """The picker UI hides "No model (offline)" but the spec itself has
+    to keep resolving through ``find`` — /logout drops back to it, and
+    saved sessions written before the UI change still reference it."""
+    spec = find("none")
+    assert spec is not None
+    assert spec.requires_api_key is False
+
+
 def test_picker_numbers_shift_to_cover_only_real_providers():
     """Picking '1' should now pick Claude (was 2 when 'none' was option 1)."""
     repl, _ = _make(["1", "/exit"], secrets=["sk-test"])

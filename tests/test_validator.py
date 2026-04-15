@@ -53,29 +53,32 @@ def test_anthropic_rejects_key_when_sdk_signals_auth_error(monkeypatch):
         validator.validate_key(find("anthropic"), "sk-bad")
 
 
-def test_anthropic_billing_error_surfaces_as_key_validation_error(monkeypatch):
-    """A BadRequestError from the SDK (e.g. 'credit balance too low') is
-    NOT an auth failure — the key is valid, the account just can't pay
-    for the call. But if we don't catch it, the traceback crashes the
-    REPL. Catch it and surface the server's message so the user knows
-    to add credits."""
+def test_anthropic_billing_error_is_transient_not_auth(monkeypatch):
+    """A BadRequestError from the SDK (e.g. 'credit balance too low')
+    means the key is valid — the account just can't pay for the call.
+    Surface it cleanly (no traceback) but NOT as KeyValidationError:
+    the resume path uses that signal to *delete* the saved key, and
+    deleting a valid key over a billing hiccup would force the user
+    to re-paste after they add credits."""
     fake = _make_fake_anthropic(raise_error="billing")
     monkeypatch.setitem(__import__("sys").modules, "anthropic", fake)
 
-    with pytest.raises(validator.KeyValidationError) as exc:
+    with pytest.raises(validator.TransientValidationError) as exc:
         validator.validate_key(find("anthropic"), "sk-fine-but-broke")
 
     assert "credit balance" in str(exc.value).lower()
+    # Crucially: not a KeyValidationError — resume mustn't delete the key.
+    assert not isinstance(exc.value, validator.KeyValidationError)
 
 
-def test_anthropic_generic_api_error_does_not_crash(monkeypatch):
-    """Any anthropic.APIError subclass the SDK throws (rate limits,
-    server 5xx, etc.) must come out as KeyValidationError so the REPL
-    can recover instead of dumping a traceback to the user."""
+def test_anthropic_transient_api_error_does_not_crash(monkeypatch):
+    """Rate limits / 5xx / connection errors are transient — key is
+    still fine. Raise TransientValidationError so resume-path logic
+    keeps the saved key instead of wiping it over a flaky network."""
     fake = _make_fake_anthropic(raise_error="rate_limit")
     monkeypatch.setitem(__import__("sys").modules, "anthropic", fake)
 
-    with pytest.raises(validator.KeyValidationError) as exc:
+    with pytest.raises(validator.TransientValidationError) as exc:
         validator.validate_key(find("anthropic"), "sk-test")
 
     assert "rate limit" in str(exc.value).lower()

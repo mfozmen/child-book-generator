@@ -107,6 +107,32 @@ def test_resume_drops_keyring_key_when_it_fails_validation(tmp_path):
     assert repl.api_key == "sk-ant-fresh"
 
 
+def test_resume_keeps_key_on_transient_validation_error_subclass(tmp_path):
+    """If the validator raises TransientValidationError (billing /
+    network / rate / 5xx) during silent resume, the saved key must stay.
+    This pins the post-PR #20 contract: only KeyValidationError proves
+    the key is dead; all other failures keep the key."""
+    from src.providers.validator import TransientValidationError
+
+    session.save(tmp_path, session.Session(provider="anthropic"))
+    keyring_store.save_key("anthropic", "sk-ant-saved")
+
+    def validate(_spec, _key):
+        raise TransientValidationError("credit balance too low")
+
+    repl, buf = _make(
+        tmp_path,
+        ["/exit"],
+        secrets=[],
+        validate=validate,
+    )
+    repl.run()
+
+    assert keyring_store.load_key("anthropic") == "sk-ant-saved"
+    assert repl.provider.name == "anthropic"
+    assert "credit balance" in buf.getvalue().lower()
+
+
 def test_resume_keeps_key_on_transient_validation_error(tmp_path):
     """Network timeout / 5xx / rate-limit during silent resume MUST NOT
     delete the saved key — the key might still be valid. Only a real
