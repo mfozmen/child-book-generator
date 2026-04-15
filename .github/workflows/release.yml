@@ -44,10 +44,22 @@ jobs:
         # a fast second merge), the naive push rejects as non-fast-
         # forward and the whole bump is wasted. Rebase our release
         # commit onto the fresh tip and retry a few times.
+        #
+        # Tag safety: PSR creates the release tag on our local commit.
+        # After a rebase, that commit's SHA changes and the tag points
+        # at an orphaned (unreachable) commit; `--follow-tags` then
+        # silently skips pushing it and the release tag never reaches
+        # the remote. Re-point the tag at HEAD before each push so
+        # `--follow-tags` has a reachable target.
         run: |
           set -e
+          TAG="$(git tag --points-at HEAD | head -n1)"
+          echo "Pushing release commit (tag: ${TAG:-<none>})"
           for attempt in 1 2 3 4 5; do
             git pull --rebase origin main
+            if [ -n "$TAG" ]; then
+              git tag -f "$TAG" HEAD
+            fi
             if git push origin main --follow-tags; then
               echo "Pushed release on attempt $attempt."
               exit 0
