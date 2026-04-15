@@ -143,7 +143,7 @@ def test_memory_persists_after_agent_tool_call(tmp_path):
 
 
 def test_relaunch_restores_draft_from_memory(tmp_path, monkeypatch):
-    """CLI: `child-book-generator draft.pdf` the second time should pick
+    """CLI: `littlepress draft.pdf` the second time should pick
     up where the previous session left off — same title, author, cover,
     etc. The agent doesn't re-ask what's already settled."""
     from src import cli, session as session_mod

@@ -3,7 +3,7 @@ name: generating-conventional-commits
 description: Generate Conventional Commits messages for this repo by analyzing staged changes, picking the correct type/scope, and producing a concise message. Invoke before every commit.
 ---
 
-# Generating Conventional Commits (child-book-generator)
+# Generating Conventional Commits (littlepress-ai)
 
 Every commit in this repo MUST follow [Conventional Commits](https://www.conventionalcommits.org/). Use this skill to analyze staged changes and write the message.
 

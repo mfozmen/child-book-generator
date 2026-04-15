@@ -1,4 +1,4 @@
-"""Entry point for the child-book-generator CLI.
+"""Entry point for the littlepress CLI.
 
 Parses ``--version`` / ``--help`` and optionally a PDF draft, then drops
 the user into the interactive REPL (``src/repl.py``). With a PDF argument
@@ -14,14 +14,14 @@ from importlib.metadata import PackageNotFoundError, version
 
 def _resolve_version() -> str:
     try:
-        return version("child-book-generator")
+        return version("littlepress-ai")
     except PackageNotFoundError:
         return "0.0.0+dev"
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="child-book-generator",
+        prog="littlepress",
         description="Turn a child's picture-book draft PDF into a print-ready book.",
     )
     parser.add_argument("--version", action="version", version=_resolve_version())

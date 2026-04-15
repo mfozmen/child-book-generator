@@ -57,7 +57,7 @@ def _check_anthropic(spec: ProviderSpec, api_key: str) -> None:
         # no-longer-real optional extra.
         raise ProviderUnavailable(
             "The 'anthropic' SDK is missing from this install. Try: "
-            "pip install --force-reinstall child-book-generator"
+            "pip install --force-reinstall littlepress-ai"
         ) from e
 
     # Cheapest call that still exercises authentication. If the key is

@@ -15,21 +15,30 @@ from .schema import Book, Page
 def _wrap(text: str, font: str, size: float, max_width: float) -> list[str]:
     lines: list[str] = []
     for paragraph in text.split("\n"):
-        if not paragraph.strip():
+        if paragraph.strip():
+            lines.extend(_wrap_paragraph(paragraph, font, size, max_width))
+        else:
             lines.append("")
+    return lines
+
+
+def _wrap_paragraph(
+    paragraph: str, font: str, size: float, max_width: float
+) -> list[str]:
+    """Greedy word-wrap of a single paragraph — words too wide for the
+    line break to the next line on their own."""
+    lines: list[str] = []
+    current = ""
+    for word in paragraph.split():
+        trial = word if not current else current + " " + word
+        if pdfmetrics.stringWidth(trial, font, size) <= max_width:
+            current = trial
             continue
-        words = paragraph.split()
-        current = ""
-        for w in words:
-            trial = w if not current else current + " " + w
-            if pdfmetrics.stringWidth(trial, font, size) <= max_width:
-                current = trial
-            else:
-                if current:
-                    lines.append(current)
-                current = w
         if current:
             lines.append(current)
+        current = word
+    if current:
+        lines.append(current)
     return lines
 
 

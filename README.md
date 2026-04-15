@@ -1,20 +1,20 @@
-# Child Book Generator
+# Littlepress
 
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=mfozmen_child-book-generator&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=mfozmen_child-book-generator)
-[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=mfozmen_child-book-generator&metric=coverage)](https://sonarcloud.io/summary/new_code?id=mfozmen_child-book-generator)
-[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=mfozmen_child-book-generator&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=mfozmen_child-book-generator)
-[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=mfozmen_child-book-generator&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=mfozmen_child-book-generator)
-[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=mfozmen_child-book-generator&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=mfozmen_child-book-generator)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=mfozmen_littlepress-ai&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=mfozmen_littlepress-ai)
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=mfozmen_littlepress-ai&metric=coverage)](https://sonarcloud.io/summary/new_code?id=mfozmen_littlepress-ai)
+[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=mfozmen_littlepress-ai&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=mfozmen_littlepress-ai)
+[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=mfozmen_littlepress-ai&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=mfozmen_littlepress-ai)
+[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=mfozmen_littlepress-ai&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=mfozmen_littlepress-ai)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Turn a child's picture-book **draft PDF** (scanned handwriting + drawings) into a print-ready A5 book, plus an optional A4 imposed booklet ready to fold and staple. The goal is simple: **a child should feel like a real author** — their original words are preserved end-to-end.
 
 ## How it works
 
-`child-book-generator` is an **interactive CLI**. You launch it, point it at a PDF draft, and it walks you through turning that draft into a finished book — asking questions when it needs your decision, never rewriting the child's story on its own.
+`littlepress` is an **interactive CLI**. You launch it, point it at a PDF draft, and it walks you through turning that draft into a finished book — asking questions when it needs your decision, never rewriting the child's story on its own.
 
 1. You scan or export the child's draft to a PDF — one illustration + one short text per page.
-2. You run `child-book-generator`, pick an LLM provider (or skip AI entirely), and drop it the PDF.
+2. You run `littlepress`, pick an LLM provider (or skip AI entirely), and drop it the PDF.
 3. The tool extracts pages + drawings, proposes typo fixes for your approval, and asks for anything missing (title, author, cover image). For pages without a drawing, it can generate an illustration — always with your per-page consent.
 4. It renders a polished A5 picture book PDF, plus an optional A4 imposed booklet for home printing.
 
@@ -28,7 +28,7 @@ What it does today:
 - Runs an agent conversation (Claude by default; OpenAI / Gemini / Ollama supported behind the picker). The agent replies in whatever language you type in.
 - The agent edits the draft through narrow tools that always surface to you: propose a typo fix (y/n), set title / author / cover / layout, render the book. Page text is **only** changed by `propose_typo_fix`, bounded to 3 words and 30 chars per side — no tool rewrites the child's story.
 - Writes an A5 PDF under `.book-gen/output/` and, when you ask, an A4 2-up booklet ready to print, fold, and staple.
-- Remembers what you decided: rerunning `child-book-generator same-draft.pdf` picks up where the last session left off instead of asking everything again.
+- Remembers what you decided: rerunning `littlepress same-draft.pdf` picks up where the last session left off instead of asking everything again.
 
 Roadmap lives in `docs/PLAN.md`.
 
@@ -37,15 +37,15 @@ Roadmap lives in `docs/PLAN.md`.
 Zero-install (recommended once published to PyPI):
 
 ```bash
-uvx child-book-generator           # uv does the fetch + run
-pipx run child-book-generator      # or pipx if you prefer
+uvx littlepress-ai           # uv does the fetch + run
+pipx run littlepress-ai      # or pipx if you prefer
 ```
 
 Traditional:
 
 ```bash
-pip install child-book-generator
-child-book-generator
+pip install littlepress-ai
+littlepress
 ```
 
 The Claude SDK and OS-keychain support are bundled by default — no optional extras to remember.
@@ -54,7 +54,7 @@ From a local checkout:
 
 ```bash
 pip install -e '.[dev]'            # dev environment with pytest
-child-book-generator --version
+littlepress --version
 ```
 
 DejaVu Sans is located automatically on Windows / Linux / macOS. If it cannot be found, drop `DejaVuSans.ttf` and `DejaVuSans-Bold.ttf` into a `fonts/` folder next to `build.py`.
@@ -64,7 +64,7 @@ DejaVu Sans is located automatically on Windows / Linux / macOS. If it cannot be
 Fastest path, with a PDF draft in hand:
 
 ```bash
-child-book-generator path/to/draft.pdf
+littlepress path/to/draft.pdf
 ```
 
 On first launch you'll be asked which LLM provider to use (Claude recommended). The app opens the provider's key-creation page in your browser, walks you through the steps, and saves the key securely in your OS keychain — **you only paste it once**. Subsequent launches use the saved key silently.
@@ -74,7 +74,7 @@ With a real provider active, Claude reads the draft through a `read_draft` tool 
 Without a PDF argument:
 
 ```bash
-child-book-generator
+littlepress
 ```
 
 drops you into the same shell; load a PDF later with `/load <pdf>`.

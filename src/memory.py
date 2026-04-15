@@ -2,7 +2,7 @@
 
 Writes ``.book-gen/draft.json`` after each user interaction (slash
 command or agent tool call) so that running
-``child-book-generator same-draft.pdf`` again picks up where the last
+``littlepress same-draft.pdf`` again picks up where the last
 session left off: title/author/cover/per-page layouts and any typo
 fixes the user approved (those live in ``DraftPage.text`` itself)
 survive. The agent re-reads the draft via ``read_draft`` and only

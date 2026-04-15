@@ -37,6 +37,67 @@ _MAX_TYPO_WORDS = 3
 # so the user sees what they're actually approving (not just a→b).
 _TYPO_CONTEXT_CHARS = 25
 
+# Message fragments surfaced back to the agent. Centralised so multiple
+# tools speak with one voice (and Sonar doesn't flag duplicated literals).
+_MSG_NO_DRAFT = "No draft loaded. Ask the user to provide a PDF first."
+_MSG_UNSET = "(unset — ask the user)"
+
+
+def _reject_typo_fix(
+    draft: Draft, page_n: int, before: str, after: str
+) -> str | None:
+    """Return the rejection message if this typo-fix request is malformed,
+    or ``None`` if it's shaped like a plausible mechanical edit."""
+    if page_n < 1 or page_n > len(draft.pages):
+        return (
+            f"Page {page_n} is out of range — the draft has "
+            f"{len(draft.pages)} pages."
+        )
+    if not before:
+        return (
+            "Rejected: 'before' must not be empty. propose_typo_fix "
+            "corrects an existing typo — it does NOT insert new text "
+            "into the child's page. If you want to add something, ask "
+            "the user to write it themselves."
+        )
+    if (
+        len(before) > _MAX_TYPO_CHARS
+        or len(after) > _MAX_TYPO_CHARS
+        or len(before.split()) > _MAX_TYPO_WORDS
+        or len(after.split()) > _MAX_TYPO_WORDS
+    ):
+        return (
+            "Rejected: typo fixes must be small mechanical substitutions "
+            f"(≤{_MAX_TYPO_CHARS} chars and ≤{_MAX_TYPO_WORDS} words per "
+            "side). For anything larger, ask the user to approve the "
+            "change in conversation — don't route story edits through "
+            "propose_typo_fix."
+        )
+    return None
+
+
+def _find_typo_match(text: str, before: str) -> re.Match[str] | None:
+    """Word-boundary substring match so ``cat → dog`` never rewrites ``scatter``."""
+    pattern = r"(?<!\w)" + re.escape(before) + r"(?!\w)"
+    return re.search(pattern, text)
+
+
+def _build_typo_prompt(
+    text: str, match: re.Match[str], page_n: int, before: str, after: str, reason: str
+) -> str:
+    """Render the y/n prompt with ±_TYPO_CONTEXT_CHARS of surrounding
+    page text so the user sees what they're actually approving."""
+    start = max(0, match.start() - _TYPO_CONTEXT_CHARS)
+    end = min(len(text), match.end() + _TYPO_CONTEXT_CHARS)
+    context = text[start:end].replace("\n", " ")
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(text) else ""
+    reason_tag = f" ({reason})" if reason else ""
+    return (
+        f"Page {page_n}: fix '{before}' → '{after}'{reason_tag} "
+        f"in: {prefix}{context}{suffix}"
+    )
+
 
 def read_draft_tool(get_draft: Callable[[], Draft | None]) -> Tool:
     """Tool: summarise the loaded PDF draft for the agent.
@@ -49,11 +110,11 @@ def read_draft_tool(get_draft: Callable[[], Draft | None]) -> Tool:
     def handler(_input: dict) -> str:
         draft = get_draft()
         if draft is None:
-            return "No draft is loaded. Ask the user to provide a PDF."
+            return _MSG_NO_DRAFT
         lines: list[str] = []
-        title = draft.title.strip() or "(unset — ask the user)"
-        author = draft.author.strip() or "(unset — ask the user)"
-        cover = "yes" if draft.cover_image is not None else "(unset — ask the user)"
+        title = draft.title.strip() or _MSG_UNSET
+        author = draft.author.strip() or _MSG_UNSET
+        cover = "yes" if draft.cover_image is not None else _MSG_UNSET
         lines.append(f"Title: {title}")
         lines.append(f"Author: {author}")
         lines.append(f"Cover drawing set: {cover}")
@@ -92,42 +153,18 @@ def propose_typo_fix_tool(
     def handler(input_: dict) -> str:
         draft = get_draft()
         if draft is None:
-            return "No draft loaded. Ask the user to provide a PDF first."
+            return _MSG_NO_DRAFT
         page_n = int(input_["page"])
         before = str(input_["before"])
         after = str(input_["after"])
         reason = str(input_.get("reason", ""))
 
-        if page_n < 1 or page_n > len(draft.pages):
-            return (
-                f"Page {page_n} is out of range — the draft has "
-                f"{len(draft.pages)} pages."
-            )
-        if not before:
-            return (
-                "Rejected: 'before' must not be empty. propose_typo_fix "
-                "corrects an existing typo — it does NOT insert new text "
-                "into the child's page. If you want to add something, ask "
-                "the user to write it themselves."
-            )
-        if (
-            len(before) > _MAX_TYPO_CHARS
-            or len(after) > _MAX_TYPO_CHARS
-            or len(before.split()) > _MAX_TYPO_WORDS
-            or len(after.split()) > _MAX_TYPO_WORDS
-        ):
-            return (
-                "Rejected: typo fixes must be small mechanical substitutions "
-                f"(≤{_MAX_TYPO_CHARS} chars and ≤{_MAX_TYPO_WORDS} words per "
-                "side). For anything larger, ask the user to approve the "
-                "change in conversation — don't route story edits through "
-                "propose_typo_fix."
-            )
+        rejection = _reject_typo_fix(draft, page_n, before, after)
+        if rejection is not None:
+            return rejection
 
         page = draft.pages[page_n - 1]
-        # Word-boundary match so 'cat' → 'dog' never rewrites 'scatter'.
-        pattern = r"(?<!\w)" + re.escape(before) + r"(?!\w)"
-        match = re.search(pattern, page.text)
+        match = _find_typo_match(page.text, before)
         if match is None:
             return (
                 f"Rejected: the word '{before}' does not appear on page "
@@ -136,26 +173,11 @@ def propose_typo_fix_tool(
                 "the child's text."
             )
 
-        # Surface surrounding context so the user knows what they're
-        # approving, not just `a → b`.
-        start = max(0, match.start() - _TYPO_CONTEXT_CHARS)
-        end = min(len(page.text), match.end() + _TYPO_CONTEXT_CHARS)
-        context = page.text[start:end].replace("\n", " ")
-        prefix = "…" if start > 0 else ""
-        suffix = "…" if end < len(page.text) else ""
-        prompt = (
-            f"Page {page_n}: fix '{before}' → '{after}'"
-            + (f" ({reason})" if reason else "")
-            + f" in: {prefix}{context}{suffix}"
-        )
+        prompt = _build_typo_prompt(page.text, match, page_n, before, after, reason)
         if not confirm(prompt):
-            return (
-                f"User declined. Keep page {page_n} exactly as the child wrote it."
-            )
+            return f"User declined. Keep page {page_n} exactly as the child wrote it."
 
-        page.text = (
-            page.text[: match.start()] + after + page.text[match.end():]
-        )
+        page.text = page.text[: match.start()] + after + page.text[match.end():]
         return f"Applied on page {page_n}. New text: {page.text!r}"
 
     return Tool(
@@ -191,7 +213,7 @@ def set_metadata_tool(get_draft: Callable[[], Draft | None]) -> Tool:
     def handler(input_: dict) -> str:
         draft = get_draft()
         if draft is None:
-            return "No draft loaded. Ask the user to provide a PDF first."
+            return _MSG_NO_DRAFT
         field_ = str(input_["field"])
         raw_value = str(input_.get("value", ""))
         if field_ not in _METADATA_FIELDS:
@@ -234,7 +256,7 @@ def set_cover_tool(get_draft: Callable[[], Draft | None]) -> Tool:
     def handler(input_: dict) -> str:
         draft = get_draft()
         if draft is None:
-            return "No draft loaded. Ask the user to provide a PDF first."
+            return _MSG_NO_DRAFT
         page_n = int(input_["page"])
         if page_n < 1 or page_n > len(draft.pages):
             return (
@@ -274,7 +296,7 @@ def choose_layout_tool(get_draft: Callable[[], Draft | None]) -> Tool:
     def handler(input_: dict) -> str:
         draft = get_draft()
         if draft is None:
-            return "No draft loaded. Ask the user to provide a PDF first."
+            return _MSG_NO_DRAFT
         page_n = int(input_["page"])
         layout = str(input_["layout"])
         reason = str(input_.get("reason", ""))
@@ -335,7 +357,7 @@ def render_book_tool(
     def handler(input_: dict) -> str:
         draft = get_draft()
         if draft is None:
-            return "No draft loaded. Ask the user to provide a PDF first."
+            return _MSG_NO_DRAFT
         if not draft.title.strip():
             return (
                 "Can't render yet: the draft has no title. Ask the user for "

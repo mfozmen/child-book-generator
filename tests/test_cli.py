@@ -35,7 +35,7 @@ def test_cli_help_exits_zero(capsys):
 
     assert exc.value.code == 0
     captured = capsys.readouterr()
-    assert "child-book-generator" in captured.out.lower()
+    assert "littlepress" in captured.out.lower()
 
 
 def test_cli_noargs_launches_repl_and_exits_on_eof(tmp_path, monkeypatch):
@@ -77,7 +77,7 @@ def test_cli_reads_api_keys_through_getpass_not_input(tmp_path, monkeypatch):
 
 
 def test_cli_positional_pdf_arg_auto_loads_draft(tmp_path, monkeypatch):
-    """`child-book-generator draft.pdf` should drop straight into the REPL
+    """`littlepress draft.pdf` should drop straight into the REPL
     with the PDF already ingested — the point of the agent-first pivot is
     to skip a manual /load step."""
     from PIL import Image
