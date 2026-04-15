@@ -67,8 +67,8 @@ def from_pdf(pdf_path: Path, images_dir: Path) -> Draft:
 def slugify(text: str) -> str:
     """Produce a filesystem-safe filename from a title.
 
-    Mirrors ``build._slugify`` but exposed for the REPL to share. Keep the
-    two in sync until the duplicate is consolidated in a follow-up PR.
+    Single source of truth — both the REPL's ``/render`` flow and
+    ``build.py``'s standalone CLI use this.
     """
     table = str.maketrans(
         {

@@ -17,6 +17,7 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 
 from src.schema import load_book
 from src.builder import build_pdf
+from src.draft import slugify
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -36,8 +37,7 @@ def main(argv: list[str] | None = None) -> int:
 
     out = args.output
     if out is None:
-        slug = _slugify(book.title)
-        out = Path("output") / f"{slug}.pdf"
+        out = Path("output") / f"{slugify(book.title)}.pdf"
 
     print(f"[1/2] Building A5 PDF -> {out}")
     build_pdf(book, out)
@@ -50,16 +50,6 @@ def main(argv: list[str] | None = None) -> int:
 
     print("Done.")
     return 0
-
-
-def _slugify(text: str) -> str:
-    table = str.maketrans({
-        "ı": "i", "İ": "I", "ğ": "g", "Ğ": "G", "ü": "u", "Ü": "U",
-        "ş": "s", "Ş": "S", "ö": "o", "Ö": "O", "ç": "c", "Ç": "C",
-        " ": "_",
-    })
-    cleaned = text.translate(table)
-    return "".join(ch for ch in cleaned if ch.isalnum() or ch in "_-").lower() or "book"
 
 
 if __name__ == "__main__":

@@ -22,16 +22,26 @@ Default output: `output/<slugified-title>.pdf`.
 
 ## Architecture
 
-- `build.py` — CLI entry point (argparse + pipeline orchestration)
-- `src/schema.py` — loads `book.json` into `Book` / `Page` / `Cover` / `BackCover` dataclasses; validates image paths
-- `src/config.py` — page size (A5), margins, font/size settings
-- `src/fonts.py` — DejaVu Sans font registration (required for non-ASCII characters)
-- `src/pages.py` — page layouts (`image-top`, `image-bottom`, `image-full`, `text-only`)
-- `src/builder.py` — ReportLab-based A5 PDF assembly
-- `src/imposition.py` — 2-up saddle-stitch booklet imposition via `pypdf`
-- `book.json` — book content (single source of truth)
-- `images/` — page illustrations (PNG)
-- `output/` — generated PDFs (gitignored)
+Primary flow is `child-book-generator draft.pdf` → interactive agent → printable PDF. The deterministic pieces live under `src/`; the agent wraps them as narrow tools.
+
+- `src/cli.py` — `child-book-generator` console entry point. Pre-loads a PDF when given, restores memory if one matches.
+- `src/repl.py` — read loop, slash-command dispatch, provider picker, confirmation prompt. Owns the in-memory `Draft`.
+- `src/agent.py` — tool-use loop that drives the active LLM.
+- `src/agent_tools.py` — tools registered with the agent: `read_draft`, `propose_typo_fix`, `set_metadata`, `set_cover`, `choose_layout`, `render_book`. **This is where preserve-child-voice is enforced** — no tool rewrites page text freely.
+- `src/providers/llm.py` — `LLMProvider` protocol + `NullProvider` + `AnthropicProvider`. `chat()` for one-shot text, `turn()` for the tool-use loop.
+- `src/providers/validator.py` — provider key-validation pings (Anthropic implemented; rest no-op for now).
+- `src/draft.py` — `Draft` / `DraftPage`: lenient in-memory working shape. `from_pdf` ingests; `to_book` projects to the strict `Book` the renderer wants. `slugify` is the single source of truth for output filenames, shared by the agent's `render_book` tool, the REPL's `/render`, and `build.py`.
+- `src/memory.py` — per-project persistence at `.book-gen/draft.json`. Atomic write, fsync, schema-versioned.
+- `src/session.py` — per-working-directory session state (active provider, etc.) at `.book-gen/session.json`.
+- `src/schema.py` — strict `Book` / `Page` / `Cover` / `BackCover` dataclasses + `book.json` loader used by the renderer.
+- `src/config.py` — A5 page size, margins, fonts.
+- `src/fonts.py` — DejaVu Sans registration (required for non-ASCII).
+- `src/pages.py` — page layouts (`image-top`, `image-bottom`, `image-full`, `text-only`).
+- `src/builder.py` — ReportLab-based A5 PDF assembly.
+- `src/imposition.py` — 2-up saddle-stitch A4 booklet via `pypdf`.
+- `src/pdf_ingest.py` — text + image extraction from the input PDF.
+- `build.py` — legacy standalone `python build.py book.json` path (still works).
+- `.book-gen/` — per-project runtime state (gitignored): `session.json`, `draft.json`, `images/`, `output/`.
 
 ## Book schema
 
@@ -67,20 +77,9 @@ Valid `layout` values: `image-top`, `image-bottom`, `image-full`, `text-only`.
 - Bug fixes start with a regression test that reproduces the bug.
 - Exceptions (throwaway prototypes, generated code, pure config) require explicit agreement from the maintainer.
 
-## Current state
-
-- Git repository initialized (branch `main`); initial commit lands the generic generator code, README, LICENSE, and CLAUDE.md.
-- Published on GitHub as a public MIT repo: `mfozmen/child-book-generator`.
-- `book.json` and `images/` in the working tree are legacy private content and are gitignored. They are **not** part of the open-source project. A generic example under `examples/` is still TODO.
-
 ## Open TODOs
 
-Planning notes live in `docs/` — one Markdown file per open task (`docs/p<phase>-<nn>-<slug>.md`). **When a task ships, delete the file.** The set of files in `docs/` is the authoritative list of open work.
-
-Current phases:
-
-- **Phase 1** — PDF-first ingestion: extract pages + images from a PDF, synthesize `book.json`, ask the user interactively for anything missing (title, author, cover), then render. See `docs/p1-*.md`.
-- **Phase 2** — Layout improvements. Deferred until Phase 1 is done. See `docs/p2-*.md`.
+Planning lives in `docs/PLAN.md` — the single agent-first roadmap. When a PR ships, trim the corresponding section; when the file is empty, the plan is done.
 
 `README.md` is user-facing (what the project is, how to use it) — don't put internal plans there.
 

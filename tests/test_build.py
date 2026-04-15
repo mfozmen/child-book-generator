@@ -1,18 +1,9 @@
 from pathlib import Path
 
-from build import _slugify, main
+from build import main
 
-
-def test_slugify_turkish_chars_to_ascii():
-    assert _slugify("Üzgün Öğrenci") == "uzgun_ogrenci"
-
-
-def test_slugify_spaces_become_underscores():
-    assert _slugify("My Book Title") == "my_book_title"
-
-
-def test_slugify_falls_back_to_book_for_symbol_only_input():
-    assert _slugify("!!!") == "book"
+# slugify lives in src/draft.py now (build.py imports it from there).
+# Its tests live in tests/test_draft.py — no need to duplicate here.
 
 
 def test_main_builds_pdf_from_example_book(tmp_path):

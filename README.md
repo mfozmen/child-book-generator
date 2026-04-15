@@ -22,24 +22,15 @@ Turn a child's picture-book **draft PDF** (scanned handwriting + drawings) into 
 
 ## Status
 
-Phase plan lives under `docs/`. Shipped so far:
+What it does today:
 
-- ✅ A5 + A4 booklet renderer (hand-authored `book.json` → PDF).
-- ✅ `child-book-generator` console entry point with `--version` / `--help`.
-- ✅ Interactive REPL skeleton with slash-command dispatch (`/help`, `/exit`).
-- ✅ LLM provider picker (Claude, GPT, Gemini, Ollama, or offline) with masked API-key entry, live validation for Claude (re-prompts on a bad key), and `/model` to switch. Your choice is remembered per working directory in `.book-gen/session.json` (gitignored); API keys are re-prompted each launch until keyring support lands.
-- ✅ Embedded-image extraction from PDF drafts.
-- ✅ `/load <pdf>` slash command that ingests a draft into the session (text verbatim + drawings extracted to `.book-gen/images/`).
-- ✅ End-to-end: `/load` → `/title` → `/author` → `/render [--impose]` writes an A5 PDF under `.book-gen/output/` (and an A4 booklet when `--impose` is passed).
-- ✅ Plain chat: when Claude is the active model, non-slash input is forwarded to the agent, which replies in whatever language you use.
-- ✅ Agent core: drop a PDF on the command line (`child-book-generator draft.pdf`) and Claude reads the draft through a `read_draft` tool and greets you.
-- ✅ Agent edit tools: the agent can propose a typo fix (user y/n), set title / author / cover subtitle / back-cover text, choose one of the page drawings as the cover, and set per-page layouts. Page text is **only** changed via `propose_typo_fix`, bounded to 3 words and 30 chars per side — no tool rewrites the child's story.
-- ✅ Agent render tool: once title (and ideally cover + author) are set, the agent calls `render_book` itself and writes the A5 PDF to `.book-gen/output/`. Asking for a booklet writes the A4 2-up alongside.
-- ✅ Project memory: the draft's title, author, cover, per-page layouts and edits are saved to `.book-gen/draft.json` after every turn. Re-running `child-book-generator same-draft.pdf` resumes the session — the agent only asks about what's still missing.
+- Reads the PDF — extracts the child's text verbatim and the embedded drawings.
+- Runs an agent conversation (Claude by default; OpenAI / Gemini / Ollama supported behind the picker). The agent replies in whatever language you type in.
+- The agent edits the draft through narrow tools that always surface to you: propose a typo fix (y/n), set title / author / cover / layout, render the book. Page text is **only** changed by `propose_typo_fix`, bounded to 3 words and 30 chars per side — no tool rewrites the child's story.
+- Writes an A5 PDF under `.book-gen/output/` and, when you ask, an A4 2-up booklet ready to print, fold, and staple.
+- Remembers what you decided: rerunning `child-book-generator same-draft.pdf` picks up where the last session left off instead of asking everything again.
 
-In flight / planned (see `docs/PLAN.md`):
-
-- 🚧 Cleanup PR: trim slash-command paths / duplicate helpers the agent makes redundant.
+Roadmap lives in `docs/PLAN.md`.
 
 ## Install & run
 

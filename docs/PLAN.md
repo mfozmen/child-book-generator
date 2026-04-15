@@ -55,13 +55,11 @@ Narrow tools the agent calls, each with user approval surfaced in the REPL:
 Pure removal PR — no behaviour change, just simplification now that the agent is the primary interface.
 
 Candidates to review and cut:
-- `_CHECKERS` placeholder for OpenAI / Google in `src/providers/validator.py` (dead rows until those providers ship).
-- Slash commands that the agent fully replaces (`/cover`-style, if any survived). Leave real escape-hatches (`/model`, `/exit`, `/render`).
-- Duplicate `slugify` (once between `src/draft.py` and `build._slugify`) — consolidate.
-- `Draft` vs `Book` — may collapse if agent tools speak a single shape.
-- `examples/book.json` + placeholder PNGs if they outlived their usefulness after the agent is the documented entry path.
-- README / CLAUDE.md passages that still describe the old slash-driven flow.
-- Any tests that pin slash-command edge cases the agent makes irrelevant.
+- `_CHECKERS` placeholder for OpenAI / Google in `src/providers/validator.py` — intentionally kept as an extension point (new provider = one row in `_CHECKERS`, no dispatch code to touch).
+- Slash commands — intentionally kept as escape hatches (offline mode, agent outage, explicit "skip the agent" use).
+- `Draft` vs `Book` — intentionally kept: `Draft` is lenient/editable, `Book` is the strict renderer-facing shape. `to_book` is the validation boundary.
+- `examples/book.json` + placeholder PNGs — intentionally kept: used by `tests/test_build.py` to smoke the standalone renderer.
+- Any tests that pin slash-command edge cases the agent makes irrelevant — none found; all still cover live code paths.
 
 Rule: cut only what is clearly dead; keep anything the escape-hatch flow still uses.
 
