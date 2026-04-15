@@ -129,3 +129,13 @@ def test_cli_positional_missing_pdf_reports_error(tmp_path, monkeypatch, capsys)
     assert exit_code != 0
     out = (capsys.readouterr().out + capsys.readouterr().err).lower()
     assert "not found" in out or "no such" in out
+
+
+def test_cli_unreadable_pdf_reports_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    bad = tmp_path / "fake.pdf"
+    bad.write_text("not actually a pdf")
+
+    exit_code = cli.main([str(bad)])
+    assert exit_code != 0
+    assert "could not read" in capsys.readouterr().out.lower()

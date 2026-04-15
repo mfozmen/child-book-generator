@@ -59,14 +59,18 @@ Message = dict[str, str]  # e.g. {"role": "user", "content": "..."}
 
 @runtime_checkable
 class LLMProvider(Protocol):
-    """Minimal chat interface every provider implements.
+    """Chat + tool-use interface every provider implements.
 
-    Single-turn today: the REPL passes the whole message history each
-    call and receives the assistant's plain-text reply. Tool-use
-    extensions come with the agent loop.
+    - ``chat(messages)`` — quick single-shot text reply; used by the REPL's
+      fallback non-agent chat path.
+    - ``turn(messages, tools)`` — one step of the agent loop. Returns an
+      ``AgentResponse`` with content blocks (Anthropic's wire format) so
+      the agent can handle ``tool_use`` / ``text`` uniformly.
     """
 
     def chat(self, messages: list[Message]) -> str: ...
+
+    def turn(self, messages: list[dict], tools: list) -> "object": ...
 
 
 class NullProvider:
@@ -75,6 +79,11 @@ class NullProvider:
     always non-None and callers don't need to sprinkle ``is None`` checks."""
 
     def chat(self, messages: list[Message]) -> str:
+        raise NotImplementedError(
+            "No LLM is active. Use /model to pick a provider."
+        )
+
+    def turn(self, messages: list[dict], tools: list) -> "object":
         raise NotImplementedError(
             "No LLM is active. Use /model to pick a provider."
         )
@@ -124,6 +133,64 @@ class AnthropicProvider:
         # The response content is a list of blocks. Today we only emit
         # plain-text user messages so the first text block is the reply.
         return response.content[0].text
+
+    def turn(self, messages: list[dict], tools: list) -> "object":
+        """One agent-loop step. Returns an ``AgentResponse`` with the
+        raw content blocks so the agent can dispatch tool_use uniformly."""
+        import anthropic  # type: ignore[import-not-found]
+
+        if anthropic is None:  # pragma: no cover — defensive
+            raise ImportError("anthropic SDK not installed")
+
+        # Late import so src.agent can depend on src.providers without cycle.
+        from src.agent import AgentResponse
+
+        client = anthropic.Anthropic(
+            api_key=self._api_key,
+            timeout=_ANTHROPIC_CHAT_TIMEOUT_SECONDS,
+        )
+        kwargs = {
+            "model": self._model,
+            "max_tokens": self._max_tokens,
+            "messages": messages,
+        }
+        if tools:
+            kwargs["tools"] = [
+                {
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.input_schema,
+                }
+                for t in tools
+            ]
+        response = client.messages.create(**kwargs)
+        return AgentResponse(
+            content=[_block_to_dict(b) for b in response.content],
+            stop_reason=response.stop_reason,
+        )
+
+
+def _block_to_dict(block) -> dict:
+    """Convert an Anthropic response block to a plain dict.
+
+    SDK returns pydantic-like objects; serialise via ``model_dump`` when
+    available, otherwise read known attributes. Unknown block types are
+    returned with whatever attributes we can read so the agent can at
+    least log them.
+    """
+    if hasattr(block, "model_dump"):
+        return block.model_dump()
+    btype = getattr(block, "type", None)
+    if btype == "text":
+        return {"type": "text", "text": block.text}
+    if btype == "tool_use":
+        return {
+            "type": "tool_use",
+            "id": block.id,
+            "name": block.name,
+            "input": block.input,
+        }
+    return {"type": btype}
 
 
 def create_provider(spec: ProviderSpec, api_key: str | None) -> LLMProvider:
