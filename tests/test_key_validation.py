@@ -56,7 +56,7 @@ def _reject_then_accept(bad):
 
 def test_invalid_key_reprompts_until_valid():
     repl, buf = _make(
-        ["2", "/exit"],
+        ["1", "/exit"],
         secrets=["wrong-1", "wrong-2", "sk-correct"],
         validate=_reject_then_accept(bad=2),
     )
@@ -73,7 +73,7 @@ def test_invalid_key_reprompts_until_valid():
 
 def test_user_can_abort_with_eof_after_a_bad_key():
     repl, _ = _make(
-        ["2"],
+        ["1"],
         secrets=["wrong-only"],
         validate=_reject_then_accept(bad=1),  # the only key is rejected, then EOF
     )
@@ -86,7 +86,7 @@ def test_valid_key_on_first_try_activates_without_extra_prompts():
     def always_ok(_spec, _key):
         return None
 
-    repl, buf = _make(["2", "/exit"], secrets=["sk-good"], validate=always_ok)
+    repl, buf = _make(["1", "/exit"], secrets=["sk-good"], validate=always_ok)
 
     assert repl.run() == 0
     assert repl.provider.name == "anthropic"
@@ -100,18 +100,18 @@ def test_keyless_providers_do_not_invoke_validator():
     def track(spec, key):
         calls.append((spec.name, key))
 
-    repl, _ = _make(["1", "/exit"], validate=track)  # 1 = none (no key)
+    repl, _ = _make(["4", "/exit"], validate=track)  # 4 = ollama (no key)
     repl.run()
 
     assert calls == []
-    assert repl.provider.name == "none"
+    assert repl.provider.name == "ollama"
 
 
 def test_slash_model_path_reprompts_on_bad_key_without_losing_previous():
     ollama = find("ollama")
 
     repl, _ = _make(
-        ["/model", "2", "/exit"],
+        ["/model", "1", "/exit"],
         secrets=["wrong", "sk-ok"],
         provider=ollama,
         validate=_reject_then_accept(bad=1),
@@ -126,7 +126,7 @@ def test_slash_model_aborted_after_bad_key_keeps_previous_provider():
     ollama = find("ollama")
 
     repl, _ = _make(
-        ["/model", "2"],  # no /exit after: run loop terminates on EOF mid-key
+        ["/model", "1"],  # no /exit after: run loop terminates on EOF mid-key
         secrets=["wrong-only"],
         provider=ollama,
         validate=_reject_then_accept(bad=1),
@@ -147,7 +147,7 @@ def test_provider_unavailable_aborts_instead_of_reprompting():
         raise ProviderUnavailable("install the anthropic extra")
 
     repl, buf = _make(
-        ["2", "/exit"],
+        ["1", "/exit"],
         secrets=["whatever"],
         validate=validate,
     )

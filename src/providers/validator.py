@@ -1,11 +1,19 @@
-"""Verify that a freshly-entered API key actually authenticates.
+"""Verify that a freshly-entered API key is usable.
 
-The validator is provider-aware: each implementation knows the cheapest
-ping it can send to the real service so the REPL can reject a mistyped
-key immediately, before the user invests any more effort.
+The validator sends the cheapest possible ping to the real service and
+classifies the result into three signals the REPL handles differently:
 
-SDK imports are lazy on purpose — users who only use the offline or
-Ollama provider should not need to install third-party SDKs.
+- ``KeyValidationError`` — the key itself is bad (auth failure).
+  First-launch: re-prompt. Resume-from-keyring: delete the saved key.
+- ``TransientValidationError`` — the call couldn't complete but the key
+  isn't the reason (billing, rate limit, 5xx, network). First-launch:
+  surface the message and re-prompt (user can Ctrl-D). Resume: KEEP
+  the saved key — silently wiping it over a flaky network is hostile.
+- ``ProviderUnavailable`` — the provider can't be used at all here
+  (SDK not installed, etc.). Re-prompting won't help; abort the run.
+
+SDK imports are lazy on purpose — users on an offline / Ollama path
+don't need third-party SDKs installed.
 """
 
 from __future__ import annotations
@@ -20,8 +28,16 @@ _VALIDATION_TIMEOUT_SECONDS = 5.0
 
 
 class KeyValidationError(Exception):
-    """Raised when the provider rejects the supplied key. Re-promptable —
-    the REPL will ask for a new key."""
+    """Raised when the provider explicitly rejects the supplied key
+    (auth failure). The REPL treats this as "the key is dead": first-
+    launch re-prompts, resume-from-keyring deletes the saved key."""
+
+
+class TransientValidationError(Exception):
+    """Raised when the ping couldn't complete but the key isn't the
+    reason (billing / credit, rate limit, server 5xx, connection error).
+    The REPL keeps a saved key in this case and surfaces the message;
+    re-prompting with the same key would hit the same error."""
 
 
 class ProviderUnavailable(Exception):
@@ -31,10 +47,15 @@ class ProviderUnavailable(Exception):
 
 
 def validate_key(spec: ProviderSpec, api_key: str) -> None:
-    """Raise ``KeyValidationError`` if ``api_key`` isn't usable for ``spec``.
+    """Ping the provider with ``api_key``.
+
+    Raises ``KeyValidationError`` when the key is rejected,
+    ``TransientValidationError`` when the key is likely fine but the
+    call failed for some other reason, or ``ProviderUnavailable`` when
+    the provider can't be used in this environment.
 
     Providers without a validation path yet (OpenAI, Google) and key-less
-    providers (none, ollama) currently no-op. They will grow real checks
+    providers (none, ollama) currently no-op; they will grow real checks
     as their SDK wiring lands.
     """
     if not spec.requires_api_key:
@@ -60,9 +81,13 @@ def _check_anthropic(spec: ProviderSpec, api_key: str) -> None:
             "pip install --force-reinstall littlepress-ai"
         ) from e
 
-    # Cheapest call that still exercises authentication. If the key is
-    # wrong the server returns 401, which the SDK surfaces as
-    # AuthenticationError once the round-trip completes.
+    # Auth failures (bad key / insufficient permissions) mean the key
+    # itself is rejected. Everything else under APIError — billing,
+    # rate-limit, server 5xx, network — says the call couldn't complete
+    # but the key might still be fine.
+    auth_error = getattr(anthropic, "AuthenticationError", None) or RuntimeError
+    perm_error = getattr(anthropic, "PermissionDeniedError", None) or auth_error
+    api_error = getattr(anthropic, "APIError", None) or RuntimeError
     try:
         client = anthropic.Anthropic(
             api_key=api_key,
@@ -73,8 +98,10 @@ def _check_anthropic(spec: ProviderSpec, api_key: str) -> None:
             max_tokens=1,
             messages=[{"role": "user", "content": "ping"}],
         )
-    except getattr(anthropic, "AuthenticationError", Exception) as e:
+    except (auth_error, perm_error) as e:
         raise KeyValidationError(f"Anthropic rejected the key: {e}") from e
+    except api_error as e:
+        raise TransientValidationError(f"Anthropic call failed: {e}") from e
 
 
 # Fallback when a spec predates ``validation_model``. Keep in sync with

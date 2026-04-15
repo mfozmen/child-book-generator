@@ -43,7 +43,7 @@ def test_successful_key_validation_saves_to_keyring(tmp_path):
 
     repl, _ = _make(
         tmp_path,
-        ["2", "/exit"],  # pick Anthropic
+        ["1", "/exit"],  # pick Anthropic
         secrets=["sk-ant-good"],
         validate=validate,
     )
@@ -105,6 +105,32 @@ def test_resume_drops_keyring_key_when_it_fails_validation(tmp_path):
     # The revoked key was removed, a fresh one saved.
     assert keyring_store.load_key("anthropic") == "sk-ant-fresh"
     assert repl.api_key == "sk-ant-fresh"
+
+
+def test_resume_keeps_key_on_transient_validation_error_subclass(tmp_path):
+    """If the validator raises TransientValidationError (billing /
+    network / rate / 5xx) during silent resume, the saved key must stay.
+    This pins the post-PR #20 contract: only KeyValidationError proves
+    the key is dead; all other failures keep the key."""
+    from src.providers.validator import TransientValidationError
+
+    session.save(tmp_path, session.Session(provider="anthropic"))
+    keyring_store.save_key("anthropic", "sk-ant-saved")
+
+    def validate(_spec, _key):
+        raise TransientValidationError("credit balance too low")
+
+    repl, buf = _make(
+        tmp_path,
+        ["/exit"],
+        secrets=[],
+        validate=validate,
+    )
+    repl.run()
+
+    assert keyring_store.load_key("anthropic") == "sk-ant-saved"
+    assert repl.provider.name == "anthropic"
+    assert "credit balance" in buf.getvalue().lower()
 
 
 def test_resume_keeps_key_on_transient_validation_error(tmp_path):
@@ -172,7 +198,7 @@ def test_guidance_omits_browser_line_on_headless(tmp_path, monkeypatch):
 
     repl, buf = _make(
         tmp_path,
-        ["2"],
+        ["1"],  # pick Anthropic
         secrets=[],
         validate=lambda _s, _k: None,
     )
@@ -198,7 +224,7 @@ def test_guidance_surfaces_provider_url_and_steps(tmp_path, monkeypatch):
 
     repl, buf = _make(
         tmp_path,
-        ["2"],  # pick Anthropic, then EOF on the key prompt
+        ["1"],  # pick Anthropic, then EOF on the key prompt
         secrets=[],
         validate=lambda _s, _k: None,
     )

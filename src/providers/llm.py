@@ -46,6 +46,12 @@ class ProviderSpec:
     key_steps: tuple[str, ...] = ()
 
 
+# ``SPECS`` is the full catalogue — ``PICKER_SPECS`` below is the
+# subset the REPL's first-launch picker shows. "No model (offline)"
+# stays here because it remains the internal default state (e.g.
+# ``NullProvider`` before a picker runs, or during unit tests) — but
+# surfacing it in the picker just gives the user a dead-end, so the
+# UI filters it out.
 SPECS: tuple[ProviderSpec, ...] = (
     ProviderSpec("none", "No model (offline)", requires_api_key=False),
     ProviderSpec(
@@ -83,6 +89,12 @@ SPECS: tuple[ProviderSpec, ...] = (
         ),
     ),
     ProviderSpec("ollama", "Ollama (local)", requires_api_key=False),
+)
+
+
+#: Subset the REPL actually offers in its first-launch picker.
+PICKER_SPECS: tuple[ProviderSpec, ...] = tuple(
+    s for s in SPECS if s.name != "none"
 )
 
 

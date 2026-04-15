@@ -53,6 +53,37 @@ def test_anthropic_rejects_key_when_sdk_signals_auth_error(monkeypatch):
         validator.validate_key(find("anthropic"), "sk-bad")
 
 
+def test_anthropic_billing_error_is_transient_not_auth(monkeypatch):
+    """A BadRequestError from the SDK (e.g. 'credit balance too low')
+    means the key is valid — the account just can't pay for the call.
+    Surface it cleanly (no traceback) but NOT as KeyValidationError:
+    the resume path uses that signal to *delete* the saved key, and
+    deleting a valid key over a billing hiccup would force the user
+    to re-paste after they add credits."""
+    fake = _make_fake_anthropic(raise_error="billing")
+    monkeypatch.setitem(__import__("sys").modules, "anthropic", fake)
+
+    with pytest.raises(validator.TransientValidationError) as exc:
+        validator.validate_key(find("anthropic"), "sk-fine-but-broke")
+
+    assert "credit balance" in str(exc.value).lower()
+    # Crucially: not a KeyValidationError — resume mustn't delete the key.
+    assert not isinstance(exc.value, validator.KeyValidationError)
+
+
+def test_anthropic_transient_api_error_does_not_crash(monkeypatch):
+    """Rate limits / 5xx / connection errors are transient — key is
+    still fine. Raise TransientValidationError so resume-path logic
+    keeps the saved key instead of wiping it over a flaky network."""
+    fake = _make_fake_anthropic(raise_error="rate_limit")
+    monkeypatch.setitem(__import__("sys").modules, "anthropic", fake)
+
+    with pytest.raises(validator.TransientValidationError) as exc:
+        validator.validate_key(find("anthropic"), "sk-test")
+
+    assert "rate limit" in str(exc.value).lower()
+
+
 def test_anthropic_accepts_key_when_sdk_returns_normally(monkeypatch):
     fake = _make_fake_anthropic(raise_error=None)
     monkeypatch.setitem(__import__("sys").modules, "anthropic", fake)
@@ -82,10 +113,16 @@ def test_anthropic_ping_sends_timeout_and_spec_model(monkeypatch):
 
 
 def _make_fake_anthropic(*, raise_error):
-    """Build a module-shaped stub with Anthropic client and AuthenticationError."""
+    """Build a module-shaped stub with Anthropic client and error types."""
     import types
 
-    class AuthenticationError(Exception):
+    class APIError(Exception):
+        pass
+
+    class AuthenticationError(APIError):
+        pass
+
+    class BadRequestError(APIError):
         pass
 
     class Messages:
@@ -96,6 +133,12 @@ def _make_fake_anthropic(*, raise_error):
             self.last_create_kwargs = kwargs
             if raise_error == "auth":
                 raise AuthenticationError("bad key")
+            if raise_error == "billing":
+                raise BadRequestError(
+                    "Your credit balance is too low to access the Anthropic API."
+                )
+            if raise_error == "rate_limit":
+                raise APIError("rate limit exceeded")
             return types.SimpleNamespace(content=[types.SimpleNamespace(text="ok")])
 
     class Client:
@@ -110,5 +153,7 @@ def _make_fake_anthropic(*, raise_error):
 
     module = types.ModuleType("anthropic")
     module.Anthropic = Client
+    module.APIError = APIError
     module.AuthenticationError = AuthenticationError
+    module.BadRequestError = BadRequestError
     return module

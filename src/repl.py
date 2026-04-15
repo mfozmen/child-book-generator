@@ -29,6 +29,7 @@ from src.agent_tools import (
 )
 from src.draft import Draft
 from src.providers.llm import (
+    PICKER_SPECS,
     SPECS,
     LLMProvider,
     NullProvider,
@@ -36,7 +37,11 @@ from src.providers.llm import (
     create_provider,
     find,
 )
-from src.providers.validator import KeyValidationError, ProviderUnavailable
+from src.providers.validator import (
+    KeyValidationError,
+    ProviderUnavailable,
+    TransientValidationError,
+)
 
 
 SlashHandler = Callable[["Repl", str], int | None]
@@ -294,7 +299,7 @@ class Repl:
         console, so they don't leak into transcripts.
         """
         self._console.print("Which model shall we use?")
-        for i, spec in enumerate(SPECS, 1):
+        for i, spec in enumerate(PICKER_SPECS, 1):
             tag = " (needs API key)" if spec.requires_api_key else ""
             self._console.print(f"  {i}) {spec.display_name}{tag}")
         spec = self._read_spec_choice()
@@ -363,6 +368,18 @@ class Repl:
                     f"Enter API key for {spec.display_name} again:"
                 )
                 continue
+            except TransientValidationError as e:
+                # Key is probably fine but the call failed (billing / rate
+                # / 5xx / network). Re-prompting the same key will hit the
+                # same error — surface the message and let the user either
+                # try again (after fixing the underlying cause) or Ctrl-D
+                # out.
+                self._console.print(f"[yellow]{e}[/yellow]")
+                self._console.print(
+                    f"Press Enter to retry, or Ctrl-D to cancel and come "
+                    f"back for {spec.display_name} later:"
+                )
+                continue
             return api_key
 
     def _read_spec_choice(self) -> ProviderSpec | None:
@@ -378,13 +395,13 @@ class Repl:
                 choice = int(raw)
             except ValueError:
                 self._console.print(
-                    f"[red]Please enter a number 1-{len(SPECS)}.[/red]"
+                    f"[red]Please enter a number 1-{len(PICKER_SPECS)}.[/red]"
                 )
                 continue
-            if 1 <= choice <= len(SPECS):
-                return SPECS[choice - 1]
+            if 1 <= choice <= len(PICKER_SPECS):
+                return PICKER_SPECS[choice - 1]
             self._console.print(
-                f"[red]Please enter a number 1-{len(SPECS)}.[/red]"
+                f"[red]Please enter a number 1-{len(PICKER_SPECS)}.[/red]"
             )
 
     def _dispatch(self, line: str) -> int | None:

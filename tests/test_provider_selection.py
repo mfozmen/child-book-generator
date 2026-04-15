@@ -32,18 +32,18 @@ def _make(lines, secrets=None, provider=None):
 
 
 def test_first_run_offers_provider_menu_and_stores_choice():
-    # "1" is "none" — offline, no API key required.
-    repl, buf = _make(["1", "/exit"])
+    # "4" is Ollama — keyless, no API key required.
+    repl, buf = _make(["4", "/exit"])
     assert repl.run() == 0
     assert repl.provider is not None
-    assert repl.provider.name == "none"
+    assert repl.provider.name == "ollama"
     assert "model" in buf.getvalue().lower()
 
 
 def test_first_run_for_provider_requiring_key_collects_it_without_echo():
-    # "2" is Anthropic. Secret must be read through read_secret and not
+    # "1" is Anthropic. Secret must be read through read_secret and not
     # leak into the rendered console output.
-    repl, buf = _make(["2", "/exit"], secrets=["sk-ant-test"])
+    repl, buf = _make(["1", "/exit"], secrets=["sk-ant-test"])
     assert repl.run() == 0
     assert repl.provider.name == "anthropic"
     assert repl.api_key == "sk-ant-test"
@@ -57,9 +57,9 @@ def test_first_run_eof_during_selection_exits_zero():
 
 
 def test_invalid_number_reprompts():
-    repl, buf = _make(["99", "not-a-number", "1", "/exit"])
+    repl, buf = _make(["99", "not-a-number", "4", "/exit"])
     assert repl.run() == 0
-    assert repl.provider.name == "none"
+    assert repl.provider.name == "ollama"
     assert "1-" in buf.getvalue() or "number" in buf.getvalue().lower()
 
 
@@ -71,7 +71,7 @@ def test_existing_provider_skips_first_run_menu():
 
 def test_slash_model_switches_provider_and_prompts_for_new_key():
     repl, buf = _make(
-        ["/model", "2", "/exit"],
+        ["/model", "1", "/exit"],
         secrets=["sk-new-key"],
         provider=find("none"),
     )
@@ -95,9 +95,49 @@ def test_provider_specs_include_the_five_planned_options():
     assert names == ["none", "anthropic", "openai", "google", "ollama"]
 
 
+def test_picker_hides_the_offline_none_option():
+    """'No model (offline)' doesn't do anything useful — it would just
+    block every non-slash input on the placeholder path. Keep the
+    NullProvider as the internal default state but never offer it
+    to the user in the picker."""
+    repl, buf = _make(["1", "/exit"], secrets=["sk-test"])
+
+    # Stub validate to accept the pasted key so the flow completes.
+    repl._validate = lambda _s, _k: None  # noqa: SLF001
+    repl.run()
+
+    rendered = buf.getvalue()
+    # The four cloud / local providers are shown, numbered 1-4.
+    assert "Claude (Anthropic)" in rendered
+    assert "GPT (OpenAI)" in rendered
+    assert "Gemini (Google)" in rendered
+    assert "Ollama (local)" in rendered
+    # The offline option is gone.
+    assert "No model" not in rendered
+    assert "offline" not in rendered.lower()
+
+
+def test_none_spec_remains_available_as_internal_default():
+    """The picker UI hides "No model (offline)" but the spec itself has
+    to keep resolving through ``find`` — /logout drops back to it, and
+    saved sessions written before the UI change still reference it."""
+    spec = find("none")
+    assert spec is not None
+    assert spec.requires_api_key is False
+
+
+def test_picker_numbers_shift_to_cover_only_real_providers():
+    """Picking '1' should now pick Claude (was 2 when 'none' was option 1)."""
+    repl, _ = _make(["1", "/exit"], secrets=["sk-test"])
+    repl._validate = lambda _s, _k: None  # noqa: SLF001
+    repl.run()
+
+    assert repl.provider.name == "anthropic"
+
+
 def test_first_run_eof_during_key_entry_exits_without_activating():
     # Picks Anthropic (needs a key) but EOF hits during the key prompt.
-    repl, _ = _make(["2"], secrets=[])
+    repl, _ = _make(["1"], secrets=[])
     assert repl.run() == 0
     assert repl.provider is None
     assert repl.api_key is None
@@ -106,37 +146,37 @@ def test_first_run_eof_during_key_entry_exits_without_activating():
 def test_slash_model_abort_at_key_entry_keeps_previous():
     ollama = find("ollama")
     # Switch to Anthropic then EOF on the key prompt. Previous provider wins.
-    repl, _ = _make(["/model", "2", "/exit"], secrets=[], provider=ollama)
+    repl, _ = _make(["/model", "1", "/exit"], secrets=[], provider=ollama)
     assert repl.run() == 0
     assert repl.provider is ollama
     assert repl.api_key is None
 
 
 def test_blank_lines_during_number_prompt_are_ignored():
-    repl, _ = _make(["", "   ", "1", "/exit"])
+    repl, _ = _make(["", "   ", "4", "/exit"])
     assert repl.run() == 0
-    assert repl.provider.name == "none"
+    assert repl.provider.name == "ollama"
 
 
 # --- edge cases -----------------------------------------------------------
 
 
 def test_zero_and_negative_numbers_reprompt():
-    repl, buf = _make(["0", "-1", "1", "/exit"])
+    repl, buf = _make(["0", "-1", "4", "/exit"])
     assert repl.run() == 0
-    assert repl.provider.name == "none"
+    assert repl.provider.name == "ollama"
     # The reprompt message fires for each rejection.
     assert buf.getvalue().lower().count("please enter a number") >= 2
 
 
 def test_float_input_is_rejected_and_reprompts():
-    repl, _ = _make(["1.5", "1", "/exit"])
+    repl, _ = _make(["1.5", "4", "/exit"])
     assert repl.run() == 0
-    assert repl.provider.name == "none"
+    assert repl.provider.name == "ollama"
 
 
 def test_api_key_is_stripped_of_surrounding_whitespace():
-    repl, _ = _make(["2", "/exit"], secrets=["  sk-with-spaces  "])
+    repl, _ = _make(["1", "/exit"], secrets=["  sk-with-spaces  "])
     assert repl.run() == 0
     assert repl.api_key == "sk-with-spaces"
 
@@ -144,7 +184,7 @@ def test_api_key_is_stripped_of_surrounding_whitespace():
 def test_switching_to_keyless_provider_clears_previous_key():
     anthropic = find("anthropic")
     repl, _ = _make(
-        ["/model", "5", "/exit"],  # 5 = Ollama, no key
+        ["/model", "4", "/exit"],  # 4 = Ollama, no key
         provider=anthropic,
     )
     # Pre-seed an api key on the Anthropic session so we can assert it clears.
@@ -167,9 +207,11 @@ def test_slash_exit_with_arguments_still_exits():
 
 
 def test_slash_model_with_trailing_arguments_still_opens_picker():
-    repl, _ = _make(["/model some junk", "1", "/exit"], provider=find("ollama"))
+    # Use "4" (Ollama) since it's the only keyless option and requires
+    # no secrets to complete the flow.
+    repl, _ = _make(["/model some junk", "4", "/exit"], provider=find("anthropic"))
     assert repl.run() == 0
-    assert repl.provider.name == "none"
+    assert repl.provider.name == "ollama"
 
 
 def test_surrounding_whitespace_on_input_is_trimmed():
@@ -197,7 +239,7 @@ def test_empty_api_key_still_activates_provider():
     # If the user just presses Enter on the key prompt we accept the empty
     # string rather than aborting — they may be pasting it later. Real
     # validation will land with the agent-loop ping in p2-01.
-    repl, _ = _make(["2", "/exit"], secrets=[""])
+    repl, _ = _make(["1", "/exit"], secrets=[""])
     assert repl.run() == 0
     assert repl.provider.name == "anthropic"
     assert repl.api_key == ""

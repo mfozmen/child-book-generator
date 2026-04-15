@@ -54,24 +54,26 @@ def test_saved_key_provider_without_saved_key_prompts_once(tmp_path):
 
 
 def test_no_saved_session_runs_first_run_picker(tmp_path):
-    repl, buf = _make(tmp_path, ["1", "/exit"])
+    # "4" picks Ollama — keyless, so the flow completes with no secrets.
+    repl, buf = _make(tmp_path, ["4", "/exit"])
     repl.run()
 
     assert "which model" in buf.getvalue().lower()
-    assert repl.provider.name == "none"
+    assert repl.provider.name == "ollama"
 
 
 def test_first_run_choice_is_persisted(tmp_path):
-    repl, _ = _make(tmp_path, ["1", "/exit"])
+    repl, _ = _make(tmp_path, ["4", "/exit"])
     repl.run()
 
-    assert session.load(tmp_path).provider == "none"
+    assert session.load(tmp_path).provider == "ollama"
 
 
 def test_slash_model_switch_is_persisted(tmp_path):
     session.save(tmp_path, session.Session(provider="none"))
 
-    repl, _ = _make(tmp_path, ["/model", "5", "/exit"])  # 5 = ollama
+    # Switch from the internal "none" state to ollama via the picker.
+    repl, _ = _make(tmp_path, ["/model", "4", "/exit"])
     repl.run()
 
     assert session.load(tmp_path).provider == "ollama"
@@ -83,29 +85,29 @@ def test_corrupt_session_file_falls_back_to_picker(tmp_path):
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("{{{not json", encoding="utf-8")
 
-    repl, buf = _make(tmp_path, ["1", "/exit"])
+    repl, buf = _make(tmp_path, ["4", "/exit"])
     assert repl.run() == 0
-    assert repl.provider.name == "none"
+    assert repl.provider.name == "ollama"
 
 
 def test_session_with_unknown_provider_falls_back_to_picker(tmp_path):
     # Someone edits session.json by hand to an unknown name — don't crash.
     session.save(tmp_path, session.Session(provider="not-a-real-provider"))
 
-    repl, _ = _make(tmp_path, ["1", "/exit"])
+    repl, _ = _make(tmp_path, ["4", "/exit"])
     assert repl.run() == 0
-    assert repl.provider.name == "none"
+    assert repl.provider.name == "ollama"
 
 
 def test_eof_during_key_reprompt_does_not_persist_half_picked_provider(tmp_path):
-    session.save(tmp_path, session.Session(provider="none"))
+    session.save(tmp_path, session.Session(provider="ollama"))
 
-    repl, _ = _make(tmp_path, ["/model", "2"], secrets=[])  # pick anthropic, EOF on key
+    repl, _ = _make(tmp_path, ["/model", "1"], secrets=[])  # pick anthropic, EOF on key
     repl.run()
 
     # Previous provider still active and persisted.
-    assert repl.provider.name == "none"
-    assert session.load(tmp_path).provider == "none"
+    assert repl.provider.name == "ollama"
+    assert session.load(tmp_path).provider == "ollama"
 
 
 def test_eof_on_resume_key_prompt_exits_without_activating(tmp_path):
