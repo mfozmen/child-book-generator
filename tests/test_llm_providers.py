@@ -126,3 +126,169 @@ def test_llm_provider_is_usable_as_type_hint():
     p: LLMProvider = NullProvider()
     q: LLMProvider = AnthropicProvider(api_key="x")
     assert p is not None and q is not None
+
+
+# --- turn() (tool-use) ----------------------------------------------------
+
+
+def _fake_anthropic_with_turn(response_blocks, stop_reason="end_turn"):
+    """Fake SDK whose messages.create returns the given content blocks."""
+    class Block:
+        """Small shim that supports both attribute and dict access."""
+
+        def __init__(self, data):
+            self._data = data
+
+        def __getattr__(self, name):
+            if name in self._data:
+                return self._data[name]
+            raise AttributeError(name)
+
+        def model_dump(self):
+            return dict(self._data)
+
+    class Messages:
+        def __init__(self):
+            self.last_kwargs: dict = {}
+
+        def create(self, **kwargs):
+            self.last_kwargs = kwargs
+            return types.SimpleNamespace(
+                content=[Block(b) for b in response_blocks],
+                stop_reason=stop_reason,
+            )
+
+    class Client:
+        last_client = None
+
+        def __init__(self, *, api_key, timeout=None):
+            self.api_key = api_key
+            self.timeout = timeout
+            self.messages = Messages()
+            Client.last_client = self
+
+    module = types.ModuleType("anthropic")
+    module.Anthropic = Client
+    return module
+
+
+def test_null_provider_turn_raises():
+    from src.agent import Tool
+
+    tool = Tool(
+        name="noop",
+        description="",
+        input_schema={"type": "object", "properties": {}},
+        handler=lambda _i: "ok",
+    )
+    with pytest.raises(NotImplementedError):
+        NullProvider().turn([], [tool])
+
+
+def test_anthropic_provider_turn_returns_text_response(monkeypatch):
+    fake = _fake_anthropic_with_turn(
+        [{"type": "text", "text": "hi there"}],
+        stop_reason="end_turn",
+    )
+    monkeypatch.setitem(sys.modules, "anthropic", fake)
+
+    response = AnthropicProvider(api_key="sk").turn(
+        [{"role": "user", "content": "hello"}], tools=[]
+    )
+
+    assert response.stop_reason == "end_turn"
+    assert response.content == [{"type": "text", "text": "hi there"}]
+
+
+def test_anthropic_provider_turn_returns_tool_use_response(monkeypatch):
+    fake = _fake_anthropic_with_turn(
+        [
+            {"type": "text", "text": "let me check"},
+            {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": "read_draft",
+                "input": {},
+            },
+        ],
+        stop_reason="tool_use",
+    )
+    monkeypatch.setitem(sys.modules, "anthropic", fake)
+
+    response = AnthropicProvider(api_key="sk").turn(
+        [{"role": "user", "content": "what's in the draft?"}],
+        tools=[],
+    )
+
+    assert response.stop_reason == "tool_use"
+    names = [b.get("name") for b in response.content if b.get("type") == "tool_use"]
+    assert names == ["read_draft"]
+
+
+def test_anthropic_provider_turn_forwards_tool_schemas_to_sdk(monkeypatch):
+    from src.agent import Tool
+
+    fake = _fake_anthropic_with_turn([{"type": "text", "text": "ok"}])
+    monkeypatch.setitem(sys.modules, "anthropic", fake)
+
+    tool = Tool(
+        name="read_draft",
+        description="Read the loaded PDF draft",
+        input_schema={"type": "object", "properties": {}},
+        handler=lambda _i: "",
+    )
+    AnthropicProvider(api_key="sk").turn(
+        [{"role": "user", "content": "hi"}],
+        tools=[tool],
+    )
+
+    last = fake.Anthropic.last_client.messages.last_kwargs
+    assert "tools" in last
+    assert last["tools"] == [
+        {
+            "name": "read_draft",
+            "description": "Read the loaded PDF draft",
+            "input_schema": {"type": "object", "properties": {}},
+        }
+    ]
+
+
+def test_anthropic_provider_turn_uses_bounded_timeout(monkeypatch):
+    fake = _fake_anthropic_with_turn([{"type": "text", "text": "ok"}])
+    monkeypatch.setitem(sys.modules, "anthropic", fake)
+
+    AnthropicProvider(api_key="sk").turn(
+        [{"role": "user", "content": "hi"}],
+        tools=[],
+    )
+    timeout = fake.Anthropic.last_client.timeout
+    assert timeout is not None and 0 < timeout <= 300
+
+
+def test_block_to_dict_handles_blocks_without_model_dump(monkeypatch):
+    """Older SDK versions return attribute-only objects (no model_dump).
+    The converter must still produce correct dicts for text and tool_use."""
+    from src.providers.llm import _block_to_dict
+
+    class PlainText:
+        type = "text"
+        text = "hi"
+
+    class PlainToolUse:
+        type = "tool_use"
+        id = "t1"
+        name = "read_draft"
+        input = {"k": "v"}
+
+    class Mystery:
+        type = "unknown_block_type"
+
+    assert _block_to_dict(PlainText()) == {"type": "text", "text": "hi"}
+    assert _block_to_dict(PlainToolUse()) == {
+        "type": "tool_use",
+        "id": "t1",
+        "name": "read_draft",
+        "input": {"k": "v"},
+    }
+    # Unknown blocks at least carry their type — the agent can ignore them.
+    assert _block_to_dict(Mystery()) == {"type": "unknown_block_type"}

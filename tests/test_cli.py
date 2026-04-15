@@ -74,3 +74,68 @@ def test_cli_reads_api_keys_through_getpass_not_input(tmp_path, monkeypatch):
     assert cli.main([]) == 0
     # getpass should be drained exactly once; input only for the two lines.
     assert list(secrets) == []
+
+
+def test_cli_positional_pdf_arg_auto_loads_draft(tmp_path, monkeypatch):
+    """`child-book-generator draft.pdf` should drop straight into the REPL
+    with the PDF already ingested — the point of the agent-first pivot is
+    to skip a manual /load step."""
+    from PIL import Image
+    from reportlab.lib.pagesizes import A5
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas as rl_canvas
+
+    # Build a minimal PDF under tmp_path.
+    pdf_path = tmp_path / "draft.pdf"
+    c = rl_canvas.Canvas(str(pdf_path), pagesize=A5)
+    img_src = tmp_path / "_src.png"
+    Image.new("RGB", (80, 60), (255, 0, 0)).save(img_src)
+    c.drawImage(ImageReader(str(img_src)), 50, 200, width=200, height=150)
+    c.setFont("Helvetica", 14)
+    c.drawString(50, 400, "once upon a time")
+    c.showPage()
+    c.save()
+
+    monkeypatch.chdir(tmp_path)
+
+    def eof(_prompt=""):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", eof)
+
+    captured: dict = {}
+    real_repl = cli_repl_build = None
+
+    from src import repl as repl_mod
+
+    original_run = repl_mod.Repl.run
+
+    def spy_run(self):
+        captured["draft"] = self.draft
+        return original_run(self)
+
+    monkeypatch.setattr(repl_mod.Repl, "run", spy_run)
+
+    assert cli.main([str(pdf_path)]) == 0
+    # The REPL's draft was populated before run() started.
+    assert captured["draft"] is not None
+    assert len(captured["draft"].pages) == 1
+
+
+def test_cli_positional_missing_pdf_reports_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = cli.main([str(tmp_path / "does-not-exist.pdf")])
+    assert exit_code != 0
+    out = (capsys.readouterr().out + capsys.readouterr().err).lower()
+    assert "not found" in out or "no such" in out
+
+
+def test_cli_unreadable_pdf_reports_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    bad = tmp_path / "fake.pdf"
+    bad.write_text("not actually a pdf")
+
+    exit_code = cli.main([str(bad)])
+    assert exit_code != 0
+    assert "could not read" in capsys.readouterr().out.lower()

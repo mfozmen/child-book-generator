@@ -1,9 +1,10 @@
 """Interactive shell loop for child-book-generator.
 
-This covers the first slice of Phase 1 (see
-``docs/p1-01-repl-and-provider-selection.md``): the loop, the slash-command
-dispatch, and the provider picker. The agent-backed behaviour for non-slash
-input lands in Phase 2 (``docs/p2-01``).
+Owns the read loop, slash-command dispatch, provider picker, and the
+in-memory draft. Non-slash input is routed through an ``Agent`` (see
+``src/agent.py``) with a small tool set that's expanded in follow-up
+PRs (see ``docs/PLAN.md``). Slash commands are the manual escape hatch
+— the agent is the primary interface.
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ from rich.console import Console
 
 from src import draft as draft_mod
 from src import session as session_mod
+from src.agent import Agent
+from src.agent_tools import read_draft_tool
 from src.draft import Draft
 from src.providers.llm import (
     SPECS,
@@ -28,6 +31,17 @@ from src.providers.validator import KeyValidationError, ProviderUnavailable
 
 
 SlashHandler = Callable[["Repl", str], int | None]
+
+
+_AGENT_GREETING_HINT = (
+    "The user just gave you a PDF draft. Call read_draft to see what's in "
+    "it, greet them in the same language they will use (they haven't "
+    "spoken yet — default to English but switch once you see their reply), "
+    "and briefly describe what you see (page count, how many drawings, "
+    "whether the title and author are set). Ask the single most important "
+    "thing you need to decide next — do NOT ask a long list of questions "
+    "up front."
+)
 
 
 class Repl:
@@ -67,6 +81,7 @@ class Repl:
             self._llm_factory(provider, None) if provider is not None else NullProvider()
         )
         self._draft: Draft | None = None
+        self._agent: Agent = self._build_agent()
         self._commands: dict[str, SlashHandler] = {
             "help": _cmd_help,
             "exit": _cmd_exit,
@@ -90,6 +105,12 @@ class Repl:
     def draft(self) -> Draft | None:
         return self._draft
 
+    def set_draft(self, draft: Draft) -> None:
+        """Inject a draft before ``run()`` starts, e.g. when the CLI was
+        given a PDF argument and we want the REPL to open with the draft
+        already ingested."""
+        self._draft = draft
+
     def _images_dir(self) -> Path:
         """Where extracted / generated images live. Session-scoped so
         ``.gitignore``'s ``.book-gen/`` rule covers them automatically."""
@@ -110,6 +131,14 @@ class Repl:
             if chosen is None:
                 return 0
             self._activate(*chosen)
+        # If the CLI pre-loaded a draft and a real provider is active,
+        # kick the agent off so the user sees an immediate response
+        # ("I see 8 pages..."). Offline stays quiet.
+        if self._draft is not None and not isinstance(self._llm, NullProvider):
+            try:
+                self._agent.say(_AGENT_GREETING_HINT)
+            except Exception as e:
+                self._console.print(f"[red]Agent error:[/red] {e}")
         while True:
             try:
                 raw = self._read()
@@ -126,8 +155,13 @@ class Repl:
         self._provider = spec
         self._api_key = api_key
         self._llm = self._llm_factory(spec, api_key)
+        self._agent = self._build_agent()
         self._console.print(f"[green]Active model:[/green] {spec.display_name}\n")
         self._persist()
+
+    def _build_agent(self) -> Agent:
+        tools = [read_draft_tool(get_draft=lambda: self._draft)]
+        return Agent(llm=self._llm, tools=tools, console=self._console)
 
     def _persist(self) -> None:
         if self._session_root is None or self._provider is None:
@@ -235,7 +269,7 @@ class Repl:
         return self._dispatch_chat(line)
 
     def _dispatch_chat(self, line: str) -> int | None:
-        """Send a non-slash line through the active LLM. preserve-child-voice:
+        """Route a non-slash line through the agent. preserve-child-voice:
         the user's text is forwarded verbatim — no rewriting on the way in."""
         if isinstance(self._llm, NullProvider):
             self._console.print(
@@ -243,11 +277,9 @@ class Repl:
             )
             return None
         try:
-            reply = self._llm.chat([{"role": "user", "content": line}])
+            self._agent.say(line)
         except Exception as e:
             self._console.print(f"[red]LLM error:[/red] {e}")
-            return None
-        self._console.print(reply)
         return None
 
     def _dispatch_slash(self, line: str) -> int | None:
