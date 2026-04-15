@@ -8,6 +8,7 @@ from src.agent_tools import (
     choose_layout_tool,
     propose_typo_fix_tool,
     read_draft_tool,
+    render_book_tool,
     set_cover_tool,
     set_metadata_tool,
 )
@@ -448,3 +449,128 @@ def test_choose_layout_requires_draft():
     result = tool.handler({"page": 1, "layout": "text-only", "reason": "x"})
 
     assert "no draft" in result.lower()
+
+
+# --- render_book ---------------------------------------------------------
+
+
+def _two_page_draft(tmp_path, *, title="The Brave Owl", author="Yusuf"):
+    """Build a Draft with real image files on disk under tmp_path."""
+    from PIL import Image
+
+    img_dir = tmp_path / ".book-gen" / "images"
+    img_dir.mkdir(parents=True, exist_ok=True)
+    img1 = img_dir / "page-01.png"
+    Image.new("RGB", (80, 60), (255, 0, 0)).save(img1)
+
+    return Draft(
+        source_pdf=tmp_path / "draft.pdf",
+        title=title,
+        author=author,
+        pages=[
+            DraftPage(text="once upon a time", image=img1),
+            DraftPage(text="the end"),
+        ],
+        cover_image=img1,
+    )
+
+
+def test_render_book_writes_a5_by_default(tmp_path):
+    draft = _two_page_draft(tmp_path)
+    tool = render_book_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+    )
+
+    result = tool.handler({})
+
+    output_dir = tmp_path / ".book-gen" / "output"
+    pdfs = list(output_dir.glob("*.pdf"))
+    # Exactly one PDF, no booklet without the flag.
+    assert len(pdfs) == 1
+    assert pdfs[0].stem == "the_brave_owl"
+    # The tool's result string tells the agent where the file landed.
+    assert str(pdfs[0]) in result or pdfs[0].name in result
+
+
+def test_render_book_with_impose_writes_booklet_too(tmp_path):
+    draft = _two_page_draft(tmp_path)
+    tool = render_book_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+    )
+
+    result = tool.handler({"impose": True})
+
+    output_dir = tmp_path / ".book-gen" / "output"
+    a5 = output_dir / "the_brave_owl.pdf"
+    booklet = output_dir / "the_brave_owl_A4_booklet.pdf"
+    assert a5.is_file()
+    assert booklet.is_file()
+    assert "booklet" in result.lower()
+
+
+def test_render_book_requires_draft():
+    tool = render_book_tool(
+        get_draft=lambda: None, get_session_root=lambda: Path(".")
+    )
+
+    result = tool.handler({})
+
+    assert "no draft" in result.lower()
+
+
+def test_render_book_requires_title(tmp_path):
+    draft = _two_page_draft(tmp_path, title="")
+    tool = render_book_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+    )
+
+    result = tool.handler({})
+
+    # Must not write an unnamed file; must tell the agent to ask the user.
+    assert "title" in result.lower()
+    output_dir = tmp_path / ".book-gen" / "output"
+    assert not output_dir.exists() or list(output_dir.glob("*.pdf")) == []
+
+
+def test_render_book_surfaces_build_failure(tmp_path, monkeypatch):
+    draft = _two_page_draft(tmp_path)
+
+    def boom(_book, _out):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr("src.agent_tools.build_pdf", boom)
+
+    tool = render_book_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+    )
+
+    result = tool.handler({})
+
+    # The tool returns an error the agent can surface to the user, not raise.
+    assert "disk full" in result or "failed" in result.lower()
+
+
+def test_render_book_impose_failure_keeps_a5(tmp_path, monkeypatch):
+    draft = _two_page_draft(tmp_path)
+
+    def boom(_src, _dst):
+        raise RuntimeError("imposition broke")
+
+    monkeypatch.setattr("src.agent_tools.impose_a5_to_a4", boom)
+
+    tool = render_book_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+    )
+
+    result = tool.handler({"impose": True})
+
+    a5 = tmp_path / ".book-gen" / "output" / "the_brave_owl.pdf"
+    # A5 stayed on disk even though the booklet step failed.
+    assert a5.is_file()
+    # Result mentions the booklet failure so the agent can tell the user.
+    assert "imposition broke" in result or "booklet" in result.lower()

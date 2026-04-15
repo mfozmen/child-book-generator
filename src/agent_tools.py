@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import Callable
 
 from src.agent import Tool
-from src.draft import Draft
+from src.builder import build_pdf
+from src.draft import Draft, slugify, to_book
+from src.imposition import impose_a5_to_a4
 from src.schema import VALID_LAYOUTS
 
 
@@ -312,6 +314,82 @@ def choose_layout_tool(get_draft: Callable[[], Draft | None]) -> Tool:
                 "reason": {"type": "string"},
             },
             "required": ["page", "layout", "reason"],
+        },
+        handler=handler,
+    )
+
+
+def render_book_tool(
+    get_draft: Callable[[], Draft | None],
+    get_session_root: Callable[[], Path],
+) -> Tool:
+    """Tool: build the finished A5 PDF (and optionally the A4 booklet).
+
+    The agent calls this once all the necessary metadata is settled.
+    Output goes under ``<session-root>/.book-gen/output/<slug>.pdf`` so
+    the existing gitignore rule covers it. If ``impose=True`` the tool
+    also writes ``<slug>_A4_booklet.pdf`` alongside; a booklet failure
+    keeps the A5 intact and surfaces the error.
+    """
+
+    def handler(input_: dict) -> str:
+        draft = get_draft()
+        if draft is None:
+            return "No draft loaded. Ask the user to provide a PDF first."
+        if not draft.title.strip():
+            return (
+                "Can't render yet: the draft has no title. Ask the user for "
+                "one and use set_metadata before calling render_book."
+            )
+
+        impose = bool(input_.get("impose", False))
+        source_dir = Path(get_session_root()) / ".book-gen"
+        out_path = source_dir / "output" / f"{slugify(draft.title)}.pdf"
+
+        try:
+            book = to_book(draft, source_dir)
+            build_pdf(book, out_path)
+        except Exception as e:
+            return f"Render failed: {e}"
+
+        message = f"Wrote A5 book to {out_path}."
+
+        if impose:
+            booklet = out_path.with_name(f"{out_path.stem}_A4_booklet.pdf")
+            try:
+                impose_a5_to_a4(out_path, booklet)
+            except Exception as e:
+                return (
+                    f"{message} Booklet imposition failed: {e}. The A5 "
+                    "stayed on disk — the user can still print it."
+                )
+            message += (
+                f" Also wrote A4 booklet to {booklet}. Tell the user to "
+                "print double-sided (flipped on short edge), fold, and "
+                "staple."
+            )
+
+        return message
+
+    return Tool(
+        name="render_book",
+        description=(
+            "Build the finished A5 picture-book PDF from the current draft. "
+            "Set impose=true to also produce a 2-up A4 booklet ready to "
+            "print double-sided, fold, and staple. Only call this once the "
+            "title (and ideally author + cover) are set."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "impose": {
+                    "type": "boolean",
+                    "description": (
+                        "Also produce the A4 booklet. Default false."
+                    ),
+                }
+            },
+            "required": [],
         },
         handler=handler,
     )
