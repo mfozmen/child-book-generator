@@ -17,7 +17,13 @@ from rich.console import Console
 from src import draft as draft_mod
 from src import session as session_mod
 from src.agent import Agent
-from src.agent_tools import read_draft_tool
+from src.agent_tools import (
+    choose_layout_tool,
+    propose_typo_fix_tool,
+    read_draft_tool,
+    set_cover_tool,
+    set_metadata_tool,
+)
 from src.draft import Draft
 from src.providers.llm import (
     SPECS,
@@ -160,8 +166,26 @@ class Repl:
         self._persist()
 
     def _build_agent(self) -> Agent:
-        tools = [read_draft_tool(get_draft=lambda: self._draft)]
+        get_draft = lambda: self._draft  # noqa: E731
+        tools = [
+            read_draft_tool(get_draft=get_draft),
+            propose_typo_fix_tool(get_draft=get_draft, confirm=self._confirm),
+            set_metadata_tool(get_draft=get_draft),
+            set_cover_tool(get_draft=get_draft),
+            choose_layout_tool(get_draft=get_draft),
+        ]
         return Agent(llm=self._llm, tools=tools, console=self._console)
+
+    def _confirm(self, prompt: str) -> bool:
+        """Ask the user y/n. Default: no on EOF or anything that isn't
+        clearly a yes — preserve-child-voice prefers silence over a
+        wrong 'apply this change'."""
+        self._console.print(f"[yellow]{prompt}[/yellow] (y/n)")
+        try:
+            answer = self._read().strip().lower()
+        except EOFError:
+            return False
+        return answer in {"y", "yes", "evet", "e"}
 
     def _persist(self) -> None:
         if self._session_root is None or self._provider is None:

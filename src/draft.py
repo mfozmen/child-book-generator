@@ -18,13 +18,14 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from src.pdf_ingest import extract_images, extract_pages
-from src.schema import Book, Page
+from src.schema import BackCover, Book, Cover, Page
 
 
 @dataclass
 class DraftPage:
     text: str = ""
     image: Path | None = None
+    layout: str = "image-top"
 
 
 @dataclass
@@ -33,6 +34,9 @@ class Draft:
     pages: list[DraftPage] = field(default_factory=list)
     title: str = ""
     author: str = ""
+    cover_image: Path | None = None
+    cover_subtitle: str = ""
+    back_cover_text: str = ""
 
 
 def from_pdf(pdf_path: Path, images_dir: Path) -> Draft:
@@ -91,22 +95,31 @@ def to_book(draft: Draft, source_dir: Path) -> Book:
     if not draft.title.strip():
         raise ValueError("Draft is missing a title.")
     source_dir = Path(source_dir)
+
+    def _rel(p: Path | None) -> str | None:
+        if p is None:
+            return None
+        try:
+            return str(p.relative_to(source_dir)).replace("\\", "/")
+        except ValueError:
+            return str(p)
+
     schema_pages: list[Page] = []
     for p in draft.pages:
-        image_str: str | None = None
-        if p.image is not None:
-            try:
-                image_str = str(p.image.relative_to(source_dir)).replace("\\", "/")
-            except ValueError:
-                image_str = str(p.image)
+        image_str = _rel(p.image)
         # Rule 1 of .claude/skills/select-page-layout: pages with no image
-        # must render as text-only. Other pages keep the schema default
-        # (image-top) until the full parametric selector lands (p5-01).
-        layout = "text-only" if image_str is None else "image-top"
+        # must render as text-only. Other pages keep the draft's layout
+        # (default image-top) — the choose_layout tool can override.
+        layout = "text-only" if image_str is None else p.layout
         schema_pages.append(Page(text=p.text, image=image_str, layout=layout))
     return Book(
         title=draft.title.strip(),
         author=draft.author.strip(),
+        cover=Cover(
+            image=_rel(draft.cover_image),
+            subtitle=draft.cover_subtitle,
+        ),
+        back_cover=BackCover(text=draft.back_cover_text),
         pages=schema_pages,
         source_dir=source_dir,
     )
