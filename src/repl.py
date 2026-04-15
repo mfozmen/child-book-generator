@@ -21,6 +21,7 @@ from src.agent_tools import (
     choose_layout_tool,
     propose_typo_fix_tool,
     read_draft_tool,
+    render_book_tool,
     set_cover_tool,
     set_metadata_tool,
 )
@@ -167,12 +168,16 @@ class Repl:
 
     def _build_agent(self) -> Agent:
         get_draft = lambda: self._draft  # noqa: E731
+        get_session_root = lambda: self._session_root or Path.cwd()  # noqa: E731
         tools = [
             read_draft_tool(get_draft=get_draft),
             propose_typo_fix_tool(get_draft=get_draft, confirm=self._confirm),
             set_metadata_tool(get_draft=get_draft),
             set_cover_tool(get_draft=get_draft),
             choose_layout_tool(get_draft=get_draft),
+            render_book_tool(
+                get_draft=get_draft, get_session_root=get_session_root
+            ),
         ]
         return Agent(llm=self._llm, tools=tools, console=self._console)
 

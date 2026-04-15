@@ -257,6 +257,55 @@ def test_agent_typo_fix_eof_at_prompt_treated_as_no(tmp_path):
     assert draft.pages[0].text == original
 
 
+def test_agent_render_tool_produces_pdf_and_booklet(tmp_path):
+    """End-to-end: agent calls render_book with impose, the renderer
+    writes both PDFs to disk."""
+    from src import draft as draft_mod
+
+    pdf = _write_pdf(tmp_path)
+    draft = draft_mod.from_pdf(pdf, tmp_path / ".book-gen" / "images")
+    draft.title = "My Book"
+    draft.cover_image = draft.pages[0].image
+
+    llm = _StubLLM(
+        [
+            AgentResponse(
+                content=[
+                    {
+                        "type": "tool_use",
+                        "id": "t1",
+                        "name": "render_book",
+                        "input": {"impose": True},
+                    }
+                ],
+                stop_reason="tool_use",
+            ),
+            AgentResponse(
+                content=[{"type": "text", "text": "Done — your book is ready."}],
+                stop_reason="end_turn",
+            ),
+        ]
+    )
+
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=False, width=100, no_color=True)
+    repl = Repl(
+        read_line=_scripted([]),
+        console=console,
+        provider=find("anthropic"),
+        session_root=tmp_path,
+        llm_factory=lambda _spec, _key: llm,
+    )
+    repl.set_draft(draft)
+
+    assert repl.run() == 0
+    a5 = tmp_path / ".book-gen" / "output" / "my_book.pdf"
+    booklet = tmp_path / ".book-gen" / "output" / "my_book_A4_booklet.pdf"
+    assert a5.is_file() and a5.stat().st_size > 0
+    assert booklet.is_file() and booklet.stat().st_size > 0
+    assert "your book is ready" in buf.getvalue().lower()
+
+
 def test_agent_typo_fix_user_declines_keeps_text_unchanged(tmp_path):
     from src import draft as draft_mod
 
