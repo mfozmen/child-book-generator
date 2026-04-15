@@ -45,10 +45,10 @@ Traditional:
 
 ```bash
 pip install child-book-generator
-# or, to also fetch the Claude SDK so key validation can hit Anthropic:
-pip install 'child-book-generator[anthropic]'
 child-book-generator
 ```
+
+The Claude SDK and OS-keychain support are bundled by default — no optional extras to remember.
 
 From a local checkout:
 
@@ -67,7 +67,9 @@ Fastest path, with a PDF draft in hand:
 child-book-generator path/to/draft.pdf
 ```
 
-On first launch you'll be asked which LLM provider to use (Claude recommended). With a real provider active, Claude reads the draft through a `read_draft` tool and greets you in whatever language you'll type in. Say what you want, ask what you're unsure about, and the agent walks you to a finished book.
+On first launch you'll be asked which LLM provider to use (Claude recommended). The app opens the provider's key-creation page in your browser, walks you through the steps, and saves the key securely in your OS keychain — **you only paste it once**. Subsequent launches use the saved key silently.
+
+With a real provider active, Claude reads the draft through a `read_draft` tool and greets you in whatever language you'll type in. Say what you want, ask what you're unsure about, and the agent walks you to a finished book.
 
 Without a PDF argument:
 
@@ -87,6 +89,7 @@ Today's slash commands (still available as escape hatches):
 | `/pages` | list every page in the draft with a drawing marker and a text preview |
 | `/title [name]` | show or set the book's title |
 | `/author [name]` | show or set the book's author |
+| `/logout` | forget the saved API key and drop back to offline mode |
 | `/render [--impose] [path]` | build the A5 picture-book PDF from the loaded draft. With `--impose` also writes an A4 2-up booklet ready to print double-sided, fold, and staple. |
 | `/exit` | leave the session (Ctrl-D also exits) |
 

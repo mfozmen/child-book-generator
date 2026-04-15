@@ -40,9 +40,9 @@ def test_saved_keyless_provider_is_restored_without_prompting(tmp_path):
     assert "which model" not in buf.getvalue().lower()
 
 
-def test_saved_key_provider_skips_menu_but_reprompts_for_key(tmp_path):
-    # Keys are NOT persisted in this slice, so even with a saved provider
-    # the user is asked for the key on next launch.
+def test_saved_key_provider_without_saved_key_prompts_once(tmp_path):
+    """Session remembers the provider but keyring has no saved key yet —
+    we skip the model-picker menu but still need the key."""
     session.save(tmp_path, session.Session(provider="anthropic"))
 
     repl, buf = _make(tmp_path, ["/exit"], secrets=["sk-new"])

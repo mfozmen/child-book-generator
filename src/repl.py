@@ -15,6 +15,7 @@ from typing import Callable
 from rich.console import Console
 
 from src import draft as draft_mod
+from src import keyring_store
 from src import memory as memory_mod
 from src import session as session_mod
 from src.agent import Agent
@@ -99,6 +100,7 @@ class Repl:
             "title": _cmd_title,
             "author": _cmd_author,
             "render": _cmd_render,
+            "logout": _cmd_logout,
         }
 
     @property
@@ -180,6 +182,8 @@ class Repl:
         self._agent = self._build_agent()
         self._console.print(f"[green]Active model:[/green] {spec.display_name}\n")
         self._persist()
+        if spec.requires_api_key and api_key:
+            keyring_store.save_key(spec.name, api_key)
 
     def _build_agent(self) -> Agent:
         get_draft = lambda: self._draft  # noqa: E731
@@ -215,27 +219,68 @@ class Repl:
         )
 
     def _resume_or_pick(self) -> tuple[ProviderSpec, str | None] | None:
-        """Try to restore the saved provider; fall back to the interactive picker.
+        """Try to restore the saved provider (with its stored key if any);
+        fall back to the interactive picker otherwise.
 
-        API keys aren't persisted in this slice, so a saved key-requiring
-        provider still prompts for the key. Unknown or corrupt saved state
-        silently falls through to the picker.
+        For key-requiring providers we read the key from the OS credential
+        store and re-validate silently. If validation passes, the user
+        never sees the prompt. If the saved key was rotated or revoked,
+        we drop it and fall through to ``_prompt_for_provider``.
         """
         if self._session_root is not None:
             saved = session_mod.load(self._session_root).provider
             spec = find(saved) if saved else None
             if spec is not None:
-                api_key: str | None = None
-                if spec.requires_api_key:
-                    self._console.print(
-                        f"Resuming with [green]{spec.display_name}[/green]. "
-                        "Enter API key:"
-                    )
-                    api_key = self._read_and_validate_key(spec)
-                    if api_key is None:
-                        return None
-                return spec, api_key
+                if not spec.requires_api_key:
+                    return spec, None
+                saved_key = keyring_store.load_key(spec.name)
+                if saved_key:
+                    err = self._validate_silently(spec, saved_key)
+                    if err is None:
+                        return spec, saved_key
+                    if isinstance(err, KeyValidationError):
+                        # Key was rotated / revoked — drop it, re-prompt.
+                        keyring_store.delete_key(spec.name)
+                    else:
+                        # Transient error (network, 5xx, rate-limit). The
+                        # key might still be fine. Trust it for this
+                        # session and warn the user so the retry isn't
+                        # confusing. Only a real KeyValidationError
+                        # proves the saved key is dead.
+                        self._console.print(
+                            f"[yellow]Couldn't verify saved API key "
+                            f"({err}); using it anyway.[/yellow]"
+                        )
+                        return spec, saved_key
+                return self._prompt_for_key(spec)
         return self._prompt_for_provider()
+
+    def _validate_silently(
+        self, spec: ProviderSpec, api_key: str
+    ) -> Exception | None:
+        """Re-run the validator without any console output. Returns the
+        raised exception (``KeyValidationError`` or otherwise) so the
+        caller can tell a rotated key from a transient network hiccup.
+        Returns ``None`` when the key passes."""
+        if self._validate is None:
+            return None
+        try:
+            self._validate(spec, api_key)
+            return None
+        except Exception as e:
+            return e
+
+    def _prompt_for_key(
+        self, spec: ProviderSpec
+    ) -> tuple[ProviderSpec, str] | None:
+        """Just the key part of the picker — used on resume when the saved
+        key was revoked or never existed. Returns ``(spec, key)`` or
+        ``None`` on abort."""
+        self._show_key_guidance(spec)
+        api_key = self._read_and_validate_key(spec)
+        if api_key is None:
+            return None
+        return spec, api_key
 
     def _prompt_for_provider(self) -> tuple[ProviderSpec, str | None] | None:
         """Interactive picker. Returns ``(spec, api_key)`` or ``None`` on abort.
@@ -252,11 +297,41 @@ class Repl:
             return None
         api_key: str | None = None
         if spec.requires_api_key:
-            self._console.print(f"Enter API key for {spec.display_name}:")
+            self._show_key_guidance(spec)
             api_key = self._read_and_validate_key(spec)
             if api_key is None:
                 return None
         return spec, api_key
+
+    def _show_key_guidance(self, spec: ProviderSpec) -> None:
+        """Print a step-by-step set of instructions for getting an API
+        key for ``spec``, and try to open the provider's key page in
+        the user's default browser so they aren't hunting for the link."""
+        self._console.print(
+            f"\nTo use [green]{spec.display_name}[/green] I need an API key."
+        )
+        if spec.key_url:
+            self._console.print(f"  Get one here: [link={spec.key_url}]{spec.key_url}[/link]")
+            # webbrowser.open returns False on headless Linux (no
+            # $DISPLAY / $BROWSER) rather than raising, so we only
+            # mention the browser when it actually opened.
+            try:
+                import webbrowser
+
+                opened = webbrowser.open(spec.key_url, new=2, autoraise=True)
+            except Exception:
+                opened = False
+            if opened:
+                self._console.print(
+                    "  [dim](opened the page in your browser)[/dim]"
+                )
+        for i, step in enumerate(spec.key_steps, start=1):
+            self._console.print(f"  {i}. {step}")
+        self._console.print(
+            "[dim]I'll save the key securely in your OS keychain so you "
+            "only have to do this once.[/dim]"
+        )
+        self._console.print("")
 
     def _read_and_validate_key(self, spec: ProviderSpec) -> str | None:
         """Read a key, run the injected validator, re-prompt until accepted.
@@ -354,6 +429,25 @@ def _cmd_model(repl: Repl, _args: str) -> None:
         repl._console.print("[dim]model unchanged[/dim]")
         return None
     repl._activate(*chosen)
+    return None
+
+
+def _cmd_logout(repl: Repl, _args: str) -> None:
+    """Forget the saved API key for the current provider and switch the
+    session back to offline. The user can re-authenticate with /model."""
+    spec = repl.provider
+    if spec is not None and spec.requires_api_key:
+        keyring_store.delete_key(spec.name)
+        repl._console.print(
+            f"[green]Forgot the saved API key[/green] for {spec.display_name}."
+        )
+    else:
+        repl._console.print(
+            "[dim]No saved API key to forget for the current provider.[/dim]"
+        )
+    offline = find("none")
+    if offline is not None:
+        repl._activate(offline, None)
     return None
 
 

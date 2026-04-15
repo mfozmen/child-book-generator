@@ -29,12 +29,21 @@ class ProviderSpec:
     ``validation_model`` is the cheapest model id the key-validation ping
     can call. Kept on the spec (not hardcoded in the validator) so model
     retirements are a one-line change in this file.
+
+    ``key_url`` is the page where the user creates an API key. The REPL
+    surfaces it (and tries to auto-open it in a browser) at the prompt
+    so new users aren't left hunting through documentation.
+
+    ``key_steps`` is a short ordered list of instructions shown above
+    the prompt — the user follows them top to bottom.
     """
 
     name: str
     display_name: str
     requires_api_key: bool
     validation_model: str | None = None
+    key_url: str | None = None
+    key_steps: tuple[str, ...] = ()
 
 
 SPECS: tuple[ProviderSpec, ...] = (
@@ -44,9 +53,35 @@ SPECS: tuple[ProviderSpec, ...] = (
         "Claude (Anthropic)",
         requires_api_key=True,
         validation_model="claude-haiku-4-5-20251001",
+        key_url="https://console.anthropic.com/settings/keys",
+        key_steps=(
+            "Sign in to Anthropic Console (create a free account if you don't have one).",
+            "Click [bold]Create Key[/bold] and give it a name (e.g. \"child-book-generator\").",
+            "Copy the key (starts with [cyan]sk-ant-[/cyan]) and paste it below.",
+        ),
     ),
-    ProviderSpec("openai", "GPT (OpenAI)", requires_api_key=True),
-    ProviderSpec("google", "Gemini (Google)", requires_api_key=True),
+    ProviderSpec(
+        "openai",
+        "GPT (OpenAI)",
+        requires_api_key=True,
+        key_url="https://platform.openai.com/api-keys",
+        key_steps=(
+            "Sign in to OpenAI Platform.",
+            "Click [bold]Create new secret key[/bold], give it a name, copy it.",
+            "Paste it below (starts with [cyan]sk-[/cyan]).",
+        ),
+    ),
+    ProviderSpec(
+        "google",
+        "Gemini (Google)",
+        requires_api_key=True,
+        key_url="https://aistudio.google.com/apikey",
+        key_steps=(
+            "Sign in to Google AI Studio.",
+            "Click [bold]Create API key[/bold] and copy it.",
+            "Paste it below.",
+        ),
+    ),
     ProviderSpec("ollama", "Ollama (local)", requires_api_key=False),
 )
 

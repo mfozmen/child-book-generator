@@ -30,12 +30,15 @@ dependencies = [
   "Pillow>=10.0.0",
   "pypdf>=4.0.0",
   "rich>=13.0.0",
+  # Bundled by default so `pip install child-book-generator` just works —
+  # the app talks to Claude out of the box; no separate extra to remember.
+  "anthropic>=0.30.0",
+  # Stores the Anthropic key in the OS credential manager so the user
+  # only pastes it once. Cross-platform (Windows, macOS, Linux).
+  "keyring>=24.0.0",
 ]
 
 [project.optional-dependencies]
-# Each LLM/image/OCR provider is an opt-in extra so a user can install only
-# what they need. Populated as providers land (p1-01, p3-01, p4-01).
-anthropic = ["anthropic>=0.30.0"]
 dev = ["pytest>=8.0.0", "pytest-cov>=5.0.0"]
 
 [project.scripts]
