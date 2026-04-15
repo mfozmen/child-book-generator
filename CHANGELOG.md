@@ -1,7 +1,42 @@
 # CHANGELOG
 
 
+## v0.5.0 (2026-04-15)
+
+### Features
+
+- **agent**: Render_book tool — agent produces the finished PDF itself
+  ([#15](https://github.com/mfozmen/child-book-generator/pull/15),
+  [`781c52b`](https://github.com/mfozmen/child-book-generator/commit/781c52bcd991c77505880c2a9f0738e62066ea99))
+
+Ships PR #15 from docs/PLAN.md. Once the draft has a title (and ideally author + cover), the agent
+  can call render_book itself instead of asking the user to type /render.
+
+- src/agent_tools.render_book_tool wraps to_book + build_pdf + optional impose_a5_to_a4. Output goes
+  to <session-root>/.book-gen/output/<slug>.pdf, mirroring the slash command. - impose=true also
+  writes <slug>_A4_booklet.pdf; a booklet failure keeps the A5 on disk and surfaces the error in the
+  tool result. - Guards: no draft, no title, build failure — each returns a descriptive string the
+  agent can relay, never raises. - Schema exposes only impose (bool); required=[] so the agent can
+  call it with no arguments for the A5-only path.
+
+REPL registers the tool with get_session_root = (session_root or cwd)/.book-gen so the slash command
+  and the agent tool put files in the same place.
+
+Coverage: src/agent_tools.py and src/repl.py remain 100%; total 98%.
+
+204 tests.
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.4.0 (2026-04-15)
+
+### Chores
+
+- **release**: 0.4.0 [skip ci]
+  ([`5901df2`](https://github.com/mfozmen/child-book-generator/commit/5901df26af9ab74488ca0bae2020392ad59d6760))
 
 ### Features
 
