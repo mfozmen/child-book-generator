@@ -1,7 +1,82 @@
 # CHANGELOG
 
 
+## v1.0.1 (2026-04-15)
+
+### Bug Fixes
+
+- Hide offline picker option + catch broader Anthropic errors
+  ([#20](https://github.com/mfozmen/littlepress-ai/pull/20),
+  [`2167bcc`](https://github.com/mfozmen/littlepress-ai/commit/2167bcc7eeadaad4b3b1e3cd48c6f9dfc7a018f5))
+
+* fix: hide offline picker option + catch broader Anthropic errors
+
+Two bugs the maintainer hit the first time they ran \`littlepress\` for real.
+
+1. "No model (offline)" was option 1 in the picker but doesn't do anything useful — non-slash input
+  just falls to the placeholder path forever. Keep NullProvider as the internal default state (unit
+  tests still use it) but drop it from the UI: new PICKER_SPECS tuple filters "none" out, and the
+  picker shows only Claude / GPT / Gemini / Ollama numbered 1-4.
+
+2. Validator used to catch only anthropic.AuthenticationError. When the maintainer pasted a valid
+  key on a fresh Anthropic account with no credits, messages.create raised BadRequestError ("Your
+  credit balance is too low…"), which fell through the except clause and crashed the REPL with a
+  traceback.
+
+Now catching anthropic.APIError (the parent class of both auth and billing / rate / 5xx errors) and
+  re-raising as KeyValidationError with the server's message, so the user sees a clean "Anthropic
+  call failed: credit balance too low…" and can Ctrl-D to add credits.
+
+Tests: - test_picker_hides_the_offline_none_option / _shifts_numbers — pin the new picker UI. -
+  test_anthropic_billing_error_surfaces_as_key_validation_error and
+  _generic_api_error_does_not_crash — pin the broader error catch. - Every test that dereferenced
+  picker numbers or expected "none" as the keyless fallback migrated to "4" / "ollama".
+
+All 261 tests green; src/keyring_store.py and src/providers/llm.py remain 100% covered.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix(validator): split transient errors so resume-path doesn't wipe valid keys
+
+Addresses all five review findings on #20. The big one (#1) was that broadening the
+  anthropic.APIError catch into KeyValidationError regressed PR #18's transient-vs-auth split:
+  during silent resume, _resume_with_key deletes any key that raises KeyValidationError, so a
+  rate-limit, a 5xx, or a billing error would silently wipe the user's saved key and force a
+  re-paste.
+
+Split the signal into two exceptions:
+
+- KeyValidationError — key is rejected (AuthenticationError / PermissionDeniedError). First-launch
+  re-prompts; resume deletes the saved key. - TransientValidationError — key is fine but the call
+  couldn't complete (billing, rate-limit, 5xx, network). First-launch shows the message and lets the
+  user retry or Ctrl-D; resume KEEPS the saved key and surfaces the message.
+
+Other fixes in this PR:
+
+2. README — removed the stale line that called "No model (offline)" a picker option and described
+  what the "skip the key" path was; rewrote the first-launch paragraph around the four real
+  providers plus /logout. 3. validator.py module + class docstrings — describe the three signals
+  (KeyValidationError / TransientValidationError / ProviderUnavailable) and how each is meant to be
+  handled. 4. getattr fallbacks narrowed from bare Exception to RuntimeError so a malformed SDK
+  wouldn't accidentally catch KeyboardInterrupt. 5. Added a one-line regression test that
+  find("none") still resolves to a keyless spec — the UI hides it but /logout and old session files
+  still rely on it.
+
+262 → 263 tests; src/providers/validator.py stays 100% covered.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v1.0.0 (2026-04-15)
+
+### Chores
+
+- **release**: 1.0.0 [skip ci]
+  ([`0c98f2d`](https://github.com/mfozmen/littlepress-ai/commit/0c98f2dde294ab9211a1ef642ac4b2bc3fec5f3b))
 
 ### Documentation
 
