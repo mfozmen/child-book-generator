@@ -35,12 +35,11 @@ def load_key(provider_name: str) -> str | None:
 
 
 def delete_key(provider_name: str) -> None:
+    # A bare `except Exception` covers the real cases uniformly:
+    # PasswordDeleteError (nothing saved) and any backend failure
+    # (no keyring available) are both fine to swallow — /logout
+    # should never crash the REPL.
     try:
         _keyring.delete_password(SERVICE, provider_name)
-    except getattr(_keyring, "errors", type("_X", (), {})).__dict__.get(
-        "PasswordDeleteError", Exception
-    ):
-        # Nothing was saved — treat /logout as a no-op.
-        pass
     except Exception:
         pass

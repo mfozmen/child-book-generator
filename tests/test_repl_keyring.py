@@ -107,6 +107,33 @@ def test_resume_drops_keyring_key_when_it_fails_validation(tmp_path):
     assert repl.api_key == "sk-ant-fresh"
 
 
+def test_resume_keeps_key_on_transient_validation_error(tmp_path):
+    """Network timeout / 5xx / rate-limit during silent resume MUST NOT
+    delete the saved key — the key might still be valid. Only a real
+    KeyValidationError proves the key is dead."""
+    session.save(tmp_path, session.Session(provider="anthropic"))
+    keyring_store.save_key("anthropic", "sk-ant-saved")
+
+    def validate(_spec, _key):
+        raise RuntimeError("connection timed out")
+
+    repl, buf = _make(
+        tmp_path,
+        ["/exit"],
+        secrets=[],  # if we re-prompt, scripted reader EOFs the test
+        validate=validate,
+    )
+    repl.run()
+
+    # Key stayed in the keyring and on the session — user isn't forced
+    # to re-paste over a flaky network.
+    assert keyring_store.load_key("anthropic") == "sk-ant-saved"
+    assert repl.provider.name == "anthropic"
+    assert repl.api_key == "sk-ant-saved"
+    # User is told so the silence isn't confusing.
+    assert "couldn't verify" in buf.getvalue().lower() or "verify" in buf.getvalue().lower()
+
+
 def test_logout_command_removes_saved_key_and_goes_offline(tmp_path):
     from src.providers.llm import find
 
@@ -134,6 +161,28 @@ def test_logout_on_offline_provider_is_a_gentle_noop(tmp_path):
 
     assert "no saved api key" in buf.getvalue().lower()
     assert repl.provider.name == "none"
+
+
+def test_guidance_omits_browser_line_on_headless(tmp_path, monkeypatch):
+    """webbrowser.open returns False on headless Linux — the REPL must
+    not lie about opening a browser in that case."""
+    import webbrowser
+
+    monkeypatch.setattr(webbrowser, "open", lambda *_a, **_kw: False)
+
+    repl, buf = _make(
+        tmp_path,
+        ["2"],
+        secrets=[],
+        validate=lambda _s, _k: None,
+    )
+    repl.run()
+
+    out = buf.getvalue()
+    # URL is still surfaced so the user can click / copy.
+    assert "console.anthropic.com" in out
+    # But no "opened in your browser" because we didn't.
+    assert "opened the page" not in out.lower()
 
 
 def test_guidance_surfaces_provider_url_and_steps(tmp_path, monkeypatch):

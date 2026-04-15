@@ -13,6 +13,7 @@ All five PRs from the original plan merged:
 | #15 | `feat/agent-render` | `render_book` tool produces the A5 PDF and optional A4 booklet. |
 | #16 | `feat/project-memory` | `.book-gen/draft.json` persists title / author / cover / layouts / edits across launches; atomic write, schema-versioned, path-normalised. |
 | #17 | `chore/cleanup` | Consolidated `slugify`, refreshed CLAUDE.md / README to describe the agent flow. |
+| #18 | `feat/guided-setup-and-zero-extras` | `anthropic` + `keyring` as default deps (no optional extra). Guided key setup: browser auto-opens provider's key page, step-by-step instructions, key saved in OS credential manager, silent resume next launch. `/logout` command. |
 
 ## "Done when" checklist
 
@@ -30,7 +31,6 @@ All five PRs from the original plan merged:
 
 ## Explicitly deferred (don't build unless asked)
 
-- **Keyring / persisted API key.** Re-prompting each launch is fine.
 - **Illustration generation.** Separate project.
 - **OCR for handwritten scans.** Current PDFs have extractable text; add when a real draft needs it.
 - **Full parametric layout engine.** `choose_layout` applies the skill's rule 1 and simple aspect-ratio branching; parametric splits can wait.

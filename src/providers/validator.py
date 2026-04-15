@@ -52,9 +52,12 @@ def _check_anthropic(spec: ProviderSpec, api_key: str) -> None:
     try:
         import anthropic  # type: ignore[import-not-found]
     except ImportError as e:
+        # Anthropic ships as a default dependency — a missing import here
+        # means a broken install, so point at reinstall rather than a
+        # no-longer-real optional extra.
         raise ProviderUnavailable(
-            "The 'anthropic' SDK isn't installed. Run: "
-            "pip install 'child-book-generator[anthropic]'"
+            "The 'anthropic' SDK is missing from this install. Try: "
+            "pip install --force-reinstall child-book-generator"
         ) from e
 
     # Cheapest call that still exercises authentication. If the key is

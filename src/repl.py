@@ -234,25 +234,41 @@ class Repl:
                 if not spec.requires_api_key:
                     return spec, None
                 saved_key = keyring_store.load_key(spec.name)
-                if saved_key and self._validate_silently(spec, saved_key):
-                    return spec, saved_key
                 if saved_key:
-                    # Saved key no longer works — drop it and re-prompt.
-                    keyring_store.delete_key(spec.name)
+                    err = self._validate_silently(spec, saved_key)
+                    if err is None:
+                        return spec, saved_key
+                    if isinstance(err, KeyValidationError):
+                        # Key was rotated / revoked — drop it, re-prompt.
+                        keyring_store.delete_key(spec.name)
+                    else:
+                        # Transient error (network, 5xx, rate-limit). The
+                        # key might still be fine. Trust it for this
+                        # session and warn the user so the retry isn't
+                        # confusing. Only a real KeyValidationError
+                        # proves the saved key is dead.
+                        self._console.print(
+                            f"[yellow]Couldn't verify saved API key "
+                            f"({err}); using it anyway.[/yellow]"
+                        )
+                        return spec, saved_key
                 return self._prompt_for_key(spec)
         return self._prompt_for_provider()
 
-    def _validate_silently(self, spec: ProviderSpec, api_key: str) -> bool:
-        """Re-run the validator without any console output. Used when we
-        resume with a keyring-stored key: a good key means the user sees
-        no prompt at all."""
+    def _validate_silently(
+        self, spec: ProviderSpec, api_key: str
+    ) -> Exception | None:
+        """Re-run the validator without any console output. Returns the
+        raised exception (``KeyValidationError`` or otherwise) so the
+        caller can tell a rotated key from a transient network hiccup.
+        Returns ``None`` when the key passes."""
         if self._validate is None:
-            return True
+            return None
         try:
             self._validate(spec, api_key)
-            return True
-        except Exception:
-            return False
+            return None
+        except Exception as e:
+            return e
 
     def _prompt_for_key(
         self, spec: ProviderSpec
@@ -296,17 +312,19 @@ class Repl:
         )
         if spec.key_url:
             self._console.print(f"  Get one here: [link={spec.key_url}]{spec.key_url}[/link]")
+            # webbrowser.open returns False on headless Linux (no
+            # $DISPLAY / $BROWSER) rather than raising, so we only
+            # mention the browser when it actually opened.
             try:
                 import webbrowser
 
-                webbrowser.open(spec.key_url, new=2, autoraise=True)
+                opened = webbrowser.open(spec.key_url, new=2, autoraise=True)
+            except Exception:
+                opened = False
+            if opened:
                 self._console.print(
                     "  [dim](opened the page in your browser)[/dim]"
                 )
-            except Exception:
-                # A headless environment or a locked-down browser
-                # launcher — the user can still click the link above.
-                pass
         for i, step in enumerate(spec.key_steps, start=1):
             self._console.print(f"  {i}. {step}")
         self._console.print(
