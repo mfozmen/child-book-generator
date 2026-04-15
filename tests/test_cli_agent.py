@@ -145,3 +145,162 @@ def test_agent_greeting_failure_does_not_crash_repl(tmp_path):
 
     assert repl.run() == 0
     assert "rate limited" in buf.getvalue()
+
+
+def test_agent_proposes_typo_fix_and_user_confirms(tmp_path):
+    """End-to-end: agent calls propose_typo_fix, the REPL asks the user
+    y/n, the user says yes, the draft's page text is updated."""
+    from src import draft as draft_mod
+
+    pdf = _write_pdf(tmp_path)
+    draft = draft_mod.from_pdf(pdf, tmp_path / ".book-gen" / "images")
+    # Start from a known quirky text so the typo fix is deterministic.
+    draft.pages[0].text = "the dragn was sad"
+
+    # First LLM turn: ask for the typo fix. Second turn: acknowledge.
+    llm = _StubLLM(
+        [
+            AgentResponse(
+                content=[
+                    {
+                        "type": "tool_use",
+                        "id": "t1",
+                        "name": "propose_typo_fix",
+                        "input": {
+                            "page": 1,
+                            "before": "dragn",
+                            "after": "dragon",
+                            "reason": "spelling",
+                        },
+                    }
+                ],
+                stop_reason="tool_use",
+            ),
+            AgentResponse(
+                content=[{"type": "text", "text": "Great, fixed!"}],
+                stop_reason="end_turn",
+            ),
+        ]
+    )
+
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=False, width=100, no_color=True)
+    repl = Repl(
+        # The user types "y" to the y/n prompt, then "/exit".
+        read_line=_scripted(["y", "/exit"]),
+        console=console,
+        provider=find("anthropic"),
+        session_root=tmp_path,
+        llm_factory=lambda _spec, _key: llm,
+    )
+    repl.set_draft(draft)
+
+    assert repl.run() == 0
+    # The draft was updated with the confirmed fix.
+    assert draft.pages[0].text == "the dragon was sad"
+    # The prompt surfaced to the user.
+    assert "dragn" in buf.getvalue() and "dragon" in buf.getvalue()
+
+
+def test_agent_typo_fix_eof_at_prompt_treated_as_no(tmp_path):
+    """EOF at the y/n prompt must NOT apply the change. Preserve-child-
+    voice: silence never means 'yes, rewrite the kid's words'."""
+    from src import draft as draft_mod
+
+    pdf = _write_pdf(tmp_path)
+    draft = draft_mod.from_pdf(pdf, tmp_path / ".book-gen" / "images")
+    draft.pages[0].text = "the dragn was sad"
+    original = draft.pages[0].text
+
+    llm = _StubLLM(
+        [
+            AgentResponse(
+                content=[
+                    {
+                        "type": "tool_use",
+                        "id": "t1",
+                        "name": "propose_typo_fix",
+                        "input": {
+                            "page": 1,
+                            "before": "dragn",
+                            "after": "dragon",
+                            "reason": "spelling",
+                        },
+                    }
+                ],
+                stop_reason="tool_use",
+            ),
+            AgentResponse(
+                content=[{"type": "text", "text": "Understood."}],
+                stop_reason="end_turn",
+            ),
+        ]
+    )
+
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=False, width=100, no_color=True)
+    repl = Repl(
+        # Agent greeting is disabled (no greeting message here because
+        # we start with an explicit provider+draft; but there's still
+        # the greeting turn). Actually — _AGENT_GREETING_HINT fires
+        # first. Put the tool_use response as the first LLM reply so
+        # the greeting turn picks it up, then EOF on the y/n.
+        read_line=_scripted([]),  # EOF immediately
+        console=console,
+        provider=find("anthropic"),
+        session_root=tmp_path,
+        llm_factory=lambda _spec, _key: llm,
+    )
+    repl.set_draft(draft)
+
+    assert repl.run() == 0
+    assert draft.pages[0].text == original
+
+
+def test_agent_typo_fix_user_declines_keeps_text_unchanged(tmp_path):
+    from src import draft as draft_mod
+
+    pdf = _write_pdf(tmp_path)
+    draft = draft_mod.from_pdf(pdf, tmp_path / ".book-gen" / "images")
+    draft.pages[0].text = "the dragn was sad"
+    original = draft.pages[0].text
+
+    llm = _StubLLM(
+        [
+            AgentResponse(
+                content=[
+                    {
+                        "type": "tool_use",
+                        "id": "t1",
+                        "name": "propose_typo_fix",
+                        "input": {
+                            "page": 1,
+                            "before": "dragn",
+                            "after": "dragon",
+                            "reason": "spelling",
+                        },
+                    }
+                ],
+                stop_reason="tool_use",
+            ),
+            AgentResponse(
+                content=[{"type": "text", "text": "Ok, keeping it."}],
+                stop_reason="end_turn",
+            ),
+        ]
+    )
+
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=False, width=100, no_color=True)
+    repl = Repl(
+        read_line=_scripted(["n", "/exit"]),
+        console=console,
+        provider=find("anthropic"),
+        session_root=tmp_path,
+        llm_factory=lambda _spec, _key: llm,
+    )
+    repl.set_draft(draft)
+
+    assert repl.run() == 0
+    # User said no → child's text preserved.
+    assert draft.pages[0].text == original

@@ -33,10 +33,10 @@ Phase plan lives under `docs/`. Shipped so far:
 - ✅ End-to-end: `/load` → `/title` → `/author` → `/render [--impose]` writes an A5 PDF under `.book-gen/output/` (and an A4 booklet when `--impose` is passed).
 - ✅ Plain chat: when Claude is the active model, non-slash input is forwarded to the agent, which replies in whatever language you use.
 - ✅ Agent core: drop a PDF on the command line (`child-book-generator draft.pdf`) and Claude reads the draft through a `read_draft` tool and greets you.
+- ✅ Agent edit tools: the agent can propose a typo fix (user y/n), set title / author / cover subtitle / back-cover text, choose one of the page drawings as the cover, and set per-page layouts. Page text is **only** changed via `propose_typo_fix`, bounded to 3 words and 30 chars per side — no tool rewrites the child's story.
 
 In flight / planned (see `docs/PLAN.md`):
 
-- 🚧 Agent edit tools: propose typo fixes, set metadata / cover / layout through user-approved tool calls.
 - 🚧 Agent render tool so the agent itself builds the final PDF when ready.
 - 🚧 Per-project memory so re-opening a draft doesn't re-ask every decision.
 
