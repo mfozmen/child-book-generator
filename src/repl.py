@@ -1,9 +1,10 @@
 """Interactive shell loop for child-book-generator.
 
-This covers the first slice of Phase 1 (see
-``docs/p1-01-repl-and-provider-selection.md``): the loop, the slash-command
-dispatch, and the provider picker. The agent-backed behaviour for non-slash
-input lands in Phase 2 (``docs/p2-01``).
+Owns the read loop, slash-command dispatch, provider picker, and the
+in-memory draft. Non-slash input is routed through an ``Agent`` (see
+``src/agent.py``) with a small tool set that's expanded in follow-up
+PRs (see ``docs/PLAN.md``). Slash commands are the manual escape hatch
+— the agent is the primary interface.
 """
 
 from __future__ import annotations

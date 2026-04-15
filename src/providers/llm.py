@@ -1,15 +1,19 @@
 """LLM provider catalogue and chat implementations.
 
 ``ProviderSpec`` is the picker metadata. ``LLMProvider`` is the runtime
-interface the REPL uses to send messages. Two concrete implementations:
+interface the REPL/agent uses to send messages. Two concrete implementations:
 
-- ``NullProvider`` — offline default. ``chat()`` raises, so callers must
-  gate on the active provider before dispatching.
+- ``NullProvider`` — offline default. Both ``chat()`` and ``turn()`` raise,
+  so callers must gate on the active provider before dispatching.
 - ``AnthropicProvider`` — Claude via the ``anthropic`` SDK (optional extra).
 
-Agent / tool-use wiring lands in a follow-up PR (see
-``docs/p2-01-tool-suite-and-agent-loop.md``). For now ``chat()`` is a
-single-turn call that returns plain text.
+The protocol has two entry points:
+
+- ``chat(messages) -> str`` — quick single-shot reply, used by any
+  non-agent path that just wants plain text.
+- ``turn(messages, tools) -> AgentResponse`` — one step of the agent
+  tool-use loop; returns content blocks so ``tool_use`` dispatch is
+  uniform. See ``docs/PLAN.md`` for the broader agent roadmap.
 """
 
 from __future__ import annotations
