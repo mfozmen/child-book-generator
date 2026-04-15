@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "child-book-generator"
-version = "0.2.0"
+version = "0.3.0"
 description = "Turn a child's picture-book draft PDF into a print-ready A5 book and A4 booklet, preserving the child's voice."
 readme = "README.md"
 license = { file = "LICENSE" }

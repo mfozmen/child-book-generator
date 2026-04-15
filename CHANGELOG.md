@@ -1,7 +1,92 @@
 # CHANGELOG
 
 
+## v0.3.0 (2026-04-15)
+
+### Documentation
+
+- Replace phase files with agent-first PLAN.md
+  ([`928ec6f`](https://github.com/mfozmen/child-book-generator/commit/928ec6f8c3ce1bd8210ae3809eb1b6bfaaa139bf))
+
+Drop the p0-p5 phase files that described the old slash-command-heavy roadmap. The project is
+  pivoting to an agent-first CLI — the user points at a PDF, a model walks the conversation, the
+  book comes out the other side.
+
+New docs/PLAN.md lays out the pivot as four feature PRs (#13 agent core, #14 edit tools, #15 render
+  tool, #16 project memory) plus a cleanup PR (#17) to cut anything the agent-first flow makes
+  redundant. Deferred items (keyring, OCR, illustration generation, parametric layout) are called
+  out explicitly so we don't drift back into feature creep.
+
+docs/README.md now points at PLAN.md as the single source of truth for open work.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- **agent**: Tool-use agent loop with read_draft tool
+  ([#13](https://github.com/mfozmen/child-book-generator/pull/13),
+  [`af2b5fd`](https://github.com/mfozmen/child-book-generator/commit/af2b5fd81831f80ccd608b3288b27b9164657e67))
+
+* feat(cli): accept a PDF path positionally and auto-load it
+
+First slice of the agent-first pivot (docs/PLAN.md #13). Running `child-book-generator draft.pdf`
+  now drops the user into the REPL with the draft already ingested — no manual /load step. Missing
+  or unreadable PDFs exit non-zero with a clear error.
+
+Repl grows a set_draft() seam the CLI uses to inject the draft before run() starts.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* feat(agent): tool-use agent loop with a read_draft tool
+
+First slice of the agent-first pivot (docs/PLAN.md PR #13). When a real LLM is active, non-slash
+  input now flows through an Agent that can call tools instead of a plain single-turn chat.
+
+New pieces: - src/agent.py — Agent, Tool, AgentResponse. The agent drives an LLM turn-loop using
+  Anthropic's content-block wire format: text blocks print, tool_use blocks fire handlers,
+  tool_result blocks get fed back until the LLM emits end_turn. - src/agent_tools.py —
+  read_draft_tool factory. Read-only summary of the loaded Draft; the child's text flows through
+  verbatim (preserve-child-voice is enforced by tool surface — there is no tool that edits page
+  text). - LLMProvider grows a turn(messages, tools) method. AnthropicProvider implements it with
+  the SDK's tools parameter; NullProvider raises so the offline path short-circuits before an agent
+  call.
+
+REPL wiring: - _build_agent constructs an Agent with read_draft on every provider activation (both
+  the first-run picker and /model). - _dispatch_chat now calls self._agent.say(line) instead of the
+  raw llm.chat(). - When the CLI pre-loads a draft AND a real provider is active, run() opens with a
+  scripted "greet the user and read the draft" turn. Offline stays quiet.
+
+CLI: - child-book-generator draft.pdf auto-loads the draft via repl.set_draft() before run() starts.
+  Missing / unreadable PDFs exit non-zero with a clear error.
+
+Coverage: src/agent.py, src/agent_tools.py, src/repl.py,
+
+src/providers/llm.py all 100%; total 98%. 168 tests.
+
+* docs: refresh stale module docstrings in repl.py and providers/llm.py
+
+Both docstrings pre-dated this PR and pointed at: - the old docs/p2-01-tool-suite-and-agent-loop.md
+  (consolidated into docs/PLAN.md in 928ec6f), and - "agent-backed behaviour lands in a follow-up
+  PR" / "chat() is single-turn" claims that this PR itself disproves.
+
+Rewrite both to describe the current shape: LLMProvider has chat() for quick text replies and turn()
+  for the agent tool-use loop; the REPL routes non-slash input through the agent.
+
+Addresses review feedback on #13.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.2.0 (2026-04-13)
+
+### Chores
+
+- **release**: 0.2.0 [skip ci]
+  ([`086efcc`](https://github.com/mfozmen/child-book-generator/commit/086efcc94ec8cb3c2a275acc3defb43935cd80bd))
 
 ### Features
 
