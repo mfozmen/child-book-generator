@@ -1,7 +1,72 @@
 # CHANGELOG
 
 
+## v0.6.0 (2026-04-15)
+
+### Features
+
+- **memory**: Persist the draft so the next launch resumes
+  ([#16](https://github.com/mfozmen/child-book-generator/pull/16),
+  [`82e71a3`](https://github.com/mfozmen/child-book-generator/commit/82e71a398671396856cd00719a819ff8d69e238e))
+
+* feat(memory): persist the draft so the next launch resumes
+
+Ships PR #16 from docs/PLAN.md. After every REPL turn (slash command or agent tool call) the current
+  Draft is written to .book-gen/draft.json. When the user runs 'child-book-generator draft.pdf'
+  again and a memory file exists whose source_pdf matches, the CLI restores that draft instead of
+  re-ingesting from the PDF — the agent picks up with title / author / cover / per-page layouts and
+  edits already in place and only asks about what's still missing.
+
+- src/memory.py — save_draft / load_draft + atomic write via tempfile + os.replace. Corrupt /
+  missing / non-object JSON degrades to load_draft -> None so the REPL falls back to a fresh ingest.
+  load_draft takes expected_source so memory for draft A isn't silently applied to draft B. -
+  Preserve-child-voice: whitespace on cover_subtitle and back_cover_text round-trips verbatim
+  through the serialiser. - Repl._persist_draft fires after the agent greeting turn and after every
+  _dispatch call. Write failures surface as a dim 'could not save draft memory' line and never kill
+  the session. - CLI: when given a PDF, prefer memory.load_draft over draft.from_pdf if one matches.
+  Mismatched memory is ignored.
+
+Coverage: src/memory.py, src/repl.py, src/draft.py all 100%;
+
+total 98%. 220 tests.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix(memory): harden draft persistence per review feedback on #16
+
+Addresses all eight findings. Six were correctness / crash-safety bugs; two were misleading
+  docstrings.
+
+- Path normalisation: _to_dict now resolve()s every path before serialising, and load_draft compares
+  resolved paths. `./book.pdf` and `/abs/book.pdf` referring to the same file both unlock the
+  memory; the CLI also resolve()s the argv PDF before handing it to the REPL. - fsync before
+  os.replace so a power loss between replace() and writeback can't leave a zero-byte draft.json and
+  silently wipe the session's state. - Stale tmp sweep: every save_draft removes any sibling
+  .draft.*.tmp files from a prior SIGKILL crash. Cleanup is best-effort and tolerates unlink
+  failures. - Schema versioning: serialised dict carries "version": 1. Unknown future versions fall
+  through to None instead of reading stale fields with new meanings. - ensure_ascii=False: Turkish
+  and emoji stay readable in draft.json, not escaped into \uXXXX. Aligned with preserve-child-voice
+  (the child's actual words are visible on disk). - _resolve() falls back to .absolute() on OSError
+  so Windows paths that can't be resolved still compare cleanly. - Module docstring: say "after each
+  user interaction" (covers slash commands and agent turns) and drop the misleading claim of a
+  dedicated typo-approval log — approved fixes already live in DraftPage.text, which round-trips
+  verbatim.
+
+228 tests; src/memory.py stays 100% covered.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.5.0 (2026-04-15)
+
+### Chores
+
+- **release**: 0.5.0 [skip ci]
+  ([`715bbf4`](https://github.com/mfozmen/child-book-generator/commit/715bbf49893a801fe1dab1c8b82312482ff13b62))
 
 ### Features
 
