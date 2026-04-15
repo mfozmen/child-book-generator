@@ -63,6 +63,12 @@ def _check_anthropic(spec: ProviderSpec, api_key: str) -> None:
     # Cheapest call that still exercises authentication. If the key is
     # wrong the server returns 401, which the SDK surfaces as
     # AuthenticationError once the round-trip completes.
+    auth_error = getattr(anthropic, "AuthenticationError", Exception)
+    # ``APIError`` is the SDK's parent for network / billing / rate-limit /
+    # 4xx / 5xx failures. Catching it means "key is fine, call couldn't
+    # complete" surfaces as a clean message instead of a traceback that
+    # crashes the REPL mid-prompt.
+    api_error = getattr(anthropic, "APIError", Exception)
     try:
         client = anthropic.Anthropic(
             api_key=api_key,
@@ -73,8 +79,13 @@ def _check_anthropic(spec: ProviderSpec, api_key: str) -> None:
             max_tokens=1,
             messages=[{"role": "user", "content": "ping"}],
         )
-    except getattr(anthropic, "AuthenticationError", Exception) as e:
+    except auth_error as e:
         raise KeyValidationError(f"Anthropic rejected the key: {e}") from e
+    except api_error as e:
+        # Billing ("credit balance too low"), rate limits, 5xx — the key
+        # itself may well be valid. Surface the server's message so the
+        # user can act on it (add credits, wait, etc.).
+        raise KeyValidationError(f"Anthropic call failed: {e}") from e
 
 
 # Fallback when a spec predates ``validation_model``. Keep in sync with

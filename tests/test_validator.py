@@ -53,6 +53,34 @@ def test_anthropic_rejects_key_when_sdk_signals_auth_error(monkeypatch):
         validator.validate_key(find("anthropic"), "sk-bad")
 
 
+def test_anthropic_billing_error_surfaces_as_key_validation_error(monkeypatch):
+    """A BadRequestError from the SDK (e.g. 'credit balance too low') is
+    NOT an auth failure — the key is valid, the account just can't pay
+    for the call. But if we don't catch it, the traceback crashes the
+    REPL. Catch it and surface the server's message so the user knows
+    to add credits."""
+    fake = _make_fake_anthropic(raise_error="billing")
+    monkeypatch.setitem(__import__("sys").modules, "anthropic", fake)
+
+    with pytest.raises(validator.KeyValidationError) as exc:
+        validator.validate_key(find("anthropic"), "sk-fine-but-broke")
+
+    assert "credit balance" in str(exc.value).lower()
+
+
+def test_anthropic_generic_api_error_does_not_crash(monkeypatch):
+    """Any anthropic.APIError subclass the SDK throws (rate limits,
+    server 5xx, etc.) must come out as KeyValidationError so the REPL
+    can recover instead of dumping a traceback to the user."""
+    fake = _make_fake_anthropic(raise_error="rate_limit")
+    monkeypatch.setitem(__import__("sys").modules, "anthropic", fake)
+
+    with pytest.raises(validator.KeyValidationError) as exc:
+        validator.validate_key(find("anthropic"), "sk-test")
+
+    assert "rate limit" in str(exc.value).lower()
+
+
 def test_anthropic_accepts_key_when_sdk_returns_normally(monkeypatch):
     fake = _make_fake_anthropic(raise_error=None)
     monkeypatch.setitem(__import__("sys").modules, "anthropic", fake)
@@ -82,10 +110,16 @@ def test_anthropic_ping_sends_timeout_and_spec_model(monkeypatch):
 
 
 def _make_fake_anthropic(*, raise_error):
-    """Build a module-shaped stub with Anthropic client and AuthenticationError."""
+    """Build a module-shaped stub with Anthropic client and error types."""
     import types
 
-    class AuthenticationError(Exception):
+    class APIError(Exception):
+        pass
+
+    class AuthenticationError(APIError):
+        pass
+
+    class BadRequestError(APIError):
         pass
 
     class Messages:
@@ -96,6 +130,12 @@ def _make_fake_anthropic(*, raise_error):
             self.last_create_kwargs = kwargs
             if raise_error == "auth":
                 raise AuthenticationError("bad key")
+            if raise_error == "billing":
+                raise BadRequestError(
+                    "Your credit balance is too low to access the Anthropic API."
+                )
+            if raise_error == "rate_limit":
+                raise APIError("rate limit exceeded")
             return types.SimpleNamespace(content=[types.SimpleNamespace(text="ok")])
 
     class Client:
@@ -110,5 +150,7 @@ def _make_fake_anthropic(*, raise_error):
 
     module = types.ModuleType("anthropic")
     module.Anthropic = Client
+    module.APIError = APIError
     module.AuthenticationError = AuthenticationError
+    module.BadRequestError = BadRequestError
     return module

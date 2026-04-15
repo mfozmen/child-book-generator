@@ -43,7 +43,7 @@ def test_successful_key_validation_saves_to_keyring(tmp_path):
 
     repl, _ = _make(
         tmp_path,
-        ["2", "/exit"],  # pick Anthropic
+        ["1", "/exit"],  # pick Anthropic
         secrets=["sk-ant-good"],
         validate=validate,
     )
@@ -172,7 +172,7 @@ def test_guidance_omits_browser_line_on_headless(tmp_path, monkeypatch):
 
     repl, buf = _make(
         tmp_path,
-        ["2"],
+        ["1"],  # pick Anthropic
         secrets=[],
         validate=lambda _s, _k: None,
     )
@@ -198,7 +198,7 @@ def test_guidance_surfaces_provider_url_and_steps(tmp_path, monkeypatch):
 
     repl, buf = _make(
         tmp_path,
-        ["2"],  # pick Anthropic, then EOF on the key prompt
+        ["1"],  # pick Anthropic, then EOF on the key prompt
         secrets=[],
         validate=lambda _s, _k: None,
     )
