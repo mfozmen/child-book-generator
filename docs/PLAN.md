@@ -32,11 +32,17 @@ All five PRs from the original plan merged:
 
 ## Next up
 
+Items below came out of the first real end-to-end test (Yavru Dinozor). Listed roughly in "most visible to the user" order.
+
+- **Proper cover layout.** Current `draw_cover` crams title + author + image into an upper-half / lower-half split; visually the drawing and the text both feel squeezed. Grow the renderer so covers can be one of a few templates: full-bleed drawing with a title-band overlay (like existing `image-full` pages but tuned for covers — larger type, bottom band at ~40% opacity, author tucked to a corner), or letterboxed drawing with the title centred above. Agent tool: extend `set_cover` to take an optional `style` arg (`full-bleed` / `framed`) and the `Draft` / `Book` schemas gain a `cover.style` field.
+- **Agent proposes layouts first, then confirms with the user.** Today `choose_layout` is per-page and the agent asks the user to decide the rhythm. Better UX: after metadata is settled, agent calls `choose_layout` for every page in one shot, prints a summary table, and asks a single yes/no "approve this rhythm, or want changes?" question. Matches how it already handled the test when the user said "sana bırakıyorum".
+- **Auto-open renderings + clear output paths.** After `render_book` succeeds, the agent should (a) print the *absolute* paths of every file it wrote, (b) open the A5 PDF in the user's default viewer (`os.startfile` on Windows, `open` on macOS, `xdg-open` on Linux). The user had to hunt for the files this session.
+- **AI cover generation as an optional tool.** Tool: `generate_cover_illustration(prompt, style)` that calls a real image provider (OpenAI `gpt-image-1` / Stability / Replicate — pick one to start), saves to `.book-gen/images/cover-*.png`, and hands the result to `set_cover`. Agent offers this when the user doesn't want to reuse a page's drawing. Requires a new `ImageProvider` protocol + a provider adapter + a pricing-aware prompt to the user (cost per image).
 - **More LLM providers — real `chat()` + `turn()` for Gemini / OpenAI / Ollama.** Today only Anthropic has a working implementation; the others are in the picker but fall back to `NullProvider`. Gemini is the priority because its free tier (1.5k req/day, tool-use capable) lets users run Littlepress without a credit card. Ollama enables fully offline use. One PR per provider keeps reviews small.
 
 ## Explicitly deferred (don't build unless asked)
 
-- **Illustration generation.** Separate project.
+- **Per-page AI illustration generation.** Cover-only generation (in Next up) is the first step. Per-page is bigger — style consistency across pages, re-prompt on user feedback. Defer until the cover tool ships.
 - **OCR for handwritten scans.** Current PDFs have extractable text; add when a real draft needs it.
 - **Full parametric layout engine.** `choose_layout` applies the skill's rule 1 and simple aspect-ratio branching; parametric splits can wait.
 
