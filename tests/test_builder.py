@@ -449,6 +449,27 @@ def test_cover_portrait_frame_renders_title_author_and_drawing(tmp_path):
     assert "Yusuf" in cover_text
 
 
+def test_cover_portrait_frame_renders_subtitle(tmp_path):
+    """``portrait-frame`` must render the subtitle between the title
+    and the frame — it was originally omitted, contradicting the skill's
+    "subtitle supported on every template" contract."""
+    img = _cover_image(tmp_path)
+    book = Book(
+        title="Owls",
+        author="Yusuf",
+        cover=Cover(image=img.name, subtitle="a night adventure", style="portrait-frame"),
+        back_cover=BackCover(),
+        pages=[Page(text="x", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+    out = tmp_path / "book.pdf"
+    build_pdf(book, out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    assert "a night adventure" in cover_text
+
+
 def test_cover_title_band_top_renders_title_author_and_drawing(tmp_path):
     """``title-band-top``: a coloured band at the top holds the title;
     the drawing fills the space below; author at the bottom."""
