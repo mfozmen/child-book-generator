@@ -134,6 +134,9 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
   ([`95e2a6c`](https://github.com/mfozmen/littlepress-ai/commit/95e2a6c8c37e9d9f02ae5a52dc0d2a8d47121767))
 
 - **release**: 1.1.0 [skip ci]
+  ([`801b8d1`](https://github.com/mfozmen/littlepress-ai/commit/801b8d1866937ceaa049d0663feb028d0e4f0b06))
+
+- **release**: 1.1.0 [skip ci]
   ([`0b4b9ae`](https://github.com/mfozmen/littlepress-ai/commit/0b4b9aeb8d2ff8108e99beea1d883dfc8aed3732))
 
 - **release**: 1.1.0 [skip ci]
@@ -182,6 +185,35 @@ Capture the tag name up front (git tag --points-at HEAD) and re-point it with gi
 Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Documentation
+
+- Add layout-variety nudge to the plan
+  ([`91738f8`](https://github.com/mfozmen/littlepress-ai/commit/91738f8eb7275b6f20aea57b07331a0f506399ea))
+
+Yavru Dinozor test had a tidy but over-regular rhythm. The skill already says "no same layout 3 in a
+  row, cap image-full at 30%", but the agent never sees that — .claude/skills/ is Claude Code
+  context, not LLM system prompt. Fix idea noted in the plan: bake the rhythm rules into
+  choose_layout's tool description and pass neighbour context in the tool input.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Capture four issues from the first end-to-end test
+  ([`1fc14da`](https://github.com/mfozmen/littlepress-ai/commit/1fc14daf2230a77195a244aa6613cc181ba0d051))
+
+The Yavru Dinozor test surfaced a handful of concrete gaps in the post-render UX and the cover page.
+  Record them in Next up so the next PR has a clear target:
+
+- Cover layout is cramped — the half-page split between title band and drawing makes both feel
+  squeezed. Need a full-bleed / framed template pair. - Agent asks the user to design the layout
+  rhythm; it should propose a rhythm itself and just ask to approve. - After render_book the user
+  had to hunt for the output files — the agent should print the absolute paths and open the A5 in
+  the system viewer. - AI cover generation as a new tool (ImageProvider + generate_
+  cover_illustration), opt-in and priced.
+
+Per-page illustration generation moves up into the deferred section (follow-up to cover generation).
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 ### Features
 
