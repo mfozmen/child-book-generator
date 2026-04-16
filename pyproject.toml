@@ -37,6 +37,11 @@ dependencies = [
   # Bundled by default so `pip install littlepress-ai` just works —
   # the app talks to Claude out of the box; no separate extra to remember.
   "anthropic>=0.30.0",
+  # Gemini provider — Google Gen AI SDK. Bundled by default because
+  # Gemini's free tier (1.5k req/day, tool-use capable) is the main
+  # no-credit-card on-ramp for new users; an optional extra would
+  # keep that barrier in place.
+  "google-genai>=0.2.0",
   # Stores the Anthropic key in the OS credential manager so the user
   # only pastes it once. Cross-platform (Windows, macOS, Linux).
   "keyring>=24.0.0",

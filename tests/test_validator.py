@@ -16,11 +16,10 @@ def test_ollama_has_nothing_to_validate():
     validator.validate_key(find("ollama"), "")
 
 
-def test_openai_and_google_are_unchecked_until_their_sdks_are_wired():
-    # Key-requiring providers without a validator yet must pass through —
-    # otherwise the picker would block users from choosing them.
+def test_openai_is_unchecked_until_its_sdk_is_wired():
+    # OpenAI still has no validator; the picker shouldn't block
+    # users from choosing it while that path is in flight.
     validator.validate_key(find("openai"), "sk-anything")
-    validator.validate_key(find("google"), "key-anything")
 
 
 def test_anthropic_without_sdk_raises_provider_unavailable(monkeypatch):
@@ -110,6 +109,152 @@ def test_anthropic_ping_sends_timeout_and_spec_model(monkeypatch):
     create_kwargs = fake.Anthropic.last_client.messages.last_create_kwargs
     assert client_timeout is not None and client_timeout > 0 and client_timeout <= 30
     assert create_kwargs["model"] == spec.validation_model
+
+
+# --- Google / Gemini validator ----------------------------------------
+
+
+def _install_fake_google(monkeypatch, *, raise_error=None):
+    """Stub ``google.genai`` with a Client whose ``generate_content``
+    either returns a plain response or raises the requested error.
+
+    ``raise_error`` options: "auth" → message contains "API key not
+    valid"; "billing" → message without any auth marker (classified
+    as transient); "status_401" → exception with status_code=401;
+    None → success.
+    """
+    import sys
+    import types as pytypes
+
+    class AuthError(Exception):
+        pass
+
+    class Models:
+        def __init__(self):
+            self.last_kwargs: dict = {}
+
+        def generate_content(self, **kwargs):
+            self.last_kwargs = kwargs
+            if raise_error == "auth":
+                raise AuthError("API key not valid. Please pass a valid API key.")
+            if raise_error == "billing":
+                raise RuntimeError("quota exceeded for project")
+            if raise_error == "status_401":
+                err = RuntimeError("unauthenticated")
+                err.status_code = 401
+                raise err
+            return pytypes.SimpleNamespace(text="pong")
+
+    class Client:
+        last_client: "Client | None" = None
+
+        def __init__(self, *, api_key, **kw):
+            self.api_key = api_key
+            self.models = Models()
+            Client.last_client = self
+
+    genai_mod = pytypes.ModuleType("google.genai")
+    genai_mod.Client = Client
+    genai_mod.types = pytypes.ModuleType("google.genai.types")
+
+    google_mod = pytypes.ModuleType("google")
+    google_mod.genai = genai_mod
+
+    monkeypatch.setitem(sys.modules, "google", google_mod)
+    monkeypatch.setitem(sys.modules, "google.genai", genai_mod)
+    return genai_mod
+
+
+def test_google_without_sdk_raises_provider_unavailable(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "google", None)
+    monkeypatch.setitem(sys.modules, "google.genai", None)
+
+    with pytest.raises(validator.ProviderUnavailable) as exc:
+        validator.validate_key(find("google"), "key")
+    msg = str(exc.value).lower()
+    assert "google-genai" in msg and "install" in msg
+
+
+def test_google_rejects_key_on_api_key_not_valid_message(monkeypatch):
+    _install_fake_google(monkeypatch, raise_error="auth")
+
+    with pytest.raises(validator.KeyValidationError):
+        validator.validate_key(find("google"), "key-bad")
+
+
+def test_google_rejects_key_on_401_status(monkeypatch):
+    _install_fake_google(monkeypatch, raise_error="status_401")
+
+    with pytest.raises(validator.KeyValidationError):
+        validator.validate_key(find("google"), "key-bad")
+
+
+def test_google_rejects_key_on_client_error_400(monkeypatch):
+    """Google's 'bad key' surface is HTTP 400 with body 'API key not
+    valid' — classified as auth via the SDK's ClientError + status
+    combination. A status-alone check would let 400s look transient;
+    a class-alone check would miss 400s that happen to be billing."""
+    import sys
+    import types as pytypes
+
+    class ClientError(Exception):
+        def __init__(self, message, status_code):
+            super().__init__(message)
+            self.status_code = status_code
+
+    errors_mod = pytypes.ModuleType("google.genai.errors")
+    errors_mod.ClientError = ClientError
+
+    class Models:
+        def generate_content(self, **kwargs):
+            raise ClientError("Provided credential is invalid", status_code=400)
+
+    class Client:
+        def __init__(self, *, api_key, **kw):
+            self.models = Models()
+
+    genai_mod = pytypes.ModuleType("google.genai")
+    genai_mod.Client = Client
+    genai_mod.types = pytypes.ModuleType("google.genai.types")
+    genai_mod.errors = errors_mod
+
+    google_mod = pytypes.ModuleType("google")
+    google_mod.genai = genai_mod
+
+    monkeypatch.setitem(sys.modules, "google", google_mod)
+    monkeypatch.setitem(sys.modules, "google.genai", genai_mod)
+    monkeypatch.setitem(sys.modules, "google.genai.errors", errors_mod)
+
+    with pytest.raises(validator.KeyValidationError):
+        validator.validate_key(find("google"), "key-bad")
+
+
+def test_google_billing_or_quota_error_is_transient(monkeypatch):
+    """Quota / billing failures mean the key is valid — don't delete
+    it from the keyring on resume."""
+    _install_fake_google(monkeypatch, raise_error="billing")
+
+    with pytest.raises(validator.TransientValidationError):
+        validator.validate_key(find("google"), "key-good")
+
+
+def test_google_accepts_key_when_call_returns_normally(monkeypatch):
+    _install_fake_google(monkeypatch, raise_error=None)
+
+    # Must not raise.
+    validator.validate_key(find("google"), "key-good")
+
+
+def test_google_ping_uses_spec_model(monkeypatch):
+    genai_mod = _install_fake_google(monkeypatch, raise_error=None)
+
+    spec = find("google")
+    validator.validate_key(spec, "key")
+
+    sent = genai_mod.Client.last_client.models.last_kwargs
+    assert sent["model"] == spec.validation_model
 
 
 def _make_fake_anthropic(*, raise_error):

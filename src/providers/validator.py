@@ -109,6 +109,76 @@ def _check_anthropic(spec: ProviderSpec, api_key: str) -> None:
 _DEFAULT_VALIDATION_MODEL = "claude-haiku-4-5-20251001"
 
 
+def _check_google(spec: ProviderSpec, api_key: str) -> None:
+    """Ping Gemini with the smallest possible ``generate_content`` call.
+
+    Classification is deliberately belt-and-suspenders: we check for a
+    ``ClientError`` instance first (the SDK's class-based signal for
+    4xx responses) and fall back to HTTP-status + message-substring
+    heuristics because Google's "bad key" surface is HTTP 400 with
+    body ``"API key not valid"`` — a status_code of 400 would otherwise
+    look transient, and an English-only substring match would miss a
+    localised reword. Either channel alone is fragile; together they
+    hold across SDK versions and API re-phrasings.
+    """
+    try:
+        from google import genai  # type: ignore[import-not-found]
+    except ImportError as e:
+        raise ProviderUnavailable(
+            "The 'google-genai' SDK is missing from this install. Try: "
+            "pip install --force-reinstall littlepress-ai"
+        ) from e
+
+    client_error_cls = _google_client_error_class()
+
+    try:
+        client = genai.Client(api_key=api_key)
+        client.models.generate_content(
+            model=spec.validation_model or _GOOGLE_DEFAULT_VALIDATION_MODEL,
+            contents="ping",
+        )
+    except Exception as e:  # noqa: BLE001 — classify across SDK versions
+        if _is_google_auth_error(e, client_error_cls):
+            raise KeyValidationError(f"Google rejected the key: {e}") from e
+        raise TransientValidationError(f"Gemini call failed: {e}") from e
+
+
+def _google_client_error_class():
+    """Lazy-import the SDK's ``ClientError`` so ``isinstance`` works.
+    Returns ``None`` if the SDK doesn't expose it; the caller falls
+    back to message-based heuristics."""
+    try:
+        from google.genai import errors as genai_errors  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    return getattr(genai_errors, "ClientError", None)
+
+
+def _is_google_auth_error(exc: Exception, client_error_cls) -> bool:
+    """Heuristics for classifying a Gemini error as an auth failure.
+
+    - If the SDK exposes ``ClientError``, any ClientError with status
+      400/401/403 counts as auth (Gemini uses 400 for bad keys).
+    - Fall back to message substrings + HTTP status for SDK versions
+      that don't surface a class hierarchy.
+    """
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if client_error_cls is not None and isinstance(exc, client_error_cls):
+        if status in (400, 401, 403):
+            return True
+    msg = str(exc).lower()
+    return (
+        "api key" in msg
+        or "unauthenticated" in msg
+        or "permission" in msg
+        or status in (401, 403)
+    )
+
+
+_GOOGLE_DEFAULT_VALIDATION_MODEL = "gemini-2.5-flash"
+
+
 _CHECKERS = {
     "anthropic": _check_anthropic,
+    "google": _check_google,
 }

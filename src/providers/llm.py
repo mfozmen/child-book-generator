@@ -81,6 +81,7 @@ SPECS: tuple[ProviderSpec, ...] = (
         "google",
         "Gemini (Google)",
         requires_api_key=True,
+        validation_model="gemini-2.5-flash",
         key_url="https://aistudio.google.com/apikey",
         key_steps=(
             "Sign in to Google AI Studio.",
@@ -244,14 +245,269 @@ def _block_to_dict(block) -> dict:
     return {"type": btype}
 
 
+# Gemini default model — 2.5 Flash is tool-use capable and has a
+# generous free tier (1.5k req/day at time of writing), which is the
+# whole reason for adding this provider: users can run Littlepress
+# without a credit card.
+_GOOGLE_CHAT_MODEL = "gemini-2.5-flash"
+# Default timeout matches the Anthropic chat timeout — 60 s leaves room
+# for a normal reply while still surfacing a stuck network quickly
+# instead of letting the SDK's multi-minute default hang the REPL.
+# The Gen AI SDK expects milliseconds in ``HttpOptions(timeout=...)``.
+_GOOGLE_CHAT_TIMEOUT_MS = 60_000
+
+
+class GoogleProvider:
+    """Gemini (Google Gen AI) chat + tool-use. SDK import is lazy so
+    users on another provider don't need google-genai installed.
+
+    Tool-use translation happens at this boundary — the agent is
+    written against Anthropic's content-block format, so ``turn``
+    converts Anthropic-style messages to Gemini Contents on the way
+    out and Gemini response parts back to content blocks on the way
+    in. Anything the agent doesn't understand (unknown part types)
+    is dropped rather than surfaced; a future iteration can widen
+    the translator.
+
+    Supported tool input_schema subset (forwarded as Gemini
+    ``FunctionDeclaration.parameters``): JSON Schema types, properties,
+    required, enum, description, array items, object nesting. Features
+    google-genai doesn't reliably understand — ``oneOf`` / ``anyOf``,
+    ``$ref``, ``additionalProperties``, ``const``, ``default`` — would
+    either be dropped silently or raise at call time; the project's
+    current tools don't use any of those.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        model: str = _GOOGLE_CHAT_MODEL,
+    ) -> None:
+        self._api_key = api_key
+        self._model = model
+
+    def _client(self, genai, gtypes):
+        # Centralised so chat() and turn() can't drift on the timeout
+        # hedge — both build the client the same way.
+        return genai.Client(
+            api_key=self._api_key,
+            http_options=gtypes.HttpOptions(timeout=_GOOGLE_CHAT_TIMEOUT_MS),
+        )
+
+    def chat(self, messages: list[Message]) -> str:
+        genai, gtypes = _import_google_genai()
+        client = self._client(genai, gtypes)
+        contents = _messages_to_gemini_contents(messages, gtypes)
+        response = client.models.generate_content(
+            model=self._model,
+            contents=contents,
+        )
+        # ``response.text`` is a property that *raises* ``ValueError``
+        # when there are no text parts (SAFETY block, function-only
+        # response). Compose from the candidates ourselves so a blocked
+        # prompt returns an empty string instead of a traceback.
+        return _collect_text_from_candidates(response)
+
+    def turn(self, messages: list[dict], tools: list) -> "object":
+        genai, gtypes = _import_google_genai()
+        from src.agent import AgentResponse
+
+        client = self._client(genai, gtypes)
+        contents = _messages_to_gemini_contents(messages, gtypes)
+
+        kwargs: dict = {"model": self._model, "contents": contents}
+        if tools:
+            fn_decls = [
+                gtypes.FunctionDeclaration(
+                    name=t.name,
+                    description=t.description,
+                    parameters=t.input_schema,
+                )
+                for t in tools
+            ]
+            kwargs["config"] = gtypes.GenerateContentConfig(
+                tools=[gtypes.Tool(function_declarations=fn_decls)],
+            )
+
+        response = client.models.generate_content(**kwargs)
+        blocks, stop_reason = _gemini_response_to_blocks(response)
+        return AgentResponse(content=blocks, stop_reason=stop_reason)
+
+
+def _collect_text_from_candidates(response) -> str:
+    """Safe text extraction from a Gemini response. Returns the
+    concatenated text across the first candidate's parts, or empty
+    string if the response has no text (e.g. SAFETY-blocked)."""
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        return ""
+    content = getattr(candidates[0], "content", None)
+    parts = getattr(content, "parts", None) or []
+    return "".join(getattr(p, "text", None) or "" for p in parts)
+
+
+def _import_google_genai():
+    """Lazy import of the Gen AI SDK — matches the Anthropic pattern so
+    users who only need another provider don't have to install
+    google-genai."""
+    try:
+        from google import genai  # type: ignore[import-not-found]
+        from google.genai import types as gtypes  # type: ignore[import-not-found]
+    except ImportError as e:
+        raise ImportError(
+            "The 'google-genai' SDK is missing. Try: "
+            "pip install --force-reinstall littlepress-ai"
+        ) from e
+    if genai is None or gtypes is None:
+        raise ImportError("google-genai SDK is not available")
+    return genai, gtypes
+
+
+def _messages_to_gemini_contents(messages: list[dict], gtypes) -> list:
+    """Translate Anthropic-style messages to a list of Gemini Contents.
+
+    - Plain-string user / assistant messages → text Parts under
+      ``user`` / ``model`` roles.
+    - Assistant messages carrying ``tool_use`` blocks → ``function_call``
+      Parts under ``model``.
+    - User messages carrying ``tool_result`` blocks → ``function_response``
+      Parts under the ``tool`` role. We look up the function name from
+      the preceding ``tool_use`` block (Anthropic's ``tool_result``
+      carries only the ``tool_use_id``; Gemini needs the name).
+    """
+    id_to_name: dict[str, str] = {}
+    for msg in messages:
+        if msg.get("role") == "assistant" and isinstance(msg.get("content"), list):
+            for block in msg["content"]:
+                if block.get("type") == "tool_use" and "id" in block:
+                    id_to_name[block["id"]] = block.get("name", "")
+
+    contents = []
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content")
+        if isinstance(content, str):
+            gemini_role = "user" if role == "user" else "model"
+            contents.append(
+                gtypes.Content(
+                    role=gemini_role,
+                    parts=[gtypes.Part.from_text(text=content)],
+                )
+            )
+            continue
+        parts: list = []
+        has_tool_result = False
+        for block in content or []:
+            btype = block.get("type")
+            if btype == "text":
+                parts.append(gtypes.Part.from_text(text=block.get("text", "")))
+            elif btype == "tool_use":
+                parts.append(
+                    gtypes.Part(
+                        function_call=gtypes.FunctionCall(
+                            name=block.get("name", ""),
+                            args=block.get("input") or {},
+                        )
+                    )
+                )
+            elif btype == "tool_result":
+                has_tool_result = True
+                tool_use_id = block.get("tool_use_id", "")
+                name = id_to_name.get(tool_use_id, "")
+                # Construct FunctionResponse directly so we can forward
+                # the id. Without it, parallel same-name calls lose
+                # correlation — Gemini can't tell which function_call
+                # this response pairs with.
+                parts.append(
+                    gtypes.Part(
+                        function_response=gtypes.FunctionResponse(
+                            id=tool_use_id,
+                            name=name,
+                            response={"result": block.get("content", "")},
+                        )
+                    )
+                )
+        if has_tool_result:
+            gemini_role = "tool"
+        elif role == "user":
+            gemini_role = "user"
+        else:
+            gemini_role = "model"
+        contents.append(gtypes.Content(role=gemini_role, parts=parts))
+    return contents
+
+
+def _gemini_response_to_blocks(response) -> tuple[list[dict], str]:
+    """Translate Gemini ``generate_content`` response → Anthropic-style
+    blocks + stop_reason the agent understands.
+
+    Non-STOP finish reasons (SAFETY, RECITATION, MAX_TOKENS) get a
+    synthetic text block telling the user why the model stopped —
+    otherwise the REPL just goes silent and the user has no way to
+    know the prompt was blocked. Stop reason stays ``end_turn`` since
+    the agent has only two stop signals today.
+    """
+    import uuid
+
+    blocks: list[dict] = []
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        return blocks, "end_turn"
+    candidate = candidates[0]
+    content = getattr(candidate, "content", None)
+    any_tool_use = False
+    for part in getattr(content, "parts", None) or []:
+        text = getattr(part, "text", None)
+        if text:
+            blocks.append({"type": "text", "text": text})
+            continue
+        fc = getattr(part, "function_call", None)
+        if fc is None:
+            continue
+        any_tool_use = True
+        # Gemini doesn't always return an id on function calls. Synth
+        # one so the agent can correlate tool_use with its tool_result
+        # when it fires back in the next turn.
+        fc_id = getattr(fc, "id", None) or f"toolu_{uuid.uuid4().hex[:12]}"
+        blocks.append(
+            {
+                "type": "tool_use",
+                "id": fc_id,
+                "name": getattr(fc, "name", ""),
+                "input": dict(getattr(fc, "args", None) or {}),
+            }
+        )
+    # Surface non-STOP finish reasons so a blocked prompt isn't silent.
+    finish_reason = getattr(candidate, "finish_reason", None)
+    if (
+        finish_reason is not None
+        and str(finish_reason).upper() not in {"STOP", "FINISH_REASON_UNSPECIFIED"}
+        and not any_tool_use
+    ):
+        blocks.append(
+            {
+                "type": "text",
+                "text": (
+                    f"[Gemini stopped with reason: {finish_reason}. "
+                    "No further output was generated — try rephrasing "
+                    "or splitting the prompt.]"
+                ),
+            }
+        )
+    return blocks, ("tool_use" if any_tool_use else "end_turn")
+
+
 def create_provider(spec: ProviderSpec, api_key: str | None) -> LLMProvider:
     """Return the chat implementation for ``spec``.
 
-    Providers that haven't grown a real ``chat()`` yet (OpenAI, Google,
-    Ollama) fall back to ``NullProvider`` so the REPL keeps running — the
-    user sees the offline placeholder for non-slash input until those
+    Providers that haven't grown a real ``chat()`` yet (OpenAI, Ollama)
+    fall back to ``NullProvider`` so the REPL keeps running — the user
+    sees the offline placeholder for non-slash input until those
     providers land.
     """
     if spec.name == "anthropic":
         return AnthropicProvider(api_key or "")
+    if spec.name == "google":
+        return GoogleProvider(api_key or "")
     return NullProvider()
