@@ -30,6 +30,10 @@ dependencies = [
   "Pillow>=10.0.0",
   "pypdf>=4.0.0",
   "rich>=13.0.0",
+  # Drives the interactive prompt + slash-menu auto-completion. Swaps
+  # in for builtins.input in the CLI; unit tests still inject their own
+  # read_line callback so they don't need a TTY.
+  "prompt_toolkit>=3.0.0",
   # Bundled by default so `pip install littlepress-ai` just works —
   # the app talks to Claude out of the box; no separate extra to remember.
   "anthropic>=0.30.0",

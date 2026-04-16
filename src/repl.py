@@ -9,6 +9,8 @@ PRs (see ``docs/PLAN.md``). Slash commands are the manual escape hatch
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from pathlib import Path
 from typing import Callable
 
@@ -45,6 +47,21 @@ from src.providers.validator import (
 
 
 SlashHandler = Callable[["Repl", str], int | None]
+
+
+@dataclass(frozen=True)
+class SlashCommand:
+    """A single REPL slash command.
+
+    ``name`` is the command word (without the leading ``/``).
+    ``description`` is a one-line user-facing string that's printed by
+    ``/help`` and surfaced as completion meta-text in the ``/`` menu.
+    ``handler`` is the REPL callback that actually implements it.
+    """
+
+    name: str
+    description: str
+    handler: SlashHandler
 
 
 def _unquote(s: str) -> str:
@@ -129,17 +146,11 @@ class Repl:
         )
         self._draft: Draft | None = None
         self._agent: Agent = self._build_agent()
-        self._commands: dict[str, SlashHandler] = {
-            "help": _cmd_help,
-            "exit": _cmd_exit,
-            "model": _cmd_model,
-            "load": _cmd_load,
-            "pages": _cmd_pages,
-            "title": _cmd_title,
-            "author": _cmd_author,
-            "render": _cmd_render,
-            "logout": _cmd_logout,
-        }
+        # Commands are stored in a dict for fast dispatch, but the
+        # iteration order (= /help print order and completion order)
+        # follows SLASH_COMMANDS — the workflow order the user actually
+        # goes through (ingest → inspect → metadata → render → session).
+        self._commands: dict[str, SlashCommand] = {c.name: c for c in SLASH_COMMANDS}
 
     @property
     def provider(self) -> ProviderSpec | None:
@@ -166,7 +177,7 @@ class Repl:
         return root / ".book-gen" / "images"
 
     @property
-    def commands(self) -> dict[str, SlashHandler]:
+    def commands(self) -> dict[str, SlashCommand]:
         return self._commands
 
     def run(self) -> int:
@@ -193,6 +204,12 @@ class Repl:
                 raw = self._read()
             except EOFError:
                 return 0
+            except KeyboardInterrupt:
+                # Ctrl-C clears the current line and re-prompts — same
+                # feel as Claude Code / most shells. Exit requires
+                # Ctrl-D (EOF) or /exit.
+                self._console.print()
+                continue
             line = raw.strip()
             if not line:
                 continue
@@ -245,7 +262,7 @@ class Repl:
         self._console.print(f"[yellow]{prompt}[/yellow] (y/n)")
         try:
             answer = self._read().strip().lower()
-        except EOFError:
+        except (EOFError, KeyboardInterrupt):
             return False
         return answer in {"y", "yes", "evet", "e"}
 
@@ -392,7 +409,7 @@ class Repl:
         while True:
             try:
                 api_key = self._read_secret().strip()
-            except EOFError:
+            except (EOFError, KeyboardInterrupt):
                 return None
             if self._validate is None:
                 return api_key
@@ -439,7 +456,7 @@ class Repl:
                 )
                 try:
                     self._read()
-                except EOFError:
+                except (EOFError, KeyboardInterrupt):
                     return "abort"
                 # Loop and re-validate with the same api_key.
 
@@ -447,7 +464,7 @@ class Repl:
         while True:
             try:
                 raw = self._read()
-            except EOFError:
+            except (EOFError, KeyboardInterrupt):
                 return None
             raw = raw.strip()
             if not raw:
@@ -515,11 +532,11 @@ class Repl:
     def _dispatch_slash(self, line: str) -> int | None:
         parts = line[1:].split(maxsplit=1)
         name = parts[0] if parts else ""
-        handler = self._commands.get(name)
-        if handler is None:
+        cmd = self._commands.get(name)
+        if cmd is None:
             self._console.print(f"[red]Unknown command:[/red] {line}")
             return None
-        return handler(self, parts[1] if len(parts) > 1 else "")
+        return cmd.handler(self, parts[1] if len(parts) > 1 else "")
 
 
 def _cmd_exit(_repl: Repl, _args: str) -> int:
@@ -528,8 +545,13 @@ def _cmd_exit(_repl: Repl, _args: str) -> int:
 
 def _cmd_help(repl: Repl, _args: str) -> None:
     repl._console.print("Commands:")
-    for name in sorted(repl.commands):
-        repl._console.print(f"  [cyan]/{name}[/cyan]")
+    # Iterate in the catalog's workflow order, not alphabetically — the
+    # user sees the list in the order they'd typically use the commands.
+    width = max(len(c.name) for c in repl.commands.values()) + 1
+    for cmd in repl.commands.values():
+        repl._console.print(
+            f"  [cyan]/{cmd.name:<{width}}[/cyan] {cmd.description}"
+        )
     return None
 
 
@@ -706,3 +728,20 @@ def _cmd_load(repl: Repl, args: str) -> None:
         f"({with_images} with an embedded illustration)."
     )
     return None
+
+
+# Registration-order drives /help output and the /-menu completer. Keep
+# this in workflow sequence: ingest → inspect → metadata → render →
+# session / auth. Adding a new command = append a row here; no other
+# plumbing to touch.
+SLASH_COMMANDS: tuple[SlashCommand, ...] = (
+    SlashCommand("load",   "Ingest a PDF draft into the session",                 _cmd_load),
+    SlashCommand("pages",  "List pages in the loaded draft with a text preview",  _cmd_pages),
+    SlashCommand("title",  "Show or set the book's title",                        _cmd_title),
+    SlashCommand("author", "Show or set the book's author",                       _cmd_author),
+    SlashCommand("render", "Build the A5 PDF (add --impose for the A4 booklet)",  _cmd_render),
+    SlashCommand("model",  "Switch the active LLM provider",                      _cmd_model),
+    SlashCommand("logout", "Forget the saved API key and go offline",             _cmd_logout),
+    SlashCommand("help",   "Show available commands",                             _cmd_help),
+    SlashCommand("exit",   "Leave the session (Ctrl-D also exits)",               _cmd_exit),
+)

@@ -34,6 +34,26 @@ def test_slash_exit_returns_zero():
     assert repl.run() == 0
 
 
+def test_ctrl_c_cancels_the_current_line_and_reprompts():
+    """Ctrl-C at the main prompt should wipe the current input and let
+    the user type again — same feel as Claude Code / most shells.
+    Exiting only happens on Ctrl-D (EOF) or /exit."""
+
+    lines = [KeyboardInterrupt, "/exit"]
+
+    def read():
+        head = lines.pop(0)
+        if head is KeyboardInterrupt:
+            raise KeyboardInterrupt
+        return head
+
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=False, width=100, no_color=True)
+    repl = Repl(read_line=read, console=console, provider=find("none"))
+
+    assert repl.run() == 0  # clean exit via /exit after the ^C
+
+
 def test_eof_exits_cleanly():
     repl, _ = _make([])
     assert repl.run() == 0

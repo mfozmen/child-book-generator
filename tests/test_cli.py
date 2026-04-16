@@ -131,6 +131,58 @@ def test_cli_positional_missing_pdf_reports_error(tmp_path, monkeypatch, capsys)
     assert "not found" in out or "no such" in out
 
 
+def test_cli_uses_builtin_input_when_stdin_is_not_a_tty(tmp_path, monkeypatch):
+    """On piped stdin / CI / pytest, stdin.isatty() is False and the
+    CLI must NOT construct a PromptSession — prompt_toolkit would need
+    a real console. Stays on plain input()."""
+    import sys
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+
+    class _Forbidden:
+        def __init__(self, *_a, **_kw):
+            raise AssertionError(
+                "PromptSession must not be constructed in a non-TTY run"
+            )
+
+    import prompt_toolkit
+
+    monkeypatch.setattr(prompt_toolkit, "PromptSession", _Forbidden)
+    monkeypatch.setattr("builtins.input", lambda _p="": (_ for _ in ()).throw(EOFError))
+
+    assert cli.main([]) == 0
+
+
+def test_cli_uses_prompt_toolkit_when_stdin_is_a_tty(tmp_path, monkeypatch):
+    """The CLI switches to prompt_toolkit.PromptSession (arrow-key
+    history + slash menu) when stdin is a real TTY. We simulate that
+    with a monkeypatched isatty + a stub PromptSession so the test
+    doesn't need a real console."""
+    import sys
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+
+    sessions: list = []
+
+    class _FakeSession:
+        def __init__(self, *_a, **kw):
+            sessions.append(kw)
+
+        def prompt(self, _prompt):
+            raise EOFError  # exit cleanly on first read
+
+    import prompt_toolkit
+
+    monkeypatch.setattr(prompt_toolkit, "PromptSession", _FakeSession)
+
+    assert cli.main([]) == 0
+    # The fake PromptSession was constructed with our SlashCompleter.
+    assert len(sessions) == 1
+    assert isinstance(sessions[0].get("completer"), cli.SlashCompleter)
+
+
 def test_cli_unreadable_pdf_reports_error(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     bad = tmp_path / "fake.pdf"

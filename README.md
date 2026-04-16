@@ -79,18 +79,18 @@ littlepress
 
 drops you into the same shell; load a PDF later with `/load <pdf>`.
 
-Today's slash commands (still available as escape hatches):
+Today's slash commands (still available as escape hatches). Type `/` alone to pop up an auto-completion menu with descriptions:
 
 | Command | What it does |
 |---|---|
-| `/help` | list available commands |
-| `/model` | switch the active LLM provider (re-prompts for an API key if required) |
-| `/load <pdf>` | ingest a PDF draft into the session (text + embedded illustrations) |
-| `/pages` | list every page in the draft with a drawing marker and a text preview |
+| `/load <pdf>` | ingest a PDF draft into the session |
+| `/pages` | list pages in the loaded draft with a text preview |
 | `/title [name]` | show or set the book's title |
 | `/author [name]` | show or set the book's author |
-| `/logout` | forget the saved API key and drop back to offline mode |
 | `/render [--impose] [path]` | build the A5 picture-book PDF from the loaded draft. With `--impose` also writes an A4 2-up booklet ready to print double-sided, fold, and staple. |
+| `/model` | switch the active LLM provider (re-prompts for an API key if required) |
+| `/logout` | forget the saved API key and drop back to offline mode |
+| `/help` | show available commands |
 | `/exit` | leave the session (Ctrl-D also exits) |
 
 On first launch the shell asks which provider to use — Claude, GPT, Gemini, or Ollama. Picking a cloud provider also prompts for its API key, which is read silently (nothing echoed to the terminal) and saved to your OS keychain so you only have to paste it once. Ollama is keyless (runs on your own machine). `/logout` forgets the saved key and drops you to offline mode.
