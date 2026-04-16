@@ -21,6 +21,18 @@ COVER_AUTHOR_SIZE = 14
 # header band on the framed variant.
 COVER_BAND_H = 42 * mm
 COVER_BAND_ALPHA = 0.72
+# Poster is the type-only template. Title wants to shout, so give it
+# a bigger starting preference — shrink-to-fit still guarantees the
+# title lands within the page. 52 chosen over a more aggressive 64
+# because the shrink-for-fit kicks in earlier the bigger we start,
+# and 64 was collapsing long English titles to unreadably small
+# sizes before reaching the page edge.
+COVER_POSTER_TITLE_SIZE = 52
+# Below this point the title is small enough that a different
+# template would probably have been the right call. Used as an
+# advisory threshold by ``.claude/skills/select-cover-template`` — the
+# fit code itself doesn't clamp here, it just shrinks enough to fit.
+COVER_TITLE_MIN_READABLE = 14
 
 LINE_HEIGHT = 1.35
 
