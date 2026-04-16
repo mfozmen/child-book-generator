@@ -1,6 +1,79 @@
 # CHANGELOG
 
 
+## v1.0.2 (2026-04-16)
+
+### Bug Fixes
+
+- **repl**: Retry with same key on transient errors instead of re-reading
+  ([#22](https://github.com/mfozmen/littlepress-ai/pull/22),
+  [`86939ac`](https://github.com/mfozmen/littlepress-ai/commit/86939acfe12276581bd8762d81397a4bc6ba5b1e))
+
+Reported after the credit-balance error retry: pressing Enter at the "Press Enter to retry" prompt
+  crashed the REPL with a TypeError from the Anthropic SDK ("Could not resolve authentication
+  method"). The loop was re-reading the secret every iteration, so Enter returned "", and an empty
+  api_key string was handed to anthropic.Anthropic() which refuses empty auth before even forming
+  the HTTP request.
+
+Split the logic:
+
+- Outer loop (_read_and_validate_key) reads a NEW secret only when the key itself is rejected
+  (KeyValidationError). - Inner loop (_retry_validation) handles the same-key retry used by
+  TransientValidationError — the user hits Enter and we ping again with the *same* api_key. Ctrl-D
+  at that prompt aborts cleanly.
+
+Two new tests pin the behaviour: the same key is validated twice on Enter-retry, and Ctrl-D aborts
+  without ever sending an empty string to the validator.
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Continuous Integration
+
+- Retry release push so a racing merge doesn't skip a version bump
+  ([#21](https://github.com/mfozmen/littlepress-ai/pull/21),
+  [`b453168`](https://github.com/mfozmen/littlepress-ai/commit/b453168bb43a8fff6200017b692dd9ea52919200))
+
+* ci: retry release push so a racing merge doesn't skip a version bump
+
+The Release workflow's PSR push failed with a non-fast-forward rejection when a second commit landed
+  on main while PSR was bumping the version. Both the rename merge (feat!:) and the PLAN.md
+  follow-up arrived within seconds; the first run couldn't push because the second had already
+  updated main, and the second run analysed only docs: so no bump fired. Net effect: the feat!:
+  rename never got a v1.0.0 tag.
+
+Split the release step into two: PSR bumps and tags locally with push=false; a shell step pulls
+  --rebase and pushes with up to five retries. Next push picks up the accumulated feat!: and cuts
+  the major release it deserved.
+
+Also add the "next up" section of docs/PLAN.md for the deferred multi-provider chat()
+  implementations (Gemini / OpenAI / Ollama real chat + turn) — one PR per provider when we get to
+  them.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* ci: move release tag to HEAD after each rebase so push doesn't orphan it
+
+Addresses review feedback on #21.
+
+PSR creates the release tag on its local commit C. When the retry loop pulls --rebase and the remote
+  had commits to rebase onto, C becomes C' with a new SHA — but the tag still points at C. git push
+  --follow-tags only pushes annotated tags reachable from the pushed ref, so the orphaned tag stays
+  on the runner and never reaches the remote. Main would advance with the version bump + CHANGELOG
+  but the release tag would be gone.
+
+Capture the tag name up front (git tag --points-at HEAD) and re-point it with git tag -f "$TAG" HEAD
+  after each pull --rebase. --follow-tags then has a reachable target and the tag ships with the
+  commit.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v1.0.1 (2026-04-15)
 
 ### Bug Fixes
@@ -69,6 +142,11 @@ Other fixes in this PR:
 Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Chores
+
+- **release**: 1.0.1 [skip ci]
+  ([`990cecf`](https://github.com/mfozmen/littlepress-ai/commit/990cecf41b8a99ecc0eb2b84a2552a3e27ecb79a))
 
 
 ## v1.0.0 (2026-04-15)
