@@ -160,6 +160,9 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
   ([`95e2a6c`](https://github.com/mfozmen/littlepress-ai/commit/95e2a6c8c37e9d9f02ae5a52dc0d2a8d47121767))
 
 - **release**: 1.1.0 [skip ci]
+  ([`410704f`](https://github.com/mfozmen/littlepress-ai/commit/410704f6d07f31dc7c471a71677b08d657dc2844))
+
+- **release**: 1.1.0 [skip ci]
   ([`e53cab0`](https://github.com/mfozmen/littlepress-ai/commit/e53cab0e77c4de6ff3733279309939bf6144a7b0))
 
 - **release**: 1.1.0 [skip ci]
@@ -281,6 +284,15 @@ Listed in Next up at priority #1 — quickest win with user-visible impact.
 
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
+- Trim shipped "don't overwrite previous renders" from plan
+  ([`2066444`](https://github.com/mfozmen/littlepress-ai/commit/20664445c7e818d796eecab596dab399c8cab55a))
+
+Versioned renders (<slug>.vN.pdf snapshots alongside the stable <slug>.pdf) shipped in #30. Plan had
+  the item at the top of Next up; trim it so the first entry points at the next unfinished piece
+  ("Collect user PDFs in .book-gen/input/").
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
 ### Features
 
 - **agent**: Auto-open the rendered A5 and surface absolute paths
@@ -318,6 +330,67 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
   intentionally doesn't pop up — it's a print artefact). - Cover the platform dispatch in
   open_in_default_viewer directly, working around the conftest auto-mock via a module-load-time
   import binding. Gets src/agent_tools.py back to 100% coverage.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **render**: Keep numbered snapshots so renders don't clobber
+  ([#30](https://github.com/mfozmen/littlepress-ai/pull/30),
+  [`318bf3f`](https://github.com/mfozmen/littlepress-ai/commit/318bf3f585706f1ed6e7021b5a75fba35fdc61a7))
+
+* feat(render): keep numbered snapshots so renders don't clobber
+
+Both the agent's render_book tool and the REPL /render command used to write <slug>.pdf
+  unconditionally — rendering the same draft twice silently destroyed the earlier PDF. Now every
+  default-path render lands a versioned <slug>-vN.pdf alongside the stable <slug>.pdf, so:
+
+- The stable name still points at the latest render (auto-open and "the book" references stay
+  unchanged). - Previous renders are preserved; the user can compare drafts or roll back by copying
+  a snapshot over the stable name. - The booklet is versioned the same way —
+  <slug>-vN_A4_booklet.pdf alongside the stable <slug>_A4_booklet.pdf. - /render <explicit-path> is
+  still the escape hatch; no versioning when the user named a destination themselves.
+
+next_version_number() lives in src/draft.py next to slugify so both entry points share the
+  version-space logic (A5 and booklet share the same counter).
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix(render): address review for versioned renders
+
+- Atomic stable mirror: the render writes to a <dst>.pdf.tmp sibling and os.replace() it into
+  position, so a crash mid-copy leaves either the previous stable file or the new one — never a
+  half-written PDF that the auto-opener would hand to the user's viewer. New atomic_copy() helper in
+  src/draft.py.
+
+- Windows viewer-lock handling: if the stable <slug>.pdf is held open in Acrobat, os.replace raises
+  PermissionError. The versioned snapshot still writes (new filename, no lock), so the render hasn't
+  failed — we now catch OSError on the mirror step, log a yellow hint telling the user to close the
+  viewer, and carry on instead of claiming "Render failed:" catastrophically.
+
+- Namespace-safe version separator: change -vN to .vN. slugify emits a-z0-9_- but never '.', so
+  <slug>.vN.pdf can only be produced by the versioner — a book titled "Book-V1" (slug "book-v1",
+  stable book-v1.pdf) no longer poisons the version counter of an unrelated "book" slug. Tightened
+  the regex in next_version_number.
+
+- Refactor /render to cut cognitive complexity. _cmd_render used to carry the whole path-resolution
+  + build + copy + impose pipeline in one function (Sonar flagged 17/15). Split into _require_title,
+  _mirror_or_warn, _render_to_file, _impose_to_file, _resolve_versioned_paths, _run_custom_render,
+  _run_versioned_render. Main function now does only dispatch.
+
+- Soften the next_version_number docstring: the A5+booklet version space is shared within a single
+  render call, but a bare /render followed by /render --impose leaves booklet gaps. Don't claim a
+  pairing invariant that the code doesn't enforce.
+
+- Drop the misleading "claim the slot before building" concurrency comment — next_version_number
+  only reads the directory, it doesn't reserve anything. The REPL is single-threaded; nothing races.
+
+- docs/PLAN.md gains a deferred "cap / prune old snapshots" item (infinite accumulation was a
+  conscious choice but should be revisited from real usage).
+
+- README mentions snapshots accumulate and the new .vN format.
 
 ---------
 
