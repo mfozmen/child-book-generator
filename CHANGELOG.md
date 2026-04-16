@@ -134,6 +134,9 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
   ([`95e2a6c`](https://github.com/mfozmen/littlepress-ai/commit/95e2a6c8c37e9d9f02ae5a52dc0d2a8d47121767))
 
 - **release**: 1.1.0 [skip ci]
+  ([`270c679`](https://github.com/mfozmen/littlepress-ai/commit/270c6794527e8d284ae8c1d339e614f43090bb54))
+
+- **release**: 1.1.0 [skip ci]
   ([`801b8d1`](https://github.com/mfozmen/littlepress-ai/commit/801b8d1866937ceaa049d0663feb028d0e4f0b06))
 
 - **release**: 1.1.0 [skip ci]
@@ -212,6 +215,19 @@ The Yavru Dinozor test surfaced a handful of concrete gaps in the post-render UX
   cover_illustration), opt-in and priced.
 
 Per-page illustration generation moves up into the deferred section (follow-up to cover generation).
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Drop the surprise blank pages from the plan
+  ([`96a7719`](https://github.com/mfozmen/littlepress-ai/commit/96a7719855df053cce03f54f2e1ae91cd88895bd))
+
+Maintainer spotted a blank page in the first end-to-end output. Two culprits in src/builder.py: a
+  blank after the cover ("inside-front cover left blank" — a real-bookbinding convention) and a
+  blank before the back cover when the page count is odd. For a short children's book these both
+  read as bugs — imposition.impose_a5_to_a4 already pads to multiples of 4 when a booklet is
+  requested, so the pre-back-cover pad is redundant.
+
+Listed in Next up at priority #1 — quickest win with user-visible impact.
 
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
