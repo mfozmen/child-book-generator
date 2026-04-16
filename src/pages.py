@@ -168,7 +168,3 @@ def draw_back_cover(c: Canvas, book: Book) -> None:
             size=BACK_SIZE,
         )
     c.showPage()
-
-
-def draw_blank(c: Canvas) -> None:
-    c.showPage()
