@@ -23,6 +23,7 @@ from src import session as session_mod
 from src.agent import Agent
 from src.agent_tools import (
     choose_layout_tool,
+    propose_layouts_tool,
     propose_typo_fix_tool,
     read_draft_tool,
     render_book_tool,
@@ -249,6 +250,7 @@ class Repl:
             set_metadata_tool(get_draft=get_draft),
             set_cover_tool(get_draft=get_draft),
             choose_layout_tool(get_draft=get_draft),
+            propose_layouts_tool(get_draft=get_draft, confirm=self._confirm),
             render_book_tool(
                 get_draft=get_draft, get_session_root=get_session_root
             ),

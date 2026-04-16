@@ -8,6 +8,7 @@ from src import agent_tools
 from src.agent_tools import (
     choose_layout_tool,
     open_in_default_viewer,
+    propose_layouts_tool,
     propose_typo_fix_tool,
     read_draft_tool,
     render_book_tool,
@@ -523,6 +524,231 @@ def test_choose_layout_requires_draft():
     tool = choose_layout_tool(get_draft=lambda: None)
 
     result = tool.handler({"page": 1, "layout": "text-only", "reason": "x"})
+
+    assert "no draft" in result.lower()
+
+
+# --- propose_layouts -----------------------------------------------------
+
+
+def _three_page_draft():
+    img = Path("images/a.png")
+    return Draft(
+        source_pdf=Path("x.pdf"),
+        title="Book",
+        pages=[
+            DraftPage(text="p1", image=img),
+            DraftPage(text="p2", image=img),
+            DraftPage(text="p3"),  # no image → text-only only
+        ],
+    )
+
+
+def test_propose_layouts_applies_all_on_user_confirmation():
+    """One yes/no confirms the full rhythm instead of N per-page
+    rounds. On ``yes`` every page's layout flips to the proposed one."""
+    draft = _three_page_draft()
+    tool = propose_layouts_tool(
+        get_draft=lambda: draft,
+        confirm=lambda _prompt: True,
+    )
+
+    result = tool.handler(
+        {
+            "layouts": [
+                {"page": 1, "layout": "image-full", "reason": "opens wide"},
+                {"page": 2, "layout": "image-top", "reason": "long text"},
+                {"page": 3, "layout": "text-only", "reason": "no image"},
+            ],
+        }
+    )
+
+    assert draft.pages[0].layout == "image-full"
+    assert draft.pages[1].layout == "image-top"
+    assert draft.pages[2].layout == "text-only"
+    assert "applied" in result.lower() or "set" in result.lower()
+
+
+def test_propose_layouts_does_not_mutate_when_user_declines():
+    draft = _three_page_draft()
+    # Seed a known layout so we can prove nothing changed on decline.
+    draft.pages[0].layout = "image-bottom"
+    tool = propose_layouts_tool(
+        get_draft=lambda: draft,
+        confirm=lambda _p: False,
+    )
+
+    result = tool.handler(
+        {
+            "layouts": [
+                {"page": 1, "layout": "image-full", "reason": "x"},
+                {"page": 2, "layout": "image-top", "reason": "x"},
+                {"page": 3, "layout": "text-only", "reason": "x"},
+            ],
+        }
+    )
+
+    assert draft.pages[0].layout == "image-bottom"  # untouched
+    assert "declin" in result.lower() or "kept" in result.lower()
+
+
+def test_propose_layouts_rejects_partial_proposals():
+    """The point is the *rhythm* — a partial proposal can't stand as
+    a whole-book decision. Agent has to cover every page or use
+    ``choose_layout`` for surgical changes."""
+    draft = _three_page_draft()
+    confirmed = []
+    tool = propose_layouts_tool(
+        get_draft=lambda: draft,
+        confirm=lambda p: confirmed.append(p) or True,
+    )
+
+    result = tool.handler(
+        {
+            "layouts": [
+                {"page": 1, "layout": "image-full", "reason": "x"},
+                # Missing page 2 and page 3.
+            ],
+        }
+    )
+
+    assert confirmed == []  # user never prompted
+    assert "3" in result and ("1" in result or "partial" in result.lower())
+
+
+def test_propose_layouts_rejects_invalid_layout_value_before_prompting():
+    draft = _three_page_draft()
+    confirmed = []
+    tool = propose_layouts_tool(
+        get_draft=lambda: draft,
+        confirm=lambda p: confirmed.append(p) or True,
+    )
+
+    result = tool.handler(
+        {
+            "layouts": [
+                {"page": 1, "layout": "artsy", "reason": "flair"},
+                {"page": 2, "layout": "image-top", "reason": "x"},
+                {"page": 3, "layout": "text-only", "reason": "x"},
+            ],
+        }
+    )
+
+    assert confirmed == []
+    assert draft.pages[0].layout != "artsy"
+    assert "artsy" in result.lower() or "invalid" in result.lower()
+
+
+def test_propose_layouts_enforces_text_only_for_imageless_pages():
+    """select-page-layout rule 1 still applies in the batch tool: a
+    page with no drawing must be text-only. Reject the whole batch
+    before prompting — partial-application would leave the user with
+    a mix they didn't approve."""
+    draft = _three_page_draft()
+    confirmed = []
+    tool = propose_layouts_tool(
+        get_draft=lambda: draft,
+        confirm=lambda p: confirmed.append(p) or True,
+    )
+
+    result = tool.handler(
+        {
+            "layouts": [
+                {"page": 1, "layout": "image-top", "reason": "x"},
+                {"page": 2, "layout": "image-top", "reason": "x"},
+                {"page": 3, "layout": "image-full", "reason": "x"},  # no image!
+            ],
+        }
+    )
+
+    assert confirmed == []
+    assert draft.pages[2].layout != "image-full"
+    assert "3" in result and (
+        "no image" in result.lower() or "no drawing" in result.lower()
+    )
+
+
+def test_propose_layouts_prompt_lists_every_page_for_user():
+    """The confirmation prompt must be a readable table so the user
+    can see the proposed rhythm before approving it. Minimum bar: each
+    page number appears in the prompt."""
+    draft = _three_page_draft()
+    captured: list[str] = []
+    tool = propose_layouts_tool(
+        get_draft=lambda: draft,
+        confirm=lambda p: captured.append(p) or True,
+    )
+
+    tool.handler(
+        {
+            "layouts": [
+                {"page": 1, "layout": "image-top", "reason": "x"},
+                {"page": 2, "layout": "image-bottom", "reason": "x"},
+                {"page": 3, "layout": "text-only", "reason": "x"},
+            ],
+        }
+    )
+
+    assert len(captured) == 1
+    prompt = captured[0]
+    assert "1" in prompt and "2" in prompt and "3" in prompt
+    assert "image-top" in prompt
+    assert "image-bottom" in prompt
+    assert "text-only" in prompt
+
+
+def test_propose_layouts_rejects_out_of_range_page():
+    """Count matches, but a page number is past the end — reject
+    before prompting (and don't mutate)."""
+    draft = _three_page_draft()
+    confirmed = []
+    tool = propose_layouts_tool(
+        get_draft=lambda: draft,
+        confirm=lambda p: confirmed.append(p) or True,
+    )
+
+    result = tool.handler(
+        {
+            "layouts": [
+                {"page": 1, "layout": "image-top", "reason": "x"},
+                {"page": 2, "layout": "image-bottom", "reason": "x"},
+                {"page": 99, "layout": "text-only", "reason": "x"},
+            ],
+        }
+    )
+
+    assert confirmed == []
+    assert "99" in result or "out of" in result.lower()
+
+
+def test_propose_layouts_rejects_duplicate_page_entries():
+    """Right count but two entries for the same page — one page would
+    get the last wins silently. Reject."""
+    draft = _three_page_draft()
+    confirmed = []
+    tool = propose_layouts_tool(
+        get_draft=lambda: draft,
+        confirm=lambda p: confirmed.append(p) or True,
+    )
+
+    result = tool.handler(
+        {
+            "layouts": [
+                {"page": 1, "layout": "image-top", "reason": "x"},
+                {"page": 1, "layout": "image-bottom", "reason": "x"},
+                {"page": 2, "layout": "text-only", "reason": "x"},
+            ],
+        }
+    )
+
+    assert confirmed == []
+    assert "duplicate" in result.lower() or "1" in result
+
+
+def test_propose_layouts_requires_draft():
+    tool = propose_layouts_tool(get_draft=lambda: None, confirm=lambda _p: True)
+
+    result = tool.handler({"layouts": []})
 
     assert "no draft" in result.lower()
 

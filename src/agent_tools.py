@@ -457,6 +457,127 @@ def _impose_and_mirror(
     )
 
 
+def propose_layouts_tool(
+    get_draft: Callable[[], Draft | None],
+    confirm: Callable[[str], bool],
+) -> Tool:
+    """Tool: propose layouts for *every* page at once, show a table,
+    apply all if the user approves.
+
+    The earlier per-page ``choose_layout`` tool produces good results
+    but is awkward for the "settle on a rhythm" phase of the
+    conversation — the agent has to ask the user to approve N tiny
+    decisions. This tool batches them: one prompt, one yes/no, one
+    application. For surgical tweaks afterwards the per-page tool is
+    still the right call.
+    """
+
+    def handler(input_: dict) -> str:
+        draft = get_draft()
+        if draft is None:
+            return _MSG_NO_DRAFT
+        items = input_.get("layouts") or []
+        if len(items) != len(draft.pages):
+            return (
+                f"propose_layouts expects one entry per page "
+                f"({len(draft.pages)} needed, got {len(items)}). This "
+                "tool is for the full rhythm — use choose_layout for "
+                "a partial change."
+            )
+        # Validate every proposed layout first. Partial application
+        # would leave the user with a mix they didn't approve.
+        rejection = _reject_layout_batch(draft, items)
+        if rejection is not None:
+            return rejection
+
+        prompt = _build_layout_prompt(draft, items)
+        if not confirm(prompt):
+            return (
+                "User declined the proposed rhythm. Ask what they'd "
+                "like to change, then propose again or adjust specific "
+                "pages with choose_layout."
+            )
+        for item in items:
+            draft.pages[int(item["page"]) - 1].layout = str(item["layout"])
+        return f"Applied layouts to all {len(items)} pages."
+
+    return Tool(
+        name="propose_layouts",
+        description=(
+            "Propose the layout for EVERY page at once so the user can "
+            "approve the whole rhythm with a single yes/no instead of "
+            "answering per-page. Use this right after metadata is "
+            "settled. For surgical tweaks afterwards, use choose_layout. "
+            "Valid layouts: image-top, image-bottom, image-full, "
+            "text-only. Pages without a drawing must be text-only."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "layouts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "page": {"type": "integer", "minimum": 1},
+                            "layout": {
+                                "type": "string",
+                                "enum": sorted(VALID_LAYOUTS),
+                            },
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["page", "layout", "reason"],
+                    },
+                },
+            },
+            "required": ["layouts"],
+        },
+        handler=handler,
+    )
+
+
+def _reject_layout_batch(draft: Draft, items: list[dict]) -> str | None:
+    """Return a rejection message if ``items`` can't be applied to
+    ``draft`` as a whole, or ``None`` if the batch is clean."""
+    seen_pages: set[int] = set()
+    for item in items:
+        page_n = int(item.get("page", 0))
+        layout = str(item.get("layout", ""))
+        if page_n < 1 or page_n > len(draft.pages):
+            return (
+                f"Page {page_n} is out of range — the draft has "
+                f"{len(draft.pages)} pages."
+            )
+        if page_n in seen_pages:
+            return f"Duplicate entry for page {page_n}."
+        seen_pages.add(page_n)
+        if layout not in VALID_LAYOUTS:
+            return (
+                f"Page {page_n}: invalid layout '{layout}'. "
+                f"Valid layouts: {sorted(VALID_LAYOUTS)}."
+            )
+        page = draft.pages[page_n - 1]
+        if page.image is None and layout != "text-only":
+            return (
+                f"Page {page_n} has no drawing — it must be text-only. "
+                "Can't apply image-* layouts to an imageless page."
+            )
+    return None
+
+
+def _build_layout_prompt(draft: Draft, items: list[dict]) -> str:
+    """Render a table-ish summary of the proposed rhythm for the y/n
+    prompt — the user sees every page and the reason for the choice."""
+    rows = ["Proposed layouts:"]
+    for item in sorted(items, key=lambda d: int(d["page"])):
+        page_n = int(item["page"])
+        layout = str(item["layout"])
+        reason = str(item.get("reason", ""))
+        rows.append(f"  Page {page_n}: {layout} — {reason}")
+    rows.append("Approve this rhythm?")
+    return "\n".join(rows)
+
+
 def render_book_tool(
     get_draft: Callable[[], Draft | None],
     get_session_root: Callable[[], Path],
