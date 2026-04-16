@@ -123,6 +123,68 @@ def test_loading_twice_replaces_previous_draft(tmp_path):
     assert repl.draft.source_pdf == pdf_b
 
 
+def test_load_kicks_the_agent_off_when_a_real_provider_is_active(tmp_path):
+    """Dragging a PDF (or typing /load) mid-session must trigger the
+    same agent greeting the CLI uses when it's launched with a PDF
+    arg. Otherwise the user sees "Loaded N pages" and... silence.
+    The agent needs a nudge to call read_draft and start asking
+    questions."""
+    import io
+
+    from rich.console import Console
+
+    from src.agent import AgentResponse
+    from src.providers.llm import find
+
+    pdf = _write_pdf(tmp_path, [{"text": "hi"}])
+
+    class _StubLLM:
+        def __init__(self):
+            self.calls: list = []
+
+        def turn(self, messages, _tools):
+            self.calls.append(list(messages))
+            return AgentResponse(
+                content=[{"type": "text", "text": "Hi! I see 1 page."}],
+                stop_reason="end_turn",
+            )
+
+    llm = _StubLLM()
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=False, width=100, no_color=True)
+    repl = Repl(
+        read_line=_scripted([f"/load {pdf}", "/exit"]),
+        console=console,
+        provider=find("anthropic"),
+        session_root=tmp_path,
+        llm_factory=lambda _spec, _key: llm,
+    )
+    repl.run()
+
+    assert repl.draft is not None
+    # The agent was invoked after the load (once, with the greeting).
+    assert len(llm.calls) == 1
+    # The greeting the agent sees mentions reading the draft.
+    first_user_message = llm.calls[0][0]
+    assert first_user_message["role"] == "user"
+    assert "read_draft" in first_user_message["content"].lower()
+    # And the agent's reply surfaced to the user.
+    assert "I see 1 page" in buf.getvalue()
+
+
+def test_load_is_quiet_on_offline_provider(tmp_path):
+    """Offline (NullProvider) — /load should NOT try to talk to the
+    agent. Just load and stay silent."""
+    pdf = _write_pdf(tmp_path, [{"text": "hi"}])
+
+    repl, buf = _make(tmp_path, [f"/load {pdf}", "/exit"])
+    repl.run()
+
+    assert repl.draft is not None
+    # No "agent error" / no greeting attempt.
+    assert "agent error" not in buf.getvalue().lower()
+
+
 def test_load_expands_tilde_in_path(tmp_path, monkeypatch):
     # Make ~ resolve to a directory we control so the test doesn't touch the
     # developer's real home directory.
