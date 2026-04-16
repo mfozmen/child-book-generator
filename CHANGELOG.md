@@ -160,6 +160,9 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
   ([`95e2a6c`](https://github.com/mfozmen/littlepress-ai/commit/95e2a6c8c37e9d9f02ae5a52dc0d2a8d47121767))
 
 - **release**: 1.1.0 [skip ci]
+  ([`8fbde37`](https://github.com/mfozmen/littlepress-ai/commit/8fbde37198f247b8b868de2411eac004b75280c4))
+
+- **release**: 1.1.0 [skip ci]
   ([`96cbe1a`](https://github.com/mfozmen/littlepress-ai/commit/96cbe1a35118f805af32357e6a2007ebf8aaa5ba))
 
 - **release**: 1.1.0 [skip ci]
@@ -655,6 +658,56 @@ Six valid findings — five in the provider, one in the validator:
   combines isinstance(genai.errors.ClientError) with a 400/401/403 status check, falling back to
   message substrings for SDKs that don't expose the class. New test covers the 400 + ClientError
   path.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **providers**: Gpt (OpenAI) chat + tool use
+  ([#37](https://github.com/mfozmen/littlepress-ai/pull/37),
+  [`46e33ff`](https://github.com/mfozmen/littlepress-ai/commit/46e33ff4e5c5c9404003c5c2459d619908c7acf7))
+
+* feat(providers): GPT (OpenAI) chat + tool use
+
+Third fully-wired provider, mirroring the Gemini PR's shape:
+
+- OpenAIProvider class in src/providers/llm.py with chat() and turn(), lazy-importing the openai SDK
+  so users on another provider don't need it installed. - Message translation at the boundary — the
+  agent stays Anthropic- shaped; the provider converts in both directions. Assistant tool_use blocks
+  become role=assistant messages with a tool_calls array (arguments serialised as a JSON string, per
+  the API); user tool_result blocks split into one role=tool message per result carrying the
+  matching tool_call_id. - Non-stop/non-tool_calls finish reasons (length, content_filter) surface
+  as a synthetic text block so the REPL isn't silent on a blocked or truncated turn. - Shared
+  _client() builder keeps chat() and turn() aligned on the 60-second timeout hedge — same regression
+  guard as the Anthropic and Google paths. - _check_openai validator uses the SDK's class hierarchy
+  (AuthenticationError / PermissionDeniedError → KeyValidationError, APIError catch-all →
+  TransientValidationError). Matches the three-way contract the REPL's resume path depends on. -
+  openai bundled as a default dep — many users already have a GPT key and expect it to work without
+  hunting down an optional extra. - find("openai") + create_provider now return OpenAIProvider when
+  a key is provided; validation_model is "gpt-4o-mini", the cheapest tool-use-capable model.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* build: bump openai and google-genai floors to match code requirements
+
+Review flagged that the declared lower bounds in PR #37 / PR #36 didn't match what the code actually
+  needs:
+
+- ``openai>=1.0.0``: ``PermissionDeniedError`` (caught in the auth branch of ``_check_openai``) was
+  only added in 1.2.x. The ``APIError`` inheritance chain the transient-branch catch-all relies on
+  stabilised even later in 1.x. Bump to 1.50 so the exception classes and hierarchy the validator
+  depends on are guaranteed present.
+
+- ``google-genai>=0.2.0``: ``FunctionResponse.id`` (used to correlate parallel same-name tool calls)
+  and the stabilised ``HttpOptions`` / ``GenerateContentConfig`` shapes are 1.x-era. Bump to 1.0 so
+  an install that happens to resolve to an old 0.x release doesn't import and then explode at
+  runtime.
+
+Fresh installs today resolve to modern releases so this is mostly a belt-and-suspenders fix, but
+  pinning matches the code's actual expectations — future dependency-resolver changes won't silently
+  pull in incompatible versions.
 
 ---------
 
