@@ -33,6 +33,17 @@ All five PRs from the original plan merged:
 ## Next up
 
 - **More LLM providers — real `chat()` + `turn()` for Gemini / OpenAI / Ollama.** Today only Anthropic has a working implementation; the others are in the picker but fall back to `NullProvider`. Gemini is the priority because its free tier (1.5k req/day, tool-use capable) lets users run Littlepress without a credit card. Ollama enables fully offline use. One PR per provider keeps reviews small.
+- **Claude-Code-style `/` menu in the REPL.** When the user types `/` alone (or starts typing `/l…` etc.), show the slash commands with one-line descriptions as an auto-completion menu — same UX as Claude Code / Cursor's slash menu. Requires swapping the current `builtins.input` for `prompt_toolkit.PromptSession` with a custom `Completer`. As part of this, surface the commands in a **logical order** rather than registration order:
+  1. `/load <pdf>` — ingest a PDF draft
+  2. `/pages` — list pages in the draft
+  3. `/title [name]` — set / show the book title
+  4. `/author [name]` — set / show the author
+  5. `/render [--impose] [path]` — build the final PDF
+  6. `/model` — switch the active LLM provider
+  7. `/logout` — forget the saved API key
+  8. `/help` — show commands (redundant with `/` menu but keep for discoverability)
+  9. `/exit` — leave the session
+  The order follows the typical workflow (ingest → inspect → metadata → render) with session / auth commands at the bottom.
 
 ## Explicitly deferred (don't build unless asked)
 

@@ -117,6 +117,29 @@ def test_picker_hides_the_offline_none_option():
     assert "offline" not in rendered.lower()
 
 
+def test_picker_accepts_slash_exit_as_abort():
+    """Typing /exit in the picker must leave the session (like EOF),
+    not get flagged as 'not a number 1-4'."""
+    repl, buf = _make(["/exit"])
+
+    assert repl.run() == 0
+    assert repl.provider is None
+    # Not the number-please error.
+    assert "enter a number" not in buf.getvalue().lower()
+
+
+def test_picker_rejects_other_slash_commands_with_helpful_hint():
+    """A slash command that isn't /exit is still invalid in the picker,
+    but the error should tell the user to pick a provider or /exit,
+    not just parrot 'enter a number 1-4' (which is confusing for /help)."""
+    repl, buf = _make(["/help", "4", "/exit"])
+
+    assert repl.run() == 0
+    assert repl.provider.name == "ollama"
+    # Hint mentions /exit as an escape hatch.
+    assert "/exit" in buf.getvalue()
+
+
 def test_none_spec_remains_available_as_internal_default():
     """The picker UI hides "No model (offline)" but the spec itself has
     to keep resolving through ``find`` — /logout drops back to it, and

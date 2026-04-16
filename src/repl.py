@@ -419,17 +419,32 @@ class Repl:
             raw = raw.strip()
             if not raw:
                 continue
+            # /exit anywhere means "leave". Other slash commands are
+            # valid in the main loop but meaningless in the picker —
+            # steer the user toward a number or /exit instead of
+            # lying that the input wasn't a number.
+            if raw == "/exit":
+                return None
+            if raw.startswith("/"):
+                self._console.print(
+                    "[red]Pick a provider by typing a number "
+                    f"1-{len(PICKER_SPECS)}, or [cyan]/exit[/cyan] to leave."
+                    "[/red]"
+                )
+                continue
             try:
                 choice = int(raw)
             except ValueError:
                 self._console.print(
-                    f"[red]Please enter a number 1-{len(PICKER_SPECS)}.[/red]"
+                    f"[red]Please enter a number 1-{len(PICKER_SPECS)} "
+                    f"(or [cyan]/exit[/cyan]).[/red]"
                 )
                 continue
             if 1 <= choice <= len(PICKER_SPECS):
                 return PICKER_SPECS[choice - 1]
             self._console.print(
-                f"[red]Please enter a number 1-{len(PICKER_SPECS)}.[/red]"
+                f"[red]Please enter a number 1-{len(PICKER_SPECS)} "
+                f"(or [cyan]/exit[/cyan]).[/red]"
             )
 
     def _dispatch(self, line: str) -> int | None:
