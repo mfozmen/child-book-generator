@@ -178,7 +178,47 @@ def _is_google_auth_error(exc: Exception, client_error_cls) -> bool:
 _GOOGLE_DEFAULT_VALIDATION_MODEL = "gemini-2.5-flash"
 
 
+def _check_openai(spec: ProviderSpec, api_key: str) -> None:
+    """Ping OpenAI with the smallest possible chat completion.
+
+    Auth failures surface as ``openai.AuthenticationError`` /
+    ``PermissionDeniedError``; everything else under ``APIError``
+    (rate limits, 5xx, billing BadRequestError) is transient. Matches
+    the Anthropic checker's three-way contract: key-invalid vs
+    call-failed-for-other-reason vs provider-unavailable.
+    """
+    try:
+        import openai  # type: ignore[import-not-found]
+    except ImportError as e:
+        raise ProviderUnavailable(
+            "The 'openai' SDK is missing from this install. Try: "
+            "pip install --force-reinstall littlepress-ai"
+        ) from e
+
+    auth_error = getattr(openai, "AuthenticationError", None) or RuntimeError
+    perm_error = getattr(openai, "PermissionDeniedError", None) or auth_error
+    api_error = getattr(openai, "APIError", None) or RuntimeError
+    try:
+        client = openai.OpenAI(
+            api_key=api_key,
+            timeout=_VALIDATION_TIMEOUT_SECONDS,
+        )
+        client.chat.completions.create(
+            model=spec.validation_model or _OPENAI_DEFAULT_VALIDATION_MODEL,
+            max_tokens=1,
+            messages=[{"role": "user", "content": "ping"}],
+        )
+    except (auth_error, perm_error) as e:
+        raise KeyValidationError(f"OpenAI rejected the key: {e}") from e
+    except api_error as e:
+        raise TransientValidationError(f"OpenAI call failed: {e}") from e
+
+
+_OPENAI_DEFAULT_VALIDATION_MODEL = "gpt-4o-mini"
+
+
 _CHECKERS = {
     "anthropic": _check_anthropic,
     "google": _check_google,
+    "openai": _check_openai,
 }

@@ -16,10 +16,6 @@ def test_ollama_has_nothing_to_validate():
     validator.validate_key(find("ollama"), "")
 
 
-def test_openai_is_unchecked_until_its_sdk_is_wired():
-    # OpenAI still has no validator; the picker shouldn't block
-    # users from choosing it while that path is in flight.
-    validator.validate_key(find("openai"), "sk-anything")
 
 
 def test_anthropic_without_sdk_raises_provider_unavailable(monkeypatch):
@@ -254,6 +250,127 @@ def test_google_ping_uses_spec_model(monkeypatch):
     validator.validate_key(spec, "key")
 
     sent = genai_mod.Client.last_client.models.last_kwargs
+    assert sent["model"] == spec.validation_model
+
+
+# --- OpenAI validator -------------------------------------------------
+
+
+def _install_fake_openai(monkeypatch, *, raise_error=None):
+    """Stub ``openai`` with a Client whose ``chat.completions.create``
+    either returns a plain response or raises the requested error."""
+    import sys
+    import types as pytypes
+
+    class APIError(Exception):
+        pass
+
+    class AuthenticationError(APIError):
+        pass
+
+    class PermissionDeniedError(APIError):
+        pass
+
+    class BadRequestError(APIError):
+        pass
+
+    class RateLimitError(APIError):
+        pass
+
+    class Completions:
+        def __init__(self):
+            self.last_kwargs: dict = {}
+
+        def create(self, **kwargs):
+            self.last_kwargs = kwargs
+            if raise_error == "auth":
+                raise AuthenticationError("Invalid API key")
+            if raise_error == "bad_request":
+                raise BadRequestError("billing: insufficient quota")
+            if raise_error == "rate":
+                raise RateLimitError("rate limit exceeded")
+            return pytypes.SimpleNamespace(
+                choices=[pytypes.SimpleNamespace(
+                    message=pytypes.SimpleNamespace(content="pong"),
+                    finish_reason="stop",
+                )]
+            )
+
+    class Chat:
+        def __init__(self):
+            self.completions = Completions()
+
+    class Client:
+        last_client: "Client | None" = None
+        last_timeout: float | None = None
+
+        def __init__(self, *, api_key, timeout=None, **kw):
+            self.api_key = api_key
+            self.timeout = timeout
+            self.chat = Chat()
+            Client.last_client = self
+            Client.last_timeout = timeout
+
+    module = pytypes.ModuleType("openai")
+    module.OpenAI = Client
+    module.AuthenticationError = AuthenticationError
+    module.PermissionDeniedError = PermissionDeniedError
+    module.BadRequestError = BadRequestError
+    module.APIError = APIError
+    module.RateLimitError = RateLimitError
+    monkeypatch.setitem(sys.modules, "openai", module)
+    return module
+
+
+def test_openai_without_sdk_raises_provider_unavailable(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "openai", None)
+
+    with pytest.raises(validator.ProviderUnavailable) as exc:
+        validator.validate_key(find("openai"), "sk-test")
+    msg = str(exc.value).lower()
+    assert "openai" in msg and "install" in msg
+
+
+def test_openai_rejects_key_when_sdk_signals_auth_error(monkeypatch):
+    _install_fake_openai(monkeypatch, raise_error="auth")
+
+    with pytest.raises(validator.KeyValidationError):
+        validator.validate_key(find("openai"), "sk-bad")
+
+
+def test_openai_billing_is_transient_not_auth(monkeypatch):
+    """BadRequestError from billing / quota means the key is valid —
+    resume must KEEP the saved key, so it's TransientValidationError."""
+    _install_fake_openai(monkeypatch, raise_error="bad_request")
+
+    with pytest.raises(validator.TransientValidationError):
+        validator.validate_key(find("openai"), "sk-good")
+
+
+def test_openai_rate_limit_is_transient(monkeypatch):
+    _install_fake_openai(monkeypatch, raise_error="rate")
+
+    with pytest.raises(validator.TransientValidationError):
+        validator.validate_key(find("openai"), "sk-good")
+
+
+def test_openai_accepts_key_when_sdk_returns_normally(monkeypatch):
+    _install_fake_openai(monkeypatch, raise_error=None)
+
+    validator.validate_key(find("openai"), "sk-good")
+
+
+def test_openai_ping_sends_timeout_and_spec_model(monkeypatch):
+    fake = _install_fake_openai(monkeypatch, raise_error=None)
+
+    spec = find("openai")
+    validator.validate_key(spec, "sk-good")
+
+    assert fake.OpenAI.last_timeout is not None
+    assert 0 < fake.OpenAI.last_timeout <= 30
+    sent = fake.OpenAI.last_client.chat.completions.last_kwargs
     assert sent["model"] == spec.validation_model
 
 

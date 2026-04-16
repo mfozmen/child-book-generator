@@ -70,6 +70,7 @@ SPECS: tuple[ProviderSpec, ...] = (
         "openai",
         "GPT (OpenAI)",
         requires_api_key=True,
+        validation_model="gpt-4o-mini",
         key_url="https://platform.openai.com/api-keys",
         key_steps=(
             "Sign in to OpenAI Platform.",
@@ -498,16 +499,245 @@ def _gemini_response_to_blocks(response) -> tuple[list[dict], str]:
     return blocks, ("tool_use" if any_tool_use else "end_turn")
 
 
+# OpenAI defaults. gpt-4o-mini is the cheapest tool-use-capable model
+# at time of writing; the validation ping uses the same id unless the
+# spec overrides it.
+_OPENAI_CHAT_MODEL = "gpt-4o-mini"
+_OPENAI_CHAT_TIMEOUT_SECONDS = 60.0
+
+
+class OpenAIProvider:
+    """GPT (OpenAI) chat + tool-use via the Chat Completions API. SDK
+    import is lazy so users on another provider don't need ``openai``
+    installed.
+
+    Translation at the boundary: the agent speaks Anthropic's content-
+    block format; OpenAI's Chat Completions uses role-based messages
+    with a separate ``tool_calls`` array on assistant messages and a
+    ``role=tool`` message (+ ``tool_call_id``) for tool results. We
+    round-trip both directions so the agent loop doesn't have to
+    learn the OpenAI shape.
+
+    Supported tool ``input_schema`` subset (forwarded as the
+    ``parameters`` of each tool definition): standard JSON Schema —
+    type, properties, required, enum, description, array items, object
+    nesting. OpenAI is more permissive than Gemini here (oneOf/anyOf
+    are accepted) but we still treat the same subset the Anthropic and
+    Gemini providers support as the portable set.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        model: str = _OPENAI_CHAT_MODEL,
+    ) -> None:
+        self._api_key = api_key
+        self._model = model
+
+    def _client(self, openai_mod):
+        # Centralised so chat() and turn() share the timeout hedge —
+        # neither entry point should hang the REPL on a flaky network.
+        return openai_mod.OpenAI(
+            api_key=self._api_key,
+            timeout=_OPENAI_CHAT_TIMEOUT_SECONDS,
+        )
+
+    def chat(self, messages: list[Message]) -> str:
+        openai_mod = _import_openai()
+        client = self._client(openai_mod)
+        completion = client.chat.completions.create(
+            model=self._model,
+            messages=_messages_to_openai(messages),
+        )
+        # ``content`` can be ``None`` on content_filter / length
+        # finishes. Return an empty string rather than propagating None.
+        choice = completion.choices[0] if completion.choices else None
+        if choice is None:
+            return ""
+        return getattr(choice.message, "content", None) or ""
+
+    def turn(self, messages: list[dict], tools: list) -> "object":
+        openai_mod = _import_openai()
+        from src.agent import AgentResponse
+
+        client = self._client(openai_mod)
+        kwargs: dict = {
+            "model": self._model,
+            "messages": _messages_to_openai(messages),
+        }
+        if tools:
+            kwargs["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.input_schema,
+                    },
+                }
+                for t in tools
+            ]
+        completion = client.chat.completions.create(**kwargs)
+        blocks, stop_reason = _openai_completion_to_blocks(completion)
+        return AgentResponse(content=blocks, stop_reason=stop_reason)
+
+
+def _import_openai():
+    """Lazy import of the OpenAI SDK — matches the Anthropic / Gemini
+    patterns so users on another provider don't have to install
+    ``openai``."""
+    try:
+        import openai  # type: ignore[import-not-found]
+    except ImportError as e:
+        raise ImportError(
+            "The 'openai' SDK is missing. Try: "
+            "pip install --force-reinstall littlepress-ai"
+        ) from e
+    if openai is None:
+        raise ImportError("openai SDK is not available")
+    return openai
+
+
+def _messages_to_openai(messages: list[dict]) -> list[dict]:
+    """Translate Anthropic-style messages → OpenAI ``messages`` list.
+
+    - Plain-string user / assistant messages pass through unchanged.
+    - Assistant messages carrying ``tool_use`` blocks become
+      ``{role: assistant, content: <text>, tool_calls: [...]}``.
+    - User messages carrying ``tool_result`` blocks are expanded into
+      one ``{role: tool, tool_call_id: ..., content: ...}`` per result.
+    """
+    import json
+
+    out: list[dict] = []
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content")
+        if isinstance(content, str):
+            out.append({"role": role, "content": content})
+            continue
+        if role == "assistant":
+            texts: list[str] = []
+            tool_calls: list[dict] = []
+            for block in content or []:
+                btype = block.get("type")
+                if btype == "text":
+                    texts.append(block.get("text", ""))
+                elif btype == "tool_use":
+                    tool_calls.append(
+                        {
+                            "id": block.get("id", ""),
+                            "type": "function",
+                            "function": {
+                                "name": block.get("name", ""),
+                                # OpenAI wants arguments as a JSON string.
+                                "arguments": json.dumps(
+                                    block.get("input") or {}
+                                ),
+                            },
+                        }
+                    )
+            assistant_msg: dict = {
+                "role": "assistant",
+                "content": "".join(texts) if texts else None,
+            }
+            if tool_calls:
+                assistant_msg["tool_calls"] = tool_calls
+            out.append(assistant_msg)
+            continue
+        if role == "user":
+            for block in content or []:
+                if block.get("type") == "tool_result":
+                    out.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": block.get("tool_use_id", ""),
+                            "content": block.get("content", ""),
+                        }
+                    )
+                elif block.get("type") == "text":
+                    out.append(
+                        {"role": "user", "content": block.get("text", "")}
+                    )
+            continue
+        # Unknown role with list content — fall through as-is; the SDK
+        # will reject it, which is what we want rather than silent
+        # re-shaping.
+        out.append({"role": role, "content": content})
+    return out
+
+
+def _openai_completion_to_blocks(completion) -> tuple[list[dict], str]:
+    """Translate an OpenAI ``ChatCompletion`` → Anthropic-style blocks
+    + stop_reason. Non-``stop`` / non-``tool_calls`` finishes (length,
+    content_filter) get a synthetic text block so the user sees why
+    the turn ended — otherwise the REPL just goes silent."""
+    import json
+
+    blocks: list[dict] = []
+    choices = getattr(completion, "choices", None) or []
+    if not choices:
+        return blocks, "end_turn"
+    choice = choices[0]
+    message = getattr(choice, "message", None)
+    finish_reason = getattr(choice, "finish_reason", None)
+
+    text = getattr(message, "content", None) if message else None
+    if text:
+        blocks.append({"type": "text", "text": text})
+
+    tool_calls = getattr(message, "tool_calls", None) if message else None
+    any_tool_use = False
+    for tc in tool_calls or []:
+        any_tool_use = True
+        fn = getattr(tc, "function", None)
+        name = getattr(fn, "name", "") if fn else ""
+        raw_args = getattr(fn, "arguments", "") if fn else ""
+        try:
+            args = json.loads(raw_args) if raw_args else {}
+        except (json.JSONDecodeError, TypeError):
+            # Malformed arguments from the model — hand back as-is so
+            # the tool's handler can report the error clearly.
+            args = {"__raw": raw_args}
+        blocks.append(
+            {
+                "type": "tool_use",
+                "id": getattr(tc, "id", ""),
+                "name": name,
+                "input": args,
+            }
+        )
+
+    if (
+        finish_reason is not None
+        and str(finish_reason) not in {"stop", "tool_calls"}
+        and not any_tool_use
+    ):
+        blocks.append(
+            {
+                "type": "text",
+                "text": (
+                    f"[OpenAI stopped with reason: {finish_reason}. "
+                    "No further output was generated — try rephrasing "
+                    "or splitting the prompt.]"
+                ),
+            }
+        )
+    return blocks, ("tool_use" if any_tool_use else "end_turn")
+
+
 def create_provider(spec: ProviderSpec, api_key: str | None) -> LLMProvider:
     """Return the chat implementation for ``spec``.
 
-    Providers that haven't grown a real ``chat()`` yet (OpenAI, Ollama)
-    fall back to ``NullProvider`` so the REPL keeps running — the user
-    sees the offline placeholder for non-slash input until those
-    providers land.
+    Providers that haven't grown a real ``chat()`` yet (Ollama) fall
+    back to ``NullProvider`` so the REPL keeps running — the user sees
+    the offline placeholder for non-slash input until they land.
     """
     if spec.name == "anthropic":
         return AnthropicProvider(api_key or "")
     if spec.name == "google":
         return GoogleProvider(api_key or "")
+    if spec.name == "openai":
+        return OpenAIProvider(api_key or "")
     return NullProvider()

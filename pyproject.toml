@@ -40,8 +40,17 @@ dependencies = [
   # Gemini provider — Google Gen AI SDK. Bundled by default because
   # Gemini's free tier (1.5k req/day, tool-use capable) is the main
   # no-credit-card on-ramp for new users; an optional extra would
-  # keep that barrier in place.
-  "google-genai>=0.2.0",
+  # keep that barrier in place. Floor at 1.0 so ``FunctionResponse.id``
+  # and the stabilised ``HttpOptions`` / ``GenerateContentConfig``
+  # shapes the provider relies on are guaranteed to be present.
+  "google-genai>=1.0.0",
+  # OpenAI provider. Bundled for the same reason as Anthropic — many
+  # users already have a GPT key and expect it to Just Work without
+  # chasing an optional extra. Floor at 1.50 so the exception
+  # hierarchy the validator's auth/transient classification depends on
+  # (``PermissionDeniedError`` added in 1.2.x, ``APIError`` inheritance
+  # stabilised later) is reliable.
+  "openai>=1.50.0",
   # Stores the Anthropic key in the OS credential manager so the user
   # only pastes it once. Cross-platform (Windows, macOS, Linux).
   "keyring>=24.0.0",

@@ -10,6 +10,7 @@ from src.providers.llm import (
     GoogleProvider,
     LLMProvider,
     NullProvider,
+    OpenAIProvider,
     create_provider,
     find,
 )
@@ -111,19 +112,24 @@ def test_create_provider_returns_anthropic_with_key():
 
 
 def test_create_provider_falls_back_to_null_for_unwired_providers():
-    # OpenAI / Ollama haven't shipped chat() yet. The factory hands
-    # back a NullProvider so the REPL keeps working with the
-    # "(no model selected)" placeholder until they land.
-    for name in ("openai", "ollama"):
-        spec = find(name)
-        provider = create_provider(spec, api_key="x")
-        assert isinstance(provider, NullProvider)
+    # Ollama hasn't shipped chat() yet. The factory hands back a
+    # NullProvider so the REPL keeps working with the "(no model
+    # selected)" placeholder until it lands.
+    spec = find("ollama")
+    provider = create_provider(spec, api_key="x")
+    assert isinstance(provider, NullProvider)
 
 
 def test_create_provider_returns_google_with_key():
     spec = find("google")
     provider = create_provider(spec, api_key="AIzaFake")
     assert isinstance(provider, GoogleProvider)
+
+
+def test_create_provider_returns_openai_with_key():
+    spec = find("openai")
+    provider = create_provider(spec, api_key="sk-test")
+    assert isinstance(provider, OpenAIProvider)
 
 
 def test_llm_provider_is_usable_as_type_hint():
@@ -752,3 +758,393 @@ def test_google_provider_turn_passes_bounded_timeout_via_http_options(monkeypatc
     http_options = genai_mod.Client.last_client.http_options
     assert http_options is not None
     assert 0 < http_options.timeout <= 300_000
+
+
+# --- OpenAIProvider ----------------------------------------------------
+
+
+def _install_fake_openai(
+    monkeypatch,
+    *,
+    reply_text=None,
+    tool_calls=None,
+    finish_reason="stop",
+    raise_error=None,
+):
+    """Install a minimal fake of the ``openai`` module so OpenAIProvider
+    can be exercised without network access.
+
+    ``reply_text`` / ``tool_calls`` shape the completion response.
+    ``finish_reason`` mirrors OpenAI's ``choices[0].finish_reason``.
+    ``raise_error`` — "auth" | "bad_request" | "api" | None.
+    """
+
+    class AuthenticationError(Exception):
+        pass
+
+    class PermissionDeniedError(AuthenticationError):
+        pass
+
+    class BadRequestError(Exception):
+        pass
+
+    class APIError(Exception):
+        pass
+
+    class RateLimitError(APIError):
+        pass
+
+    class Function:
+        def __init__(self, name, arguments):
+            self.name = name
+            self.arguments = arguments
+
+    class ToolCall:
+        def __init__(self, id, name, arguments):
+            self.id = id
+            self.type = "function"
+            self.function = Function(name, arguments)
+
+    class Message:
+        def __init__(self, content=None, tool_calls=None):
+            self.content = content
+            self.tool_calls = tool_calls
+
+    class Choice:
+        def __init__(self, message, finish_reason):
+            self.message = message
+            self.finish_reason = finish_reason
+
+    class Completion:
+        def __init__(self, message, finish_reason):
+            self.choices = [Choice(message, finish_reason)]
+
+    class Completions:
+        def __init__(self):
+            self.last_kwargs: dict = {}
+
+        def create(self, **kwargs):
+            self.last_kwargs = kwargs
+            if raise_error == "auth":
+                raise AuthenticationError("Invalid API key")
+            if raise_error == "permission":
+                raise PermissionDeniedError("permission denied")
+            if raise_error == "bad_request":
+                raise BadRequestError("billing: insufficient quota")
+            if raise_error == "rate":
+                raise RateLimitError("rate limit exceeded")
+            if raise_error == "api":
+                raise APIError("upstream 500")
+            tool_call_objs = [
+                ToolCall(tc["id"], tc["name"], tc["arguments"])
+                for tc in (tool_calls or [])
+            ] or None
+            return Completion(
+                Message(content=reply_text, tool_calls=tool_call_objs),
+                finish_reason,
+            )
+
+    class Chat:
+        def __init__(self):
+            self.completions = Completions()
+
+    class Client:
+        last_client: "Client | None" = None
+
+        def __init__(self, *, api_key, timeout=None, **kw):
+            self.api_key = api_key
+            self.timeout = timeout
+            self.kwargs = kw
+            self.chat = Chat()
+            Client.last_client = self
+
+    module = types.ModuleType("openai")
+    module.OpenAI = Client
+    module.AuthenticationError = AuthenticationError
+    module.PermissionDeniedError = PermissionDeniedError
+    module.BadRequestError = BadRequestError
+    module.APIError = APIError
+    module.RateLimitError = RateLimitError
+    monkeypatch.setitem(sys.modules, "openai", module)
+    return module
+
+
+def test_openai_provider_chat_returns_reply_text(monkeypatch):
+    _install_fake_openai(monkeypatch, reply_text="hello from gpt")
+
+    reply = OpenAIProvider(api_key="sk-test").chat(
+        [{"role": "user", "content": "hi"}]
+    )
+
+    assert reply == "hello from gpt"
+
+
+def test_openai_provider_chat_translates_user_messages_to_openai_messages(monkeypatch):
+    fake = _install_fake_openai(monkeypatch, reply_text="ok")
+
+    OpenAIProvider(api_key="k").chat(
+        [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "reply"},
+            {"role": "user", "content": "second"},
+        ]
+    )
+
+    sent = fake.OpenAI.last_client.chat.completions.last_kwargs
+    # Plain-string messages pass through unchanged.
+    assert sent["messages"] == [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "reply"},
+        {"role": "user", "content": "second"},
+    ]
+
+
+def test_openai_provider_chat_passes_bounded_timeout(monkeypatch):
+    """The SDK's default timeout is generous; the REPL needs a tight
+    bound so a flaky network doesn't freeze the key prompt for
+    minutes."""
+    fake = _install_fake_openai(monkeypatch, reply_text="ok")
+
+    OpenAIProvider(api_key="k").chat([{"role": "user", "content": "hi"}])
+
+    client = fake.OpenAI.last_client
+    assert client.timeout is not None
+    assert 0 < client.timeout <= 300
+
+
+def test_openai_provider_chat_handles_empty_content_gracefully(monkeypatch):
+    """A finish_reason of ``content_filter`` can leave ``message.content``
+    as ``None``. Return an empty string rather than crashing."""
+    _install_fake_openai(
+        monkeypatch, reply_text=None, finish_reason="content_filter"
+    )
+
+    reply = OpenAIProvider(api_key="k").chat(
+        [{"role": "user", "content": "bad prompt"}]
+    )
+    assert reply == ""
+
+
+def test_openai_provider_without_sdk_raises_import_error(monkeypatch):
+    monkeypatch.setitem(sys.modules, "openai", None)
+
+    with pytest.raises(ImportError):
+        OpenAIProvider(api_key="k").chat([{"role": "user", "content": "hi"}])
+
+
+def test_openai_provider_turn_returns_text_response(monkeypatch):
+    _install_fake_openai(monkeypatch, reply_text="hello", finish_reason="stop")
+
+    response = OpenAIProvider(api_key="k").turn(
+        [{"role": "user", "content": "hi"}], tools=[]
+    )
+
+    assert response.stop_reason == "end_turn"
+    assert response.content == [{"type": "text", "text": "hello"}]
+
+
+def test_openai_provider_turn_returns_tool_use_when_model_calls_function(monkeypatch):
+    _install_fake_openai(
+        monkeypatch,
+        reply_text="let me check",
+        tool_calls=[
+            {"id": "call_abc", "name": "read_draft", "arguments": "{}"}
+        ],
+        finish_reason="tool_calls",
+    )
+
+    response = OpenAIProvider(api_key="k").turn(
+        [{"role": "user", "content": "what's in the draft?"}], tools=[]
+    )
+
+    assert response.stop_reason == "tool_use"
+    # Both the text preamble and the tool_use block surface.
+    kinds = [b["type"] for b in response.content]
+    assert kinds == ["text", "tool_use"]
+    tool_block = response.content[1]
+    assert tool_block["id"] == "call_abc"
+    assert tool_block["name"] == "read_draft"
+    assert tool_block["input"] == {}
+
+
+def test_openai_provider_turn_parses_tool_call_arguments_json(monkeypatch):
+    """OpenAI returns arguments as a JSON string; the agent expects a
+    dict. Translation must decode."""
+    _install_fake_openai(
+        monkeypatch,
+        reply_text=None,
+        tool_calls=[
+            {
+                "id": "call_1",
+                "name": "propose_typo_fix",
+                "arguments": '{"page": 2, "before": "dragn", "after": "dragon", "reason": "typo"}',
+            }
+        ],
+        finish_reason="tool_calls",
+    )
+
+    response = OpenAIProvider(api_key="k").turn(
+        [{"role": "user", "content": "fix typos"}], tools=[]
+    )
+
+    tool_block = next(b for b in response.content if b["type"] == "tool_use")
+    assert tool_block["input"] == {
+        "page": 2,
+        "before": "dragn",
+        "after": "dragon",
+        "reason": "typo",
+    }
+
+
+def test_openai_provider_turn_forwards_tool_schemas_to_sdk(monkeypatch):
+    from src.agent import Tool as AgentTool
+
+    fake = _install_fake_openai(monkeypatch, reply_text="ok")
+    tool = AgentTool(
+        name="read_draft",
+        description="Read the loaded PDF draft",
+        input_schema={"type": "object", "properties": {}},
+        handler=lambda _i: "",
+    )
+    OpenAIProvider(api_key="k").turn(
+        [{"role": "user", "content": "hi"}], tools=[tool]
+    )
+
+    sent = fake.OpenAI.last_client.chat.completions.last_kwargs
+    assert sent["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_draft",
+                "description": "Read the loaded PDF draft",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+
+
+def test_openai_provider_turn_translates_tool_result_messages_back_to_openai(monkeypatch):
+    """Agent's tool_result blocks must land on the SDK as role=tool
+    messages with the matching ``tool_call_id``. An assistant message
+    with tool_use blocks becomes role=assistant + tool_calls array."""
+    fake = _install_fake_openai(monkeypatch, reply_text="done")
+
+    messages = [
+        {"role": "user", "content": "read it"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "sure"},
+                {
+                    "type": "tool_use",
+                    "id": "call_abc",
+                    "name": "read_draft",
+                    "input": {"page": 1},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_abc",
+                    "content": "Page 1: Hello",
+                }
+            ],
+        },
+    ]
+
+    OpenAIProvider(api_key="k").turn(messages, tools=[])
+
+    sent = fake.OpenAI.last_client.chat.completions.last_kwargs
+    sent_msgs = sent["messages"]
+    # user → assistant-with-tool_calls → tool-result
+    assert sent_msgs[0] == {"role": "user", "content": "read it"}
+    assistant = sent_msgs[1]
+    assert assistant["role"] == "assistant"
+    assert assistant["content"] == "sure"
+    assert assistant["tool_calls"] == [
+        {
+            "id": "call_abc",
+            "type": "function",
+            "function": {
+                "name": "read_draft",
+                "arguments": '{"page": 1}',
+            },
+        }
+    ]
+    assert sent_msgs[2] == {
+        "role": "tool",
+        "tool_call_id": "call_abc",
+        "content": "Page 1: Hello",
+    }
+
+
+def test_openai_provider_turn_preserves_ids_for_parallel_tool_calls(monkeypatch):
+    fake = _install_fake_openai(monkeypatch, reply_text="continuing")
+
+    messages = [
+        {"role": "user", "content": "check both pages"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "call_A",
+                    "name": "read_draft",
+                    "input": {},
+                },
+                {
+                    "type": "tool_use",
+                    "id": "call_B",
+                    "name": "read_draft",
+                    "input": {},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "call_A", "content": "A"},
+                {"type": "tool_result", "tool_use_id": "call_B", "content": "B"},
+            ],
+        },
+    ]
+
+    OpenAIProvider(api_key="k").turn(messages, tools=[])
+
+    sent = fake.OpenAI.last_client.chat.completions.last_kwargs["messages"]
+    # Two separate tool messages with distinct tool_call_ids.
+    tool_msgs = [m for m in sent if m.get("role") == "tool"]
+    assert [m["tool_call_id"] for m in tool_msgs] == ["call_A", "call_B"]
+    assert [m["content"] for m in tool_msgs] == ["A", "B"]
+
+
+def test_openai_provider_turn_surfaces_non_stop_finish_reason(monkeypatch):
+    """``length`` (truncation) / ``content_filter`` (policy block) must
+    not vanish silently. Surface a warning text block so the user sees
+    why the turn ended."""
+    _install_fake_openai(
+        monkeypatch, reply_text=None, finish_reason="content_filter"
+    )
+
+    response = OpenAIProvider(api_key="k").turn(
+        [{"role": "user", "content": "bad"}], tools=[]
+    )
+
+    texts = [b["text"] for b in response.content if b.get("type") == "text"]
+    assert texts
+    assert "content_filter" in texts[0]
+
+
+def test_openai_provider_turn_passes_bounded_timeout(monkeypatch):
+    fake = _install_fake_openai(monkeypatch, reply_text="ok")
+
+    OpenAIProvider(api_key="k").turn(
+        [{"role": "user", "content": "hi"}], tools=[]
+    )
+
+    client = fake.OpenAI.last_client
+    assert client.timeout is not None
+    assert 0 < client.timeout <= 300
