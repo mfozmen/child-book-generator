@@ -141,6 +141,38 @@ def test_load_expands_tilde_in_path(tmp_path, monkeypatch):
     assert len(repl.draft.pages) == 1
 
 
+def test_load_strips_surrounding_double_quotes(tmp_path):
+    """Users copy-pasting Windows-style paths with spaces often wrap
+    them in double quotes (PowerShell habit). The REPL isn't a shell,
+    so the quotes arrive as literal characters — `/load` must strip
+    them so Path() doesn't look for a file whose name starts with ""."""
+    spaced = tmp_path / "oglum kitabi.pdf"
+    pdf = _write_pdf(
+        spaced.parent if spaced.parent.exists() else tmp_path,
+        [{"text": "hi"}],
+    )
+    # Rename the produced file to the intended name with spaces.
+    spaced.unlink(missing_ok=True)
+    pdf.rename(spaced)
+
+    repl, buf = _make(tmp_path, [f'/load "{spaced}"', "/exit"])
+    repl.run()
+
+    assert repl.draft is not None
+    assert "not found" not in buf.getvalue().lower()
+
+
+def test_load_strips_surrounding_single_quotes(tmp_path):
+    """Same for 'single quotes' — common from Linux / macOS pastes."""
+    pdf = _write_pdf(tmp_path, [{"text": "hi"}])
+
+    repl, buf = _make(tmp_path, [f"/load '{pdf}'", "/exit"])
+    repl.run()
+
+    assert repl.draft is not None
+    assert "not found" not in buf.getvalue().lower()
+
+
 def test_load_quoted_path_with_spaces(tmp_path):
     spaced_dir = tmp_path / "my drafts"
     spaced_dir.mkdir()

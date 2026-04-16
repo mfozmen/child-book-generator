@@ -47,6 +47,20 @@ from src.providers.validator import (
 SlashHandler = Callable[["Repl", str], int | None]
 
 
+def _unquote(s: str) -> str:
+    """Strip a single pair of matching surrounding quotes.
+
+    Users copy-pasting Windows paths with spaces reach for double quotes
+    (PowerShell habit), and macOS / Linux pastes often arrive with single
+    quotes. The REPL isn't a shell so the quotes come through as literal
+    characters — strip one balanced pair so ``Path(...)`` gets a usable
+    string.
+    """
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
+        return s[1:-1]
+    return s
+
+
 _AGENT_GREETING_HINT = (
     "The user just gave you a PDF draft. Call read_draft to see what's in "
     "it, greet them in the same language they will use (they haven't "
@@ -640,7 +654,7 @@ def _cmd_render(repl: Repl, args: str) -> None:
 
 def _cmd_load(repl: Repl, args: str) -> None:
     """Ingest a PDF draft into the REPL session."""
-    path_str = args.strip()
+    path_str = _unquote(args.strip())
     if not path_str:
         repl._console.print("Usage: /load <path-to-pdf>")
         return None
