@@ -40,6 +40,7 @@ class Draft:
     author: str = ""
     cover_image: Path | None = None
     cover_subtitle: str = ""
+    cover_style: str = "full-bleed"
     back_cover_text: str = ""
 
 
@@ -215,6 +216,7 @@ def to_book(draft: Draft, source_dir: Path) -> Book:
         cover=Cover(
             image=_rel(draft.cover_image),
             subtitle=draft.cover_subtitle,
+            style=draft.cover_style,
         ),
         back_cover=BackCover(text=draft.back_cover_text),
         pages=schema_pages,

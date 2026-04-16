@@ -7,6 +7,7 @@ from reportlab.pdfbase import pdfmetrics
 from .config import (
     PAGE_W, PAGE_H, MARGIN, TOP_MARGIN, BOTTOM_MARGIN,
     TITLE_SIZE, AUTHOR_SIZE, BODY_SIZE, BACK_SIZE, LINE_HEIGHT,
+    COVER_TITLE_SIZE, COVER_AUTHOR_SIZE, COVER_BAND_H, COVER_BAND_ALPHA,
     FONT_REGULAR, FONT_BOLD,
 )
 from .schema import Book, Page
@@ -70,33 +71,91 @@ def _draw_image_fit(c: Canvas, path: Path, x: float, y: float, w: float, h: floa
     c.drawImage(img, dx, dy, width=dw, height=dh, preserveAspectRatio=True, mask="auto")
 
 
-def draw_cover(c: Canvas, book: Book) -> None:
+def _draw_cover_full_bleed(c: Canvas, book: Book) -> None:
+    """Drawing covers the whole page. A translucent white band at the
+    bottom carries the title; the author sits centred inside the band.
+    The band gives the type legibility over busy artwork without
+    losing the picture-book feel of a full-bleed cover."""
     if book.cover.image:
-        img_path = book.source_dir / book.cover.image
         _draw_image_fit(
-            c, img_path,
-            MARGIN, PAGE_H / 2 - 10 * mm,
-            PAGE_W - 2 * MARGIN, PAGE_H / 2 - 5 * mm,
+            c, book.source_dir / book.cover.image,
+            0, 0, PAGE_W, PAGE_H,
         )
 
-    c.setFont(FONT_BOLD, TITLE_SIZE)
-    title_w = pdfmetrics.stringWidth(book.title, FONT_BOLD, TITLE_SIZE)
-    c.drawString((PAGE_W - title_w) / 2, PAGE_H - TOP_MARGIN - TITLE_SIZE, book.title)
+    # Translucent band hugging the bottom — wide enough to hold the
+    # title comfortably, dim enough to let the drawing bleed through.
+    c.setFillColorRGB(1, 1, 1, alpha=COVER_BAND_ALPHA)
+    c.rect(0, 0, PAGE_W, COVER_BAND_H, stroke=0, fill=1)
+    c.setFillColorRGB(0, 0, 0)
+
+    # Title near the top of the band.
+    c.setFont(FONT_BOLD, COVER_TITLE_SIZE)
+    title_w = pdfmetrics.stringWidth(book.title, FONT_BOLD, COVER_TITLE_SIZE)
+    title_y = COVER_BAND_H - 12 * mm - COVER_TITLE_SIZE * 0.2
+    c.drawString((PAGE_W - title_w) / 2, title_y, book.title)
 
     if book.cover.subtitle:
-        c.setFont(FONT_REGULAR, AUTHOR_SIZE)
-        sw = pdfmetrics.stringWidth(book.cover.subtitle, FONT_REGULAR, AUTHOR_SIZE)
+        c.setFont(FONT_REGULAR, COVER_AUTHOR_SIZE)
+        sw = pdfmetrics.stringWidth(
+            book.cover.subtitle, FONT_REGULAR, COVER_AUTHOR_SIZE,
+        )
         c.drawString(
-            (PAGE_W - sw) / 2,
-            PAGE_H - TOP_MARGIN - TITLE_SIZE - AUTHOR_SIZE - 6,
+            (PAGE_W - sw) / 2, title_y - COVER_AUTHOR_SIZE - 2 * mm,
             book.cover.subtitle,
         )
 
     if book.author:
-        c.setFont(FONT_REGULAR, AUTHOR_SIZE)
-        aw = pdfmetrics.stringWidth(book.author, FONT_REGULAR, AUTHOR_SIZE)
+        c.setFont(FONT_REGULAR, COVER_AUTHOR_SIZE)
+        aw = pdfmetrics.stringWidth(book.author, FONT_REGULAR, COVER_AUTHOR_SIZE)
+        c.drawString((PAGE_W - aw) / 2, 6 * mm, book.author)
+
+
+def _draw_cover_framed(c: Canvas, book: Book) -> None:
+    """Letterboxed drawing: title band at the top, centred drawing
+    below, author in a thin strip along the bottom. Calmer than
+    full-bleed, better when the illustration needs breathing room."""
+    # Title band at the top.
+    c.setFont(FONT_BOLD, COVER_TITLE_SIZE)
+    title_w = pdfmetrics.stringWidth(book.title, FONT_BOLD, COVER_TITLE_SIZE)
+    title_y = PAGE_H - TOP_MARGIN - COVER_TITLE_SIZE
+    c.drawString((PAGE_W - title_w) / 2, title_y, book.title)
+
+    subtitle_y = title_y
+    if book.cover.subtitle:
+        c.setFont(FONT_REGULAR, COVER_AUTHOR_SIZE)
+        sw = pdfmetrics.stringWidth(
+            book.cover.subtitle, FONT_REGULAR, COVER_AUTHOR_SIZE,
+        )
+        subtitle_y = title_y - COVER_AUTHOR_SIZE - 2 * mm
+        c.drawString((PAGE_W - sw) / 2, subtitle_y, book.cover.subtitle)
+
+    # Centred drawing fills what's left between the title band and the
+    # author strip. preserveAspectRatio keeps the illustration from
+    # squishing; the margins handle the letterbox.
+    if book.cover.image:
+        image_top = subtitle_y - 6 * mm
+        image_bottom = BOTTOM_MARGIN + COVER_AUTHOR_SIZE + 6 * mm
+        _draw_image_fit(
+            c, book.source_dir / book.cover.image,
+            MARGIN, image_bottom,
+            PAGE_W - 2 * MARGIN, image_top - image_bottom,
+        )
+
+    if book.author:
+        c.setFont(FONT_REGULAR, COVER_AUTHOR_SIZE)
+        aw = pdfmetrics.stringWidth(book.author, FONT_REGULAR, COVER_AUTHOR_SIZE)
         c.drawString((PAGE_W - aw) / 2, BOTTOM_MARGIN, book.author)
 
+
+def draw_cover(c: Canvas, book: Book) -> None:
+    """Dispatch to the renderer for ``book.cover.style``. Unknown
+    styles fall back to full-bleed so a bad value doesn't abort the
+    whole render — the schema loader is where invalid styles get
+    rejected."""
+    if book.cover.style == "framed":
+        _draw_cover_framed(c, book)
+    else:
+        _draw_cover_full_bleed(c, book)
     c.showPage()
 
 

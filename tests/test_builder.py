@@ -73,3 +73,113 @@ def test_no_blank_page_after_the_cover(tmp_path):
         f"Expected the first story page right after the cover, got: "
         f"{first_story_text!r}"
     )
+
+
+# --- cover styles --------------------------------------------------------
+
+
+def _cover_image(tmp_path: Path) -> Path:
+    from PIL import Image
+
+    img = tmp_path / "cover.png"
+    Image.new("RGB", (300, 200), (200, 100, 50)).save(img)
+    return img
+
+
+def _book_with_cover(tmp_path: Path, style: str) -> Book:
+    img = _cover_image(tmp_path)
+    return Book(
+        title="The Brave Owl",
+        author="Yusuf",
+        cover=Cover(image=img.name, subtitle="", style=style),
+        back_cover=BackCover(text="", image=None),
+        pages=[Page(text="once", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+
+
+def test_cover_full_bleed_style_renders_title_and_author(tmp_path):
+    """``full-bleed``: drawing fills the page, title sits on a
+    translucent band at the bottom, author tucked in a corner."""
+    out = tmp_path / "book.pdf"
+    build_pdf(_book_with_cover(tmp_path, "full-bleed"), out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    assert "The Brave Owl" in cover_text
+    assert "Yusuf" in cover_text
+
+
+def test_cover_framed_style_renders_title_and_author(tmp_path):
+    """``framed``: title in a band at the top, letterboxed drawing
+    below, author at the bottom."""
+    out = tmp_path / "book.pdf"
+    build_pdf(_book_with_cover(tmp_path, "framed"), out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    assert "The Brave Owl" in cover_text
+    assert "Yusuf" in cover_text
+
+
+def test_draw_cover_dispatches_to_style_specific_renderer(tmp_path, monkeypatch):
+    """``draw_cover`` picks the right template implementation based
+    on ``book.cover.style``. Dispatch must actually branch — not
+    render the same thing regardless of the field's value."""
+    from src import pages
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        pages, "_draw_cover_full_bleed",
+        lambda _c, _b: calls.append("full-bleed"),
+    )
+    monkeypatch.setattr(
+        pages, "_draw_cover_framed",
+        lambda _c, _b: calls.append("framed"),
+    )
+
+    build_pdf(_book_with_cover(tmp_path, "framed"), tmp_path / "a.pdf")
+    build_pdf(_book_with_cover(tmp_path, "full-bleed"), tmp_path / "b.pdf")
+
+    assert calls == ["framed", "full-bleed"]
+
+
+def test_cover_framed_renders_subtitle_under_title(tmp_path):
+    """The framed template shows the subtitle right under the title
+    so a tagline ("a story by Yusuf", "chapter one", …) can live on
+    the cover without squashing the drawing."""
+    img = _cover_image(tmp_path)
+    book = Book(
+        title="Owls",
+        author="Yusuf",
+        cover=Cover(image=img.name, subtitle="a night adventure", style="framed"),
+        back_cover=BackCover(),
+        pages=[Page(text="x", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+    out = tmp_path / "book.pdf"
+    build_pdf(book, out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    assert "Owls" in cover_text
+    assert "a night adventure" in cover_text
+
+
+def test_cover_style_default_is_full_bleed_when_unspecified(tmp_path):
+    """Books constructed without a style (the default from ``Cover``)
+    must still render — falls back to full-bleed."""
+    img = _cover_image(tmp_path)
+    book = Book(
+        title="Default Style",
+        cover=Cover(image=img.name),
+        back_cover=BackCover(),
+        pages=[Page(text="x", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+    out = tmp_path / "book.pdf"
+    build_pdf(book, out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    assert "Default Style" in cover_text
