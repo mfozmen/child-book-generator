@@ -160,6 +160,9 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
   ([`95e2a6c`](https://github.com/mfozmen/littlepress-ai/commit/95e2a6c8c37e9d9f02ae5a52dc0d2a8d47121767))
 
 - **release**: 1.1.0 [skip ci]
+  ([`e53cab0`](https://github.com/mfozmen/littlepress-ai/commit/e53cab0e77c4de6ff3733279309939bf6144a7b0))
+
+- **release**: 1.1.0 [skip ci]
   ([`999d89c`](https://github.com/mfozmen/littlepress-ai/commit/999d89ce1ab9db043a1322190cb08fbcb8a06358))
 
 - **release**: 1.1.0 [skip ci]
@@ -230,6 +233,21 @@ Yavru Dinozor test had a tidy but over-regular rhythm. The skill already says "n
   row, cap image-full at 30%", but the agent never sees that — .claude/skills/ is Claude Code
   context, not LLM system prompt. Fix idea noted in the plan: bake the rhythm rules into
   choose_layout's tool description and pass neighbour context in the tool input.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Add overwrite + input-folder items to plan
+  ([`088d4b7`](https://github.com/mfozmen/littlepress-ai/commit/088d4b70791608d9ee858ea878eda1d7218209ff))
+
+End-to-end feedback turned up two housekeeping gaps:
+
+1. Every render silently overwrites the previous PDF (same slug, same path). Rendering twice loses
+  the first copy with no warning — plan calls for versioned filenames alongside a stable "latest".
+  2. Draft PDFs live wherever the user dropped them; memory keys off that absolute path. Moving or
+  deleting the source breaks the saved session. Plan is to copy the PDF into .book-gen/input/ on
+  first load and retarget source_pdf there.
+
+Both land at the top of "Next up" because they affect data safety.
 
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
