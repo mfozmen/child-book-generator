@@ -160,6 +160,9 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
   ([`95e2a6c`](https://github.com/mfozmen/littlepress-ai/commit/95e2a6c8c37e9d9f02ae5a52dc0d2a8d47121767))
 
 - **release**: 1.1.0 [skip ci]
+  ([`3e223c7`](https://github.com/mfozmen/littlepress-ai/commit/3e223c746dc0d5923aa9cd149edb8b87b492dd65))
+
+- **release**: 1.1.0 [skip ci]
   ([`748e0b5`](https://github.com/mfozmen/littlepress-ai/commit/748e0b54b4a6e0d5314d78a6e5c4d618b36d45d9))
 
 - **release**: 1.1.0 [skip ci]
@@ -389,6 +392,53 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
   intentionally doesn't pop up — it's a print artefact). - Cover the platform dispatch in
   open_in_default_viewer directly, working around the conftest auto-mock via a module-load-time
   import binding. Gets src/agent_tools.py back to 100% coverage.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **agent**: Layout rhythm awareness in choose_layout / propose_layouts
+  ([#34](https://github.com/mfozmen/littlepress-ai/pull/34),
+  [`f160ed2`](https://github.com/mfozmen/littlepress-ai/commit/f160ed2b88f5f0a1b54b6a0ee2661e4f1417c320))
+
+* feat(agent): bake rhythm rules into layout tools + echo neighbours
+
+The first end-to-end test (Yavru Dinozor) produced a tidy but over-regular rhythm — full / top /
+  bottom / full / top / bottom — that looked varied in a table but monotonous on paper. The rules
+  that'd prevent this live in .claude/skills/select-page-layout, but the LLM never sees the skill at
+  decision time.
+
+Fix: lift the rhythm rules into both layout tools' descriptions
+
+(no three-in-a-row, cap image-full at ~30 %, alternate top/bottom). Every time the agent calls
+  choose_layout or propose_layouts, the rules are in context.
+
+Plus a feedback loop: choose_layout's reply now lists the two pages before and after the one that
+  just changed. The agent doesn't need a read_draft round-trip to see whether it's about to repeat
+  itself — the adjacent layouts arrive with the confirmation.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* test(agent): tighten rhythm-awareness tests from PR #34 review
+
+Three test-coverage gaps the review flagged:
+
+1. The neighbour-summary test had pages 1, 3, 5 all seeded with image-top, so ``"image-top" in
+  result`` passed whether page 3 got mutated or not. Seed every page with a distinct layout and
+  assert the ``p<n>=layout`` signature for each position, including the post-mutation value for the
+  page that just changed.
+
+2. The page-number assertion was ``"2" in result and "4" in result`` — any response containing those
+  digits passed, even a format refactor that dropped the ``p<n>=`` prefix. Replaced with an
+  assertion on the exact ``p2=…`` / ``p4=…`` tokens plus the ``(this page)`` marker.
+
+3. No boundary coverage for _neighbour_summary. Added three unit tests via choose_layout: first-page
+  (window clamps, no p0/p-1), last-page (no p4 on a 3-page book), single-page (just the page itself,
+  no ghost neighbours).
+
+Production code unchanged — these are tests-only tightenings plus new boundary tests.
 
 ---------
 
