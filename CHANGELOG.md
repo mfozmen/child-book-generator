@@ -160,6 +160,9 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
   ([`95e2a6c`](https://github.com/mfozmen/littlepress-ai/commit/95e2a6c8c37e9d9f02ae5a52dc0d2a8d47121767))
 
 - **release**: 1.1.0 [skip ci]
+  ([`7fd4e3c`](https://github.com/mfozmen/littlepress-ai/commit/7fd4e3cab8f27ced0587d7495b935327c9f9fe13))
+
+- **release**: 1.1.0 [skip ci]
   ([`3e223c7`](https://github.com/mfozmen/littlepress-ai/commit/3e223c746dc0d5923aa9cd149edb8b87b492dd65))
 
 - **release**: 1.1.0 [skip ci]
@@ -350,6 +353,64 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
   invariant depends on the directory being owned by Littlepress — a user hand-editing a file in
   there breaks the assumption. Say so explicitly instead of hiding it behind "same hash ⇒ same
   bytes".
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Poster cover template + select-cover-template skill
+  ([#35](https://github.com/mfozmen/littlepress-ai/pull/35),
+  [`38b10ef`](https://github.com/mfozmen/littlepress-ai/commit/38b10effbb0d13f0c6e2bd781386d2f6a43a4a02))
+
+* feat: poster cover template + select-cover-template skill
+
+Adds the third cover template the plan called for:
+
+- ``poster`` is type-only — huge centred title, author along the bottom, no drawing. Intended for
+  books whose child-author didn't make a cover illustration, where full-bleed and framed both
+  produce awkward empty illustration holes. - set_cover learns that poster doesn't need a page
+  drawing: its ``page`` argument becomes optional when ``style='poster'``. Every other style still
+  requires a page with an image. - VALID_COVER_STYLES + the tool schema enum expand accordingly; the
+  renderer dispatcher branches to _draw_cover_poster. - Shrink-to-fit already shipped for the two
+  existing templates is reused for poster so long English titles stay on the page.
+
+And the decision mechanism the plan asked for, mirroring the select-page-layout skill:
+
+- .claude/skills/select-cover-template/SKILL.md encodes the rules for picking between the three
+  templates — no drawing → poster, long title + busy drawing → framed, dramatic illustration →
+  full-bleed, quiet / small-figure → framed, default → full-bleed. CLAUDE.md references it so the
+  agent consults the skill before calling set_cover.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix: address PR review for poster template + skill
+
+Five findings, all valid:
+
+1. Skill / code drift on the title floor. The skill documented a 16-pt minimum; the code capped at
+  18-pt. Neither was right — see #3. Replaced with COVER_TITLE_MIN_READABLE = 14 in src/config.py,
+  referenced by the skill as an *advisory* threshold (below this, the skill nudges you to a
+  different template).
+
+2. set_cover with style='poster' + bogus page silently accepted out-of-range pages. Moved the page
+  validation before the style branch so an invalid page is rejected regardless of whether poster
+  will use it. Poster still ignores a valid page, but now says so in the reply.
+
+3. COVER_POSTER_TITLE_SIZE = 64 hit _fit_title_size's 18-pt floor for long titles — at which point
+  the 18-pt text was still wider than the page. Root cause: the floor was a hard cap that could
+  still clip. Dropped the floor entirely; _fit_title_size now shrinks proportionally so fit is
+  guaranteed by math. Lowered the preferred poster size from 64 to 52 so the shrink-ratio isn't
+  absurd. Added a regression test that captures the actual drawString font size and asserts the
+  rendered width stays inside the page.
+
+4. draw_cover's 'else: full-bleed' fallback contradicted its own docstring. Replaced with a raise on
+  unknown styles so a direct Book-with-typo bypasses surface instead of rendering as the wrong
+  cover.
+
+5. Skill red-flag about not picking poster for unpolished drawings had no matching decision rule.
+  Promoted it to an explicit rule: "A cover drawing exists → never pick poster."
 
 ---------
 
