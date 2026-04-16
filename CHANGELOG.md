@@ -262,6 +262,9 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 - **release**: 1.1.0 [skip ci]
   ([`5facc08`](https://github.com/mfozmen/littlepress-ai/commit/5facc08c8bc2fe5b08a366347b3ca5cd5a367131))
 
+- **release**: 2.0.0 [skip ci]
+  ([`5ba289c`](https://github.com/mfozmen/littlepress-ai/commit/5ba289c5e7126cedabc2a368d104ef2d225e7644))
+
 ### Continuous Integration
 
 - Retry release push so a racing merge doesn't skip a version bump
@@ -786,6 +789,67 @@ Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
+- **providers**: Ollama local chat + tool use
+  ([#39](https://github.com/mfozmen/littlepress-ai/pull/39),
+  [`86748bb`](https://github.com/mfozmen/littlepress-ai/commit/86748bb9c940f2f3783080c3fc4424718dc584d2))
+
+* feat(providers): Ollama local chat + tool use
+
+Fourth and final fully-wired provider, completing the LLM provider work from the plan.
+
+- OllamaProvider in src/providers/llm.py with chat() and turn(), lazy-importing the ollama client so
+  users on a cloud provider don't need it installed. - Messages translate at the boundary —
+  OpenAI-compatible shape with two Ollama twists: assistant tool_calls carry ``{function: {name,
+  arguments: dict}}`` (no outer id — Ollama doesn't issue call ids), and tool results go as ``{role:
+  tool, content, tool_name}``. Tool-use ids are synthesised internally so the agent can still
+  correlate tool_use with its tool_result in the next turn. - Host (``http://localhost:11434``
+  default) and model are configurable on the provider — covers users running Ollama in a container
+  or on a remote LAN host. - Timeout widened to 180 s (vs 60 s for cloud) because local first- load
+  inference can legitimately be slow; still finite so a stuck daemon doesn't freeze the REPL.
+
+- _check_ollama validator pings the local daemon via ``client.list()``. Unreachable service →
+  TransientValidationError with a "make sure Ollama is running" message (not KeyValidationError —
+  there's no key to revoke; not ProviderUnavailable — the user can start the daemon and retry). SDK
+  missing → ProviderUnavailable as with the other providers.
+
+- validate_key no longer short-circuits on ``requires_api_key=False``. Any provider with a
+  registered checker runs it — that's how Ollama's reachability ping gets invoked through the
+  picker. Providers with no checker (``none``) still no-op.
+
+- REPL's _prompt_for_provider now runs validate_key for key-less providers too. An unreachable
+  daemon shows the validator's message and aborts the picker instead of activating a dead provider.
+
+- ollama bundled as a default dep for parity with the other providers; floor at 0.4.0 so the modern
+  client.list() / chat() shapes are guaranteed.
+
+All 428 tests passing; 95% on src/providers/llm.py, 99% on src/providers/validator.py.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix(providers): address PR review for Ollama provider
+
+Three valid findings:
+
+1. Resume path bypassed the reachability ping. _resume_or_pick short-circuited on ``not
+  requires_api_key`` without checking whether the daemon was up — the exact UX gap the PR claimed to
+  prevent. Added _validate_silently(spec, "") on the keyless branch, falling back to the picker on
+  failure (matching the keyed-provider's resume path parity). Two new integration tests cover the
+  resume happy-path and the dead-daemon fallback.
+
+2. _check_ollama's error message hard-coded localhost:11434 even though the SDK honours OLLAMA_HOST.
+  Interpolated from the env var (with the same default) so the message stays correct when users
+  eventually configure a remote host.
+
+3. _import_ollama's ``if ollama is None`` guard was unreachable: Python's import statement either
+  succeeds (binding a module object, never None) or raises ImportError. Removed the dead branch. The
+  same pattern in the other providers predates this PR; not touched here.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
 - **render**: Keep numbered snapshots so renders don't clobber
   ([#30](https://github.com/mfozmen/littlepress-ai/pull/30),
   [`318bf3f`](https://github.com/mfozmen/littlepress-ai/commit/318bf3f585706f1ed6e7021b5a75fba35fdc61a7))
@@ -966,12 +1030,6 @@ Addresses review feedback on #26.
 Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
-
-### BREAKING CHANGES
-
-- ``python build.py book.json`` no longer exists. The only supported entry point is the
-  ``littlepress`` command, which drives the interactive agent flow. Any automation relying on the
-  legacy path needs to be rewritten to feed a PDF through the agent.
 
 
 ## v1.0.1 (2026-04-15)
