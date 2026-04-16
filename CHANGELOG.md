@@ -160,6 +160,9 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
   ([`95e2a6c`](https://github.com/mfozmen/littlepress-ai/commit/95e2a6c8c37e9d9f02ae5a52dc0d2a8d47121767))
 
 - **release**: 1.1.0 [skip ci]
+  ([`96cbe1a`](https://github.com/mfozmen/littlepress-ai/commit/96cbe1a35118f805af32357e6a2007ebf8aaa5ba))
+
+- **release**: 1.1.0 [skip ci]
   ([`7fd4e3c`](https://github.com/mfozmen/littlepress-ai/commit/7fd4e3cab8f27ced0587d7495b935327c9f9fe13))
 
 - **release**: 1.1.0 [skip ci]
@@ -585,6 +588,73 @@ More importantly — *which* template fits *which* book is a judgment call, not 
   skill encodes the decision rules (title length, tone, image aspect and busyness, whether there's
   even a cover drawing), and the agent consults it before calling set_cover. Renderer stays stupid;
   the reasoning lives in one auditable place.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **providers**: Gemini (Google Gen AI) chat + tool use
+  ([#36](https://github.com/mfozmen/littlepress-ai/pull/36),
+  [`eb6dca1`](https://github.com/mfozmen/littlepress-ai/commit/eb6dca1c18d24f113d706ed5c4655b8a50c53c1c))
+
+* feat(providers): Gemini (Google Gen AI) chat + tool use
+
+Second fully-wired provider after Anthropic. Matters because Gemini's free tier (1.5k req/day,
+  tool-use capable) lets users run Littlepress without a credit card — removing the biggest adoption
+  barrier new users hit today.
+
+- GoogleProvider class in src/providers/llm.py with chat() and turn(), lazy-importing google-genai
+  so users on another provider don't need the SDK installed. - Message translation at the boundary:
+  the agent is written against Anthropic's content-block format, so we translate both directions.
+  Assistant tool_use blocks become function_call Parts (role=model); user tool_result blocks become
+  function_response Parts (role=tool), with the function name looked up from the preceding tool_use.
+  Gemini doesn't always return an id on function_call, so we synthesise one so the agent can
+  correlate tool_use with its tool_result. - _check_google validator pings generate_content with the
+  spec's validation model (gemini-2.5-flash), classifying by the SDK's error message / status code:
+  API-key-not-valid or 401/403 → KeyValidationError; everything else (quota, billing, 5xx) →
+  TransientValidationError. Matches the Anthropic contract: resume keeps the saved key on transient,
+  drops it on auth. - google-genai bundled as a default dependency — the whole point is letting new
+  users start without hunting down extras. - find("google") + create_provider now return
+  GoogleProvider when an API key is provided.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix(providers): address PR review for Gemini provider
+
+Six valid findings — five in the provider, one in the validator:
+
+1. Timeout wasn't actually forwarded. The Gen AI SDK default is ~600 s which would freeze the REPL
+  on a flaky network (PR #12 is the Anthropic equivalent). Both chat() and turn() now build their
+  Client via a shared _client() helper that passes http_options=HttpOptions(timeout=60_000). Two
+  regression tests pin the contract (one per entry point).
+
+2. Parallel same-name tool calls lost correlation. The synthesised tool_use id was recorded in
+  Anthropic format but dropped at translation time. Now the id is forwarded via FunctionResponse.id,
+  so two simultaneous read_draft calls return two distinguishable results. Added a
+  parallel-same-name test.
+
+3. chat() crashed on SAFETY-blocked prompts. response.text is a property that *raises* ValueError
+  when there are no text parts, not just returns a falsy value — `or ""` never fired. Compose the
+  reply from candidates[0].content.parts directly via a new _collect_text_from_candidates helper.
+  Added a SAFETY test.
+
+4. finish_reason was ignored. SAFETY / RECITATION / MAX_TOKENS all looked like a clean end_turn, so
+  the user saw silence with no hint why. _gemini_response_to_blocks now surfaces a synthetic text
+  block when finish_reason is non-STOP and there's no real output — stop_reason stays "end_turn"
+  since the agent has no other signal to plumb through.
+
+5. Tool input_schema is forwarded raw to FunctionDeclaration. The current tools only use
+  Gemini-compatible JSON Schema features; the provider docstring now documents the supported subset
+  so a future oneOf / anyOf / $ref user knows to convert up front instead of hitting a call-time
+  failure.
+
+6. Validator auth classification was brittle. An English-only "API key" substring check would miss a
+  localised reword, and a status-alone check would miss Google's 400-with-"invalid key" surface. Now
+  combines isinstance(genai.errors.ClientError) with a 400/401/403 status check, falling back to
+  message substrings for SDKs that don't expose the class. New test covers the 400 + ClientError
+  path.
 
 ---------
 
