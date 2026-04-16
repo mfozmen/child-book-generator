@@ -67,7 +67,40 @@ Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
+- **repl**: Strip surrounding quotes from /load paths
+  ([#24](https://github.com/mfozmen/littlepress-ai/pull/24),
+  [`a3e0434`](https://github.com/mfozmen/littlepress-ai/commit/a3e043467e3a07df7352ced3c05aba23e5f409dc))
+
+* fix(repl): strip surrounding quotes from /load paths
+
+Reported: \`/load \"C:\Users\fahri\Downloads\YAVRU DINOZOR 1.pdf\"\`
+
+returned \"File not found\" because the REPL is not a shell — the quote characters came through
+  literally and Path() looked for a file whose name started with a double-quote.
+
+Strip a single matching pair of surrounding \" or ' before calling Path(). Two regression tests: a
+  path wrapped in double quotes and one wrapped in single quotes both resolve to a loaded draft
+  instead of a not-found error.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* docs: plan drag-and-drop PDF auto-load
+
+Record the next UX ask from the maintainer: when the user drags a PDF onto the terminal window, the
+  shell types out the file path. Detect that case (non-slash line that resolves to a real .pdf) and
+  route it through _cmd_load automatically so the user doesn't have to type /load first. Reuses
+  _unquote from PR #24.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
 ### Chores
+
+- **release**: 1.0.2 [skip ci]
+  ([`0876c0e`](https://github.com/mfozmen/littlepress-ai/commit/0876c0e2b01ca2931a4c5ede2738baa6fb81fe05))
 
 - **release**: 1.0.2 [skip ci]
   ([`95e2a6c`](https://github.com/mfozmen/littlepress-ai/commit/95e2a6c8c37e9d9f02ae5a52dc0d2a8d47121767))
