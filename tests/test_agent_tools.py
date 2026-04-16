@@ -528,6 +528,59 @@ def test_choose_layout_requires_draft():
     assert "no draft" in result.lower()
 
 
+def test_choose_layout_reply_includes_neighbour_layouts_for_rhythm_check():
+    """After applying a layout the tool tells the agent what the
+    adjacent pages are set to, so the LLM can see the rhythm without
+    re-reading the whole draft. Meets the 'neighbour context' hook
+    that ``.claude/skills/select-page-layout`` assumes."""
+    img = Path("x.png")
+    draft = Draft(
+        source_pdf=Path("x.pdf"),
+        title="Book",
+        pages=[
+            DraftPage(text="p1", image=img, layout="image-top"),
+            DraftPage(text="p2", image=img, layout="image-bottom"),
+            DraftPage(text="p3", image=img, layout="image-top"),
+            DraftPage(text="p4", image=img, layout="image-full"),
+            DraftPage(text="p5", image=img, layout="image-top"),
+        ],
+    )
+    tool = choose_layout_tool(get_draft=lambda: draft)
+
+    result = tool.handler({"page": 3, "layout": "image-bottom", "reason": "vary"})
+
+    # The response has to surface neighbouring pages' layouts so the
+    # agent doesn't have to re-call read_draft to decide the next page.
+    assert "image-top" in result.lower()  # pages 1 / 5
+    assert "image-full" in result.lower()  # page 4
+    # And references them by page number so the order is unambiguous.
+    assert "2" in result and "4" in result
+
+
+def test_choose_layout_description_encodes_rhythm_rules():
+    """Bake the rules from the select-page-layout skill into the tool
+    description so the LLM sees them at decision time. Three-in-a-row
+    avoidance and the image-full cap are the ones most often violated."""
+    tool = choose_layout_tool(get_draft=lambda: None)
+
+    desc = tool.description.lower()
+    assert "three" in desc or "3 in a row" in desc or "same layout" in desc
+    assert "image-full" in desc
+    # 30% cap for image-full is the sharpest single rule to encode.
+    assert "30" in desc or "~30" in desc
+
+
+def test_propose_layouts_description_encodes_rhythm_rules():
+    tool = propose_layouts_tool(
+        get_draft=lambda: None, confirm=lambda _p: True,
+    )
+
+    desc = tool.description.lower()
+    assert "three" in desc or "same layout" in desc or "vary" in desc
+    assert "image-full" in desc
+    assert "30" in desc or "~30" in desc
+
+
 # --- propose_layouts -----------------------------------------------------
 
 
