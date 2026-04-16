@@ -100,49 +100,12 @@ On first launch the shell asks which provider to use — Claude, GPT, Gemini, or
 
 **Drag-and-drop**: you can drag a PDF file onto the terminal window — most shells paste the full path. Press Enter and Littlepress ingests it as if you'd typed `/load <path>`.
 
-## Usage — direct renderer (still works)
-
-If you already have a `book.json`, you can skip the REPL:
-
-```bash
-# A5 picture book only
-python build.py book.json
-
-# A5 + A4 imposed booklet (print double-sided, fold, staple)
-python build.py book.json --impose
-
-# Custom output path
-python build.py book.json -o output/my-book.pdf
-```
-
-A minimal, self-contained example lives under `examples/`:
-
-```bash
-python build.py examples/book.json -o output/example.pdf
-```
-
 ## Project layout
 
-- `build.py` — CLI entry point
+- `src/cli.py` — the `littlepress` command-line entry point
 - `src/` — generator modules (schema, layout, PDF assembly, imposition, ingestion)
-- `examples/` — a runnable sample book (`book.json` + placeholder PNGs)
 - `tests/` — pytest suite, mirrors `src/`
-- `output/` — generated PDFs (gitignored)
-- your own `book.json` + `images/` at the repo root — private user content, gitignored
-
-## `book.json` schema
-
-```json
-{
-  "title": "...",
-  "author": "...",
-  "cover":      { "image": "images/...", "subtitle": "...", "style": "full-bleed" },
-  "pages":      [{ "text": "...", "image": "images/...", "layout": "image-top" }],
-  "back_cover": { "text": "...", "image": null }
-}
-```
-
-Valid `layout` values: `image-top`, `image-bottom`, `image-full`, `text-only`. Valid `cover.style` values: `full-bleed`, `framed` (optional — defaults to `full-bleed`).
+- `.book-gen/` — per-project state (input PDFs, generated images, output renders — all gitignored)
 
 ## Printing the A4 booklet
 

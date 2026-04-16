@@ -72,8 +72,9 @@ def from_pdf(pdf_path: Path, images_dir: Path) -> Draft:
 def slugify(text: str) -> str:
     """Produce a filesystem-safe filename from a title.
 
-    Single source of truth — both the REPL's ``/render`` flow and
-    ``build.py``'s standalone CLI use this.
+    Single source of truth — the REPL's ``/render`` flow and the
+    agent's ``render_book`` tool both reach for this when mapping
+    ``Draft.title`` to the ``.book-gen/output/<slug>.pdf`` path.
     """
     table = str.maketrans(
         {

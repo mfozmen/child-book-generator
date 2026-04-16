@@ -28,7 +28,6 @@ All five PRs from the original plan merged:
 - `_CHECKERS` placeholder in `src/providers/validator.py` — extension point for OpenAI / Gemini / Ollama key validation.
 - Slash commands (`/load /title /render /model /pages /author /help /exit`) — escape hatches for offline mode, agent outage, or "skip the agent" use.
 - `Draft` vs `Book` — different jobs (lenient editable vs strict renderer-facing). `to_book` is the validation boundary.
-- `examples/book.json` + placeholder PNGs — used by `tests/test_build.py` to smoke the standalone renderer.
 
 ## Next up
 
@@ -36,7 +35,6 @@ Items below came out of the first real end-to-end test (Yavru Dinozor). Listed r
 
 - **Even more cover templates.** `poster` shipped alongside `full-bleed` and `framed`, and the `select-cover-template` skill lives under `.claude/skills/`. Still worth adding: `portrait-frame` (illustration inside a decorative border), `title-band-top` (variant of framed with a colour panel behind the title), `spine-wrap` (drawing spans front + spine + back, for the A4 imposed booklet — this one needs multi-page cover rendering support that doesn't exist yet). Each future template adds an entry to `VALID_COVER_STYLES`, a `_draw_cover_<name>` function in `pages.py`, a docstring line on the `set_cover` tool, and a rule in the skill.
 - **AI cover generation as an optional tool.** Tool: `generate_cover_illustration(prompt, style)` that calls a real image provider (OpenAI `gpt-image-1` / Stability / Replicate — pick one to start), saves to `.book-gen/images/cover-*.png`, and hands the result to `set_cover`. Agent offers this when the user doesn't want to reuse a page's drawing. Requires a new `ImageProvider` protocol + a provider adapter + a pricing-aware prompt to the user (cost per image).
-- **Drop the legacy `python build.py book.json` entry point.** The pre-pivot "direct renderer" path (`build.py` + the README's "Usage — direct renderer (still works)" section + the hand-authored `book.json` shape) predates the agent flow and no current user needs it — anyone who wants to render reaches for `littlepress draft.pdf`. Remove `build.py`, trim the README section, delete `tests/test_build.py`, and decide whether `examples/book.json` stays as a schema demo or goes with it. Keep `src/schema.py::load_book` only if something in the rest of the codebase still needs to load a `book.json` off disk (spot-check before deleting).
 - **Ollama provider — local, offline, no API key.** Anthropic, Gemini, and OpenAI all work end-to-end now. Ollama is last and unlocks fully offline use with local models; both `chat()` and `turn()` need wiring against the Ollama HTTP API (or the `ollama` Python client). No key means the validator can just ping the local service to verify it's reachable.
 
 ## Explicitly deferred (don't build unless asked)
