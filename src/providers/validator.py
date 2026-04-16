@@ -54,13 +54,14 @@ def validate_key(spec: ProviderSpec, api_key: str) -> None:
     call failed for some other reason, or ``ProviderUnavailable`` when
     the provider can't be used in this environment.
 
-    Providers without a validation path yet (OpenAI, Google) and key-less
-    providers (none, ollama) currently no-op; they will grow real checks
-    as their SDK wiring lands.
+    Runs the provider's checker whenever one is registered, even for
+    key-less providers like Ollama — they still need a reachability
+    ping (is the local daemon up?) before the REPL commits to that
+    choice. Providers with no registered checker (``none``) no-op.
     """
-    if not spec.requires_api_key:
+    checker = _CHECKERS.get(spec.name)
+    if checker is None:
         return
-    checker = _CHECKERS.get(spec.name, _unchecked)
     checker(spec, api_key)
 
 
@@ -217,8 +218,39 @@ def _check_openai(spec: ProviderSpec, api_key: str) -> None:
 _OPENAI_DEFAULT_VALIDATION_MODEL = "gpt-4o-mini"
 
 
+def _check_ollama(_spec: ProviderSpec, _api_key: str) -> None:
+    """Confirm the Ollama daemon is reachable.
+
+    Key-less: the ``api_key`` arg is ignored. Success = ``list()``
+    returns without raising. A connection error / unreachable
+    service is ``TransientValidationError`` — re-prompting wouldn't
+    help immediately, but the user can start Ollama and retry. SDK
+    missing is ``ProviderUnavailable`` as with the other providers.
+    """
+    try:
+        import ollama  # type: ignore[import-not-found]
+    except ImportError as e:
+        raise ProviderUnavailable(
+            "The 'ollama' client is missing from this install. Try: "
+            "pip install --force-reinstall littlepress-ai"
+        ) from e
+
+    import os
+
+    host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    try:
+        client = ollama.Client(timeout=_VALIDATION_TIMEOUT_SECONDS)
+        client.list()
+    except Exception as e:  # noqa: BLE001 — surface every failure the same way
+        raise TransientValidationError(
+            f"Ollama isn't reachable — make sure the daemon is running "
+            f"on {host}. ({e})"
+        ) from e
+
+
 _CHECKERS = {
     "anthropic": _check_anthropic,
     "google": _check_google,
     "openai": _check_openai,
+    "ollama": _check_ollama,
 }

@@ -51,6 +51,11 @@ dependencies = [
   # (``PermissionDeniedError`` added in 1.2.x, ``APIError`` inheritance
   # stabilised later) is reliable.
   "openai>=1.50.0",
+  # Ollama local-model client. Tiny HTTP wrapper around the Ollama
+  # daemon's /api/chat and /api/tags endpoints. Bundling it matches
+  # the other providers; it doesn't pull in the Ollama daemon itself
+  # (the user still has to install + run that locally).
+  "ollama>=0.4.0",
   # Stores the Anthropic key in the OS credential manager so the user
   # only pastes it once. Cross-platform (Windows, macOS, Linux).
   "keyring>=24.0.0",

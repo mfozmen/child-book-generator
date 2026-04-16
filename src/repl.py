@@ -282,6 +282,18 @@ class Repl:
         if spec is None:
             return self._prompt_for_provider()
         if not spec.requires_api_key:
+            # Key-less providers (Ollama) still need a reachability
+            # check on resume — otherwise a dead daemon produces a
+            # ConnectionError on the first agent turn rather than at
+            # startup. Matches the keyed-provider's _validate_silently
+            # → _resume_with_key parity.
+            err = self._validate_silently(spec, "")
+            if err is not None:
+                self._console.print(
+                    f"[yellow]{spec.display_name} isn't reachable:[/yellow] "
+                    f"{err}. Falling back to the provider picker."
+                )
+                return self._prompt_for_provider()
             return spec, None
         return self._resume_with_key(spec)
 
@@ -363,7 +375,26 @@ class Repl:
             api_key = self._read_and_validate_key(spec)
             if api_key is None:
                 return None
+        elif not self._ping_keyless_provider(spec):
+            return None
         return spec, api_key
+
+    def _ping_keyless_provider(self, spec: ProviderSpec) -> bool:
+        """Run the validator for a key-less provider (Ollama today).
+        The check is there so we don't pick a provider whose backing
+        service isn't reachable. Returns True on success; prints the
+        validator's message and returns False on failure so the caller
+        aborts the picker."""
+        if self._validate is None:
+            return True
+        try:
+            self._validate(spec, "")
+        except Exception as e:
+            self._console.print(
+                f"[red]Couldn't reach {spec.display_name}:[/red] {e}"
+            )
+            return False
+        return True
 
     def _show_key_guidance(self, spec: ProviderSpec) -> None:
         """Print a step-by-step set of instructions for getting an API

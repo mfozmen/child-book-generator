@@ -11,9 +11,58 @@ def test_none_provider_is_always_valid():
     validator.validate_key(find("none"), "")
 
 
-def test_ollama_has_nothing_to_validate():
-    # Ollama uses no API key; the validator just no-ops for now.
+def test_ollama_accepts_when_local_daemon_responds(monkeypatch):
+    """Ollama uses no API key, but the validator still pings the local
+    daemon to make sure it's running before we commit the REPL to
+    that provider."""
+    _install_fake_ollama_checker(monkeypatch, raise_error=None)
+
     validator.validate_key(find("ollama"), "")
+
+
+def test_ollama_rejects_when_local_daemon_is_unreachable(monkeypatch):
+    """Service down → TransientValidationError with a message that
+    tells the user to start Ollama. Not KeyValidationError (there's
+    no key to revoke) and not ProviderUnavailable (this is recoverable
+    — start the daemon and retry)."""
+    _install_fake_ollama_checker(monkeypatch, raise_error="connection")
+
+    with pytest.raises(validator.TransientValidationError) as exc:
+        validator.validate_key(find("ollama"), "")
+    assert "ollama" in str(exc.value).lower()
+
+
+def test_ollama_reports_provider_unavailable_when_sdk_missing(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "ollama", None)
+
+    with pytest.raises(validator.ProviderUnavailable) as exc:
+        validator.validate_key(find("ollama"), "")
+    assert "ollama" in str(exc.value).lower()
+
+
+def _install_fake_ollama_checker(monkeypatch, *, raise_error=None):
+    """Stub the ``ollama`` module for validator tests. Separate from
+    the provider-side fake because we only need ``Client.list``
+    here."""
+    import sys
+    import types as pytypes
+
+    class Client:
+        def __init__(self, *, host=None, timeout=None, **kw):
+            self.host = host
+            self.timeout = timeout
+
+        def list(self):
+            if raise_error == "connection":
+                raise ConnectionError("[Errno 111] Connection refused")
+            return pytypes.SimpleNamespace(models=[])
+
+    module = pytypes.ModuleType("ollama")
+    module.Client = Client
+    monkeypatch.setitem(sys.modules, "ollama", module)
+    return module
 
 
 

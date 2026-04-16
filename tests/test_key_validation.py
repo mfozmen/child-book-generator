@@ -94,7 +94,12 @@ def test_valid_key_on_first_try_activates_without_extra_prompts():
     assert "invalid" not in buf.getvalue().lower()
 
 
-def test_keyless_providers_do_not_invoke_validator():
+def test_keyless_providers_run_reachability_ping_via_validator():
+    """Picking a key-less provider (Ollama) still needs the validator
+    to run — just with an empty key — so a local daemon that's not
+    up surfaces at picker time instead of the first ``chat`` call.
+    The validator is invoked once with a blank key; success
+    activates the provider."""
     calls = []
 
     def track(spec, key):
@@ -103,8 +108,81 @@ def test_keyless_providers_do_not_invoke_validator():
     repl, _ = _make(["4", "/exit"], validate=track)  # 4 = ollama (no key)
     repl.run()
 
-    assert calls == []
+    assert calls == [("ollama", "")]
     assert repl.provider.name == "ollama"
+
+
+def test_keyless_provider_resume_pings_reachability_before_activating(tmp_path):
+    """On resume (saved session says "ollama"), the REPL must still ping
+    the daemon — otherwise a dead Ollama doesn't surface until the first
+    agent turn. When the ping succeeds, the provider activates silently."""
+    from src import session as session_mod
+
+    calls = []
+
+    def track(spec, key):
+        calls.append((spec.name, key))
+
+    session_mod.save(tmp_path, session_mod.Session(provider="ollama"))
+
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=False, width=100, no_color=True)
+    repl = Repl(
+        read_line=_scripted(["/exit"]),
+        console=console,
+        session_root=tmp_path,
+        validate=track,
+    )
+    repl.run()
+
+    # Validator was invoked on resume, not just on picker.
+    assert ("ollama", "") in calls
+    assert repl.provider.name == "ollama"
+
+
+def test_keyless_provider_resume_falls_back_to_picker_when_daemon_dead(tmp_path):
+    """On resume with a dead daemon, the REPL surfaces the error and
+    drops to the interactive picker — not a cryptic ConnectionError on
+    the first ``chat`` call."""
+    from src import session as session_mod
+
+    session_mod.save(tmp_path, session_mod.Session(provider="ollama"))
+
+    def unreachable(_spec, _key):
+        raise RuntimeError("Ollama isn't running")
+
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=False, width=100, no_color=True)
+    repl = Repl(
+        read_line=_scripted(["/exit"]),
+        console=console,
+        session_root=tmp_path,
+        validate=unreachable,
+    )
+    repl.run()
+
+    # Error surfaced + fell back to picker (which also fails → no
+    # provider activated). The important thing is NO unhandled exception.
+    output = buf.getvalue().lower()
+    assert "isn't reachable" in output or "isn't running" in output
+
+
+def test_keyless_providers_abort_picker_when_reachability_check_fails():
+    """An unreachable local daemon shows the validator's error and
+    drops the user back at the prompt without committing to the
+    provider — otherwise the REPL would activate a dead Ollama."""
+    def unreachable(_spec, _key):
+        raise RuntimeError("Ollama isn't running")
+
+    repl, buf = _make(
+        ["4", "/exit"], validate=unreachable  # 4 = ollama
+    )
+    repl.run()
+
+    # Error surfaced, provider NOT activated.
+    assert "couldn't reach" in buf.getvalue().lower()
+    assert "isn't running" in buf.getvalue()
+    assert repl.provider is None or repl.provider.name != "ollama"
 
 
 def test_slash_model_path_reprompts_on_bad_key_without_losing_previous():

@@ -10,6 +10,7 @@ from src.providers.llm import (
     GoogleProvider,
     LLMProvider,
     NullProvider,
+    OllamaProvider,
     OpenAIProvider,
     create_provider,
     find,
@@ -111,13 +112,10 @@ def test_create_provider_returns_anthropic_with_key():
     assert isinstance(provider, AnthropicProvider)
 
 
-def test_create_provider_falls_back_to_null_for_unwired_providers():
-    # Ollama hasn't shipped chat() yet. The factory hands back a
-    # NullProvider so the REPL keeps working with the "(no model
-    # selected)" placeholder until it lands.
+def test_create_provider_returns_ollama_for_ollama_spec():
     spec = find("ollama")
-    provider = create_provider(spec, api_key="x")
-    assert isinstance(provider, NullProvider)
+    provider = create_provider(spec, api_key=None)
+    assert isinstance(provider, OllamaProvider)
 
 
 def test_create_provider_returns_google_with_key():
@@ -1148,3 +1146,313 @@ def test_openai_provider_turn_passes_bounded_timeout(monkeypatch):
     client = fake.OpenAI.last_client
     assert client.timeout is not None
     assert 0 < client.timeout <= 300
+
+
+# --- OllamaProvider ----------------------------------------------------
+
+
+def _install_fake_ollama(
+    monkeypatch,
+    *,
+    reply_text=None,
+    tool_calls=None,
+    list_models=None,
+    list_raises=None,
+):
+    """Install a minimal fake of the ``ollama`` module.
+
+    ``reply_text`` / ``tool_calls`` shape the ``chat()`` response.
+    ``list_models`` controls what ``client.list()`` returns.
+    ``list_raises`` — exception to raise from ``list()`` (simulates
+    Ollama service not running).
+    """
+
+    class ConnectionError_(Exception):
+        """Stand-in for ``ollama.ConnectionError`` / ``httpx`` wire errors."""
+
+    class ResponseError(Exception):
+        def __init__(self, error, status_code=None):
+            super().__init__(error)
+            self.status_code = status_code
+
+    class Function:
+        def __init__(self, name, arguments):
+            self.name = name
+            self.arguments = arguments
+
+    class ToolCall:
+        def __init__(self, name, arguments):
+            self.function = Function(name, arguments)
+
+    class Message:
+        def __init__(self, role="assistant", content=None, tool_calls=None):
+            self.role = role
+            self.content = content
+            self.tool_calls = tool_calls
+
+    class ChatResponse:
+        def __init__(self, message, done_reason="stop"):
+            self.message = message
+            self.done_reason = done_reason
+
+    class Client:
+        last_client: "Client | None" = None
+
+        def __init__(self, host=None, timeout=None, **kw):
+            self.host = host
+            self.timeout = timeout
+            self.kwargs = kw
+            self.last_chat_kwargs: dict = {}
+            Client.last_client = self
+
+        def chat(self, **kwargs):
+            self.last_chat_kwargs = kwargs
+            tcs = [
+                ToolCall(tc["name"], tc["arguments"])
+                for tc in (tool_calls or [])
+            ] or None
+            return ChatResponse(
+                Message(content=reply_text, tool_calls=tcs),
+            )
+
+        def list(self):
+            if list_raises is not None:
+                raise list_raises
+            return types.SimpleNamespace(models=list_models or [])
+
+    module = types.ModuleType("ollama")
+    module.Client = Client
+    module.ConnectionError = ConnectionError_
+    module.ResponseError = ResponseError
+    monkeypatch.setitem(sys.modules, "ollama", module)
+    return module
+
+
+def test_ollama_provider_chat_returns_reply_text(monkeypatch):
+    _install_fake_ollama(monkeypatch, reply_text="hello from llama")
+
+    reply = OllamaProvider().chat([{"role": "user", "content": "hi"}])
+
+    assert reply == "hello from llama"
+
+
+def test_ollama_provider_chat_translates_plain_string_messages_unchanged(monkeypatch):
+    fake = _install_fake_ollama(monkeypatch, reply_text="ok")
+
+    OllamaProvider().chat(
+        [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "reply"},
+            {"role": "user", "content": "second"},
+        ]
+    )
+
+    sent = fake.Client.last_client.last_chat_kwargs
+    assert sent["messages"] == [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "reply"},
+        {"role": "user", "content": "second"},
+    ]
+
+
+def test_ollama_provider_without_sdk_raises_import_error(monkeypatch):
+    monkeypatch.setitem(sys.modules, "ollama", None)
+
+    with pytest.raises(ImportError):
+        OllamaProvider().chat([{"role": "user", "content": "hi"}])
+
+
+def test_ollama_provider_chat_handles_none_content_gracefully(monkeypatch):
+    """Some models / edge cases emit ``message.content = None``.
+    Return an empty string rather than propagating None."""
+    _install_fake_ollama(monkeypatch, reply_text=None)
+
+    reply = OllamaProvider().chat([{"role": "user", "content": "hi"}])
+    assert reply == ""
+
+
+def test_ollama_provider_chat_passes_bounded_timeout(monkeypatch):
+    """Local inference can take a while — especially first-load when
+    the model is paging in. Still bound it so a stuck local daemon
+    doesn't freeze the REPL forever."""
+    fake = _install_fake_ollama(monkeypatch, reply_text="ok")
+
+    OllamaProvider().chat([{"role": "user", "content": "hi"}])
+
+    client = fake.Client.last_client
+    assert client.timeout is not None
+    # Wider than cloud providers — local inference legitimately runs
+    # longer — but finite.
+    assert 0 < client.timeout <= 600
+
+
+def test_ollama_provider_uses_configurable_host(monkeypatch):
+    """Users running Ollama elsewhere (container, remote LAN host) need
+    the host to be configurable — default localhost, ``host=`` override."""
+    fake = _install_fake_ollama(monkeypatch, reply_text="ok")
+
+    OllamaProvider(host="http://my-ollama:11434").chat(
+        [{"role": "user", "content": "hi"}]
+    )
+
+    assert fake.Client.last_client.host == "http://my-ollama:11434"
+
+
+def test_ollama_provider_turn_returns_text_response(monkeypatch):
+    _install_fake_ollama(monkeypatch, reply_text="hello")
+
+    response = OllamaProvider().turn(
+        [{"role": "user", "content": "hi"}], tools=[]
+    )
+
+    assert response.stop_reason == "end_turn"
+    assert response.content == [{"type": "text", "text": "hello"}]
+
+
+def test_ollama_provider_turn_returns_tool_use_when_model_calls_a_function(
+    monkeypatch,
+):
+    _install_fake_ollama(
+        monkeypatch,
+        reply_text="let me check",
+        tool_calls=[{"name": "read_draft", "arguments": {"page": 1}}],
+    )
+
+    response = OllamaProvider().turn(
+        [{"role": "user", "content": "what's in the draft?"}], tools=[]
+    )
+
+    assert response.stop_reason == "tool_use"
+    kinds = [b["type"] for b in response.content]
+    assert kinds == ["text", "tool_use"]
+    tool_block = response.content[1]
+    assert tool_block["name"] == "read_draft"
+    assert tool_block["input"] == {"page": 1}
+    # Ollama doesn't return tool_call ids; synthesise one so the agent
+    # can correlate tool_use with its later tool_result.
+    assert tool_block["id"]
+
+
+def test_ollama_provider_turn_accepts_string_arguments_json_shape(monkeypatch):
+    """Some Ollama model templates emit ``arguments`` as a JSON string
+    instead of a dict. The translator should accept either shape."""
+    _install_fake_ollama(
+        monkeypatch,
+        reply_text=None,
+        tool_calls=[
+            {
+                "name": "propose_typo_fix",
+                "arguments": '{"page": 2, "before": "dragn", "after": "dragon", "reason": "typo"}',
+            }
+        ],
+    )
+
+    response = OllamaProvider().turn(
+        [{"role": "user", "content": "fix"}], tools=[]
+    )
+
+    tool_block = next(b for b in response.content if b["type"] == "tool_use")
+    assert tool_block["input"] == {
+        "page": 2,
+        "before": "dragn",
+        "after": "dragon",
+        "reason": "typo",
+    }
+
+
+def test_ollama_provider_turn_forwards_tool_schemas_to_sdk(monkeypatch):
+    from src.agent import Tool as AgentTool
+
+    fake = _install_fake_ollama(monkeypatch, reply_text="ok")
+    tool = AgentTool(
+        name="read_draft",
+        description="Read the loaded PDF draft",
+        input_schema={"type": "object", "properties": {}},
+        handler=lambda _i: "",
+    )
+
+    OllamaProvider().turn(
+        [{"role": "user", "content": "hi"}], tools=[tool]
+    )
+
+    sent = fake.Client.last_client.last_chat_kwargs
+    # Ollama expects OpenAI-style tool definitions.
+    assert sent["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_draft",
+                "description": "Read the loaded PDF draft",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+
+
+def test_ollama_provider_turn_translates_tool_result_messages_back_to_ollama(
+    monkeypatch,
+):
+    """Agent's tool_result blocks become ``role=tool`` messages with
+    the function's name recorded so Ollama can correlate the result
+    with the matching function call."""
+    fake = _install_fake_ollama(monkeypatch, reply_text="done")
+
+    messages = [
+        {"role": "user", "content": "read it"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "sure"},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "read_draft",
+                    "input": {"page": 1},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "Page 1: Hello",
+                }
+            ],
+        },
+    ]
+
+    OllamaProvider().turn(messages, tools=[])
+
+    sent = fake.Client.last_client.last_chat_kwargs["messages"]
+    # user → assistant-with-tool_calls → tool-result
+    assert sent[0] == {"role": "user", "content": "read it"}
+    assistant = sent[1]
+    assert assistant["role"] == "assistant"
+    assert assistant["content"] == "sure"
+    assert assistant["tool_calls"] == [
+        {
+            "function": {
+                "name": "read_draft",
+                "arguments": {"page": 1},
+            }
+        }
+    ]
+    assert sent[2] == {
+        "role": "tool",
+        "content": "Page 1: Hello",
+        "tool_name": "read_draft",
+    }
+
+
+def test_ollama_provider_turn_passes_bounded_timeout(monkeypatch):
+    fake = _install_fake_ollama(monkeypatch, reply_text="ok")
+
+    OllamaProvider().turn(
+        [{"role": "user", "content": "hi"}], tools=[]
+    )
+
+    client = fake.Client.last_client
+    assert client.timeout is not None
+    assert 0 < client.timeout <= 600

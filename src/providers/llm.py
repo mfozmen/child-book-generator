@@ -727,17 +727,229 @@ def _openai_completion_to_blocks(completion) -> tuple[list[dict], str]:
     return blocks, ("tool_use" if any_tool_use else "end_turn")
 
 
-def create_provider(spec: ProviderSpec, api_key: str | None) -> LLMProvider:
-    """Return the chat implementation for ``spec``.
+# Ollama defaults. The HTTP host is the Ollama daemon's local API;
+# override ``host=`` for a container or remote LAN host. Timeout is
+# wider than the cloud providers' 60 s because a cold-loaded local
+# model can legitimately take longer to produce its first token.
+_OLLAMA_DEFAULT_HOST = "http://localhost:11434"
+_OLLAMA_CHAT_MODEL = "llama3.2"
+_OLLAMA_CHAT_TIMEOUT_SECONDS = 180.0
 
-    Providers that haven't grown a real ``chat()`` yet (Ollama) fall
-    back to ``NullProvider`` so the REPL keeps running — the user sees
-    the offline placeholder for non-slash input until they land.
+
+class OllamaProvider:
+    """Ollama (local, offline) chat + tool use via the ``ollama`` Python
+    client. SDK import is lazy so users on a cloud provider don't need
+    it installed.
+
+    Key-less: Ollama runs on the user's machine and the client just
+    hits ``http://localhost:11434`` by default; there's no auth, so
+    the ``ProviderSpec.requires_api_key`` is ``False`` and the key
+    argument isn't used here.
+
+    Message / tool shapes are OpenAI-compatible at the wire level
+    — ``role=user|assistant|tool``, tool results carry ``tool_name``
+    instead of ``tool_call_id``, and the model doesn't assign tool
+    call ids (we synthesise them so the agent can correlate
+    ``tool_use`` with its later ``tool_result``).
+
+    Supported tool ``input_schema`` subset: standard JSON Schema —
+    same portable set the Anthropic / Gemini / OpenAI providers handle.
     """
+
+    def __init__(
+        self,
+        *,
+        host: str = _OLLAMA_DEFAULT_HOST,
+        model: str = _OLLAMA_CHAT_MODEL,
+    ) -> None:
+        self._host = host
+        self._model = model
+
+    def _client(self, ollama_mod):
+        return ollama_mod.Client(
+            host=self._host,
+            timeout=_OLLAMA_CHAT_TIMEOUT_SECONDS,
+        )
+
+    def chat(self, messages: list[Message]) -> str:
+        ollama_mod = _import_ollama()
+        client = self._client(ollama_mod)
+        response = client.chat(
+            model=self._model,
+            messages=_messages_to_ollama(messages),
+        )
+        message = getattr(response, "message", None)
+        return getattr(message, "content", None) or ""
+
+    def turn(self, messages: list[dict], tools: list) -> "object":
+        ollama_mod = _import_ollama()
+        from src.agent import AgentResponse
+
+        client = self._client(ollama_mod)
+        kwargs: dict = {
+            "model": self._model,
+            "messages": _messages_to_ollama(messages),
+        }
+        if tools:
+            kwargs["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.input_schema,
+                    },
+                }
+                for t in tools
+            ]
+        response = client.chat(**kwargs)
+        blocks, stop_reason = _ollama_response_to_blocks(response)
+        return AgentResponse(content=blocks, stop_reason=stop_reason)
+
+
+def _import_ollama():
+    """Lazy import of the Ollama client — matches the other providers'
+    pattern so users on a cloud provider don't have to install it."""
+    try:
+        import ollama  # type: ignore[import-not-found]
+    except ImportError as e:
+        raise ImportError(
+            "The 'ollama' client is missing. Try: "
+            "pip install --force-reinstall littlepress-ai"
+        ) from e
+    return ollama
+
+
+def _messages_to_ollama(messages: list[dict]) -> list[dict]:
+    """Translate Anthropic-style messages → Ollama ``messages`` list.
+
+    Shape is OpenAI-compatible with two Ollama-specific twists:
+    - Assistant ``tool_calls`` use ``{function: {name, arguments: dict}}``
+      (no outer ``id`` — Ollama doesn't issue call ids).
+    - Tool results go as ``{role: tool, content, tool_name}`` — not
+      ``tool_call_id`` — because the service correlates by name +
+      order, not id.
+    """
+    out: list[dict] = []
+
+    # Build an id→name map for tool_result translation. Agent's
+    # ``tool_result`` blocks carry only the synthesised ``tool_use_id``;
+    # Ollama needs the function name.
+    id_to_name: dict[str, str] = {}
+    for msg in messages:
+        if msg.get("role") == "assistant" and isinstance(msg.get("content"), list):
+            for block in msg["content"]:
+                if block.get("type") == "tool_use":
+                    id_to_name[block.get("id", "")] = block.get("name", "")
+
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content")
+        if isinstance(content, str):
+            out.append({"role": role, "content": content})
+            continue
+        if role == "assistant":
+            texts: list[str] = []
+            tool_calls: list[dict] = []
+            for block in content or []:
+                btype = block.get("type")
+                if btype == "text":
+                    texts.append(block.get("text", ""))
+                elif btype == "tool_use":
+                    tool_calls.append(
+                        {
+                            "function": {
+                                "name": block.get("name", ""),
+                                # Ollama expects arguments as a dict,
+                                # not a JSON string (unlike OpenAI).
+                                "arguments": block.get("input") or {},
+                            }
+                        }
+                    )
+            assistant_msg: dict = {
+                "role": "assistant",
+                "content": "".join(texts) if texts else "",
+            }
+            if tool_calls:
+                assistant_msg["tool_calls"] = tool_calls
+            out.append(assistant_msg)
+            continue
+        if role == "user":
+            for block in content or []:
+                if block.get("type") == "tool_result":
+                    out.append(
+                        {
+                            "role": "tool",
+                            "content": block.get("content", ""),
+                            "tool_name": id_to_name.get(
+                                block.get("tool_use_id", ""), ""
+                            ),
+                        }
+                    )
+                elif block.get("type") == "text":
+                    out.append(
+                        {"role": "user", "content": block.get("text", "")}
+                    )
+            continue
+        # Unknown shape — pass through as-is; the SDK will surface any
+        # real error rather than us silently reshaping it.
+        out.append({"role": role, "content": content})
+    return out
+
+
+def _ollama_response_to_blocks(response) -> tuple[list[dict], str]:
+    """Translate an Ollama ``chat`` response → Anthropic-style blocks.
+
+    Ollama's ``tool_calls`` don't carry ids, so we synthesise one per
+    call — the agent uses ``tool_use_id`` to correlate ``tool_use``
+    with its later ``tool_result``, and Ollama itself correlates by
+    name + order in the next turn, so our synth id stays internal.
+    """
+    import json
+    import uuid
+
+    blocks: list[dict] = []
+    message = getattr(response, "message", None)
+    if message is None:
+        return blocks, "end_turn"
+
+    text = getattr(message, "content", None)
+    if text:
+        blocks.append({"type": "text", "text": text})
+
+    tool_calls = getattr(message, "tool_calls", None) or []
+    any_tool_use = False
+    for tc in tool_calls:
+        any_tool_use = True
+        fn = getattr(tc, "function", None)
+        name = getattr(fn, "name", "") if fn else ""
+        raw_args = getattr(fn, "arguments", None) if fn else None
+        if isinstance(raw_args, str):
+            try:
+                args = json.loads(raw_args) if raw_args else {}
+            except (json.JSONDecodeError, TypeError):
+                args = {"__raw": raw_args}
+        else:
+            args = dict(raw_args or {})
+        blocks.append(
+            {
+                "type": "tool_use",
+                "id": f"toolu_{uuid.uuid4().hex[:12]}",
+                "name": name,
+                "input": args,
+            }
+        )
+    return blocks, ("tool_use" if any_tool_use else "end_turn")
+
+
+def create_provider(spec: ProviderSpec, api_key: str | None) -> LLMProvider:
+    """Return the chat implementation for ``spec``."""
     if spec.name == "anthropic":
         return AnthropicProvider(api_key or "")
     if spec.name == "google":
         return GoogleProvider(api_key or "")
     if spec.name == "openai":
         return OpenAIProvider(api_key or "")
+    if spec.name == "ollama":
+        return OllamaProvider()
     return NullProvider()
