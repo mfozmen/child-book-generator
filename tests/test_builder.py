@@ -249,6 +249,96 @@ def test_to_book_rejects_invalid_cover_style(tmp_path):
         to_book(draft, tmp_path)
 
 
+def test_cover_poster_renders_title_and_author_without_image(tmp_path):
+    """``poster`` is the type-only fallback for books that don't have
+    a cover drawing. Big title, big author, nothing else — no attempt
+    to render the image even if one happens to be set."""
+    img = _cover_image(tmp_path)
+    book = Book(
+        title="Sea Songs",
+        author="Yusuf",
+        # Image is present but poster intentionally ignores it.
+        cover=Cover(image=img.name, style="poster"),
+        back_cover=BackCover(),
+        pages=[Page(text="x", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+    out = tmp_path / "book.pdf"
+    build_pdf(book, out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    assert "Sea Songs" in cover_text
+    assert "Yusuf" in cover_text
+
+
+def test_cover_poster_renders_subtitle_under_title(tmp_path):
+    """``poster`` supports a subtitle just like the other templates
+    so a tagline ("a story by …") can live on the cover."""
+    book = Book(
+        title="Blank Canvas",
+        author="Ada",
+        cover=Cover(image=None, subtitle="a story by Ada", style="poster"),
+        back_cover=BackCover(),
+        pages=[Page(text="x", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+    out = tmp_path / "book.pdf"
+    build_pdf(book, out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    assert "Blank Canvas" in cover_text
+    assert "a story by Ada" in cover_text
+    assert "Ada" in cover_text
+
+
+def test_cover_poster_handles_missing_image_gracefully(tmp_path):
+    """poster is the template we *want* to use when there's no cover
+    drawing, so it must not require one."""
+    book = Book(
+        title="Blank Canvas",
+        author="Ada",
+        cover=Cover(image=None, style="poster"),
+        back_cover=BackCover(),
+        pages=[Page(text="x", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+    out = tmp_path / "book.pdf"
+    build_pdf(book, out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    assert "Blank Canvas" in cover_text
+
+
+def test_draw_cover_dispatches_poster_to_its_own_renderer(tmp_path, monkeypatch):
+    """Confirm the dispatcher branches to _draw_cover_poster when
+    style == "poster" (and not to the full-bleed fallback)."""
+    from src import pages
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        pages, "_draw_cover_poster",
+        lambda _c, _b: calls.append("poster"),
+    )
+    monkeypatch.setattr(
+        pages, "_draw_cover_full_bleed",
+        lambda _c, _b: calls.append("full-bleed"),
+    )
+
+    book = Book(
+        title="T",
+        cover=Cover(style="poster"),
+        back_cover=BackCover(),
+        pages=[Page(text="x", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+    build_pdf(book, tmp_path / "out.pdf")
+
+    assert calls == ["poster"]
+
+
 def test_cover_framed_renders_subtitle_under_title(tmp_path):
     """The framed template shows the subtitle right under the title
     so a tagline ("a story by Yusuf", "chapter one", …) can live on

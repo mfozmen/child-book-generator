@@ -461,10 +461,46 @@ def test_set_cover_schema_advertises_style_enum():
 
     style_schema = tool.input_schema["properties"].get("style")
     assert style_schema is not None
-    assert set(style_schema["enum"]) == {"full-bleed", "framed"}
+    assert set(style_schema["enum"]) == {"full-bleed", "framed", "poster"}
     # Style stays OPTIONAL — old callers that only send page continue
     # working.
     assert "style" not in tool.input_schema.get("required", [])
+
+
+def test_set_cover_requires_page_when_style_needs_an_image():
+    """For image-based styles the caller must name a page. Missing
+    ``page`` for full-bleed / framed is a user error — surface it so
+    the agent can prompt for the drawing."""
+    draft = Draft(
+        source_pdf=Path("x.pdf"),
+        title="T",
+        pages=[DraftPage(text="p1", image=Path("a.png"))],
+    )
+    tool = set_cover_tool(get_draft=lambda: draft)
+
+    result = tool.handler({"style": "full-bleed"})
+
+    # Nothing was committed — no half-applied cover state.
+    assert draft.cover_image is None
+    assert "page is required" in result.lower() or "poster" in result.lower()
+
+
+def test_set_cover_allows_poster_without_a_page_image():
+    """``poster`` is the type-only template — the whole point is that
+    it renders without a cover drawing. Requiring a page image would
+    defeat the purpose."""
+    draft = Draft(
+        source_pdf=Path("x.pdf"),
+        title="T",
+        pages=[DraftPage(text="p1")],  # no image on the only page
+    )
+    tool = set_cover_tool(get_draft=lambda: draft)
+
+    result = tool.handler({"page": 1, "style": "poster"})
+
+    # Poster doesn't need the page's image — just records the style.
+    assert draft.cover_style == "poster"
+    assert "poster" in result.lower()
 
 
 # --- choose_layout -------------------------------------------------------

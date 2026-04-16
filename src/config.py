@@ -21,6 +21,10 @@ COVER_AUTHOR_SIZE = 14
 # header band on the framed variant.
 COVER_BAND_H = 42 * mm
 COVER_BAND_ALPHA = 0.72
+# Poster is the type-only template. Title wants to shout, so give it
+# roughly double the default cover size as its starting preference —
+# shrink-to-fit still protects long English titles.
+COVER_POSTER_TITLE_SIZE = 64
 
 LINE_HEIGHT = 1.35
 

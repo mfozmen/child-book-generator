@@ -279,13 +279,39 @@ def set_metadata_tool(get_draft: Callable[[], Draft | None]) -> Tool:
 
 def set_cover_tool(get_draft: Callable[[], Draft | None]) -> Tool:
     """Tool: pick a page's drawing as the cover image and, optionally,
-    the cover style template."""
+    the cover style template.
+
+    ``poster`` is the one style that doesn't need a page drawing — it
+    renders type-only. For every other style a ``page`` with an image
+    is required.
+    """
 
     def handler(input_: dict) -> str:
         draft = get_draft()
         if draft is None:
             return _MSG_NO_DRAFT
-        page_n = int(input_["page"])
+        style = input_.get("style")
+        # Validate style first so a bad value doesn't half-commit the
+        # cover state.
+        if style is not None and style not in VALID_COVER_STYLES:
+            return (
+                f"Invalid style '{style}'. Valid styles: "
+                f"{sorted(VALID_COVER_STYLES)}."
+            )
+        if style == "poster":
+            # Type-only template — no drawing needed. Keep the existing
+            # cover_image alone so a previous full-bleed choice isn't
+            # silently discarded if the agent flips back later.
+            draft.cover_style = "poster"
+            return "Cover set to 'poster' style (type-only — no drawing used)."
+
+        page_n_raw = input_.get("page")
+        if page_n_raw is None:
+            return (
+                "page is required unless style='poster'. Name the page "
+                "whose drawing should be the cover."
+            )
+        page_n = int(page_n_raw)
         if page_n < 1 or page_n > len(draft.pages):
             return (
                 f"Page {page_n} is out of range — the draft has "
@@ -294,14 +320,6 @@ def set_cover_tool(get_draft: Callable[[], Draft | None]) -> Tool:
         page = draft.pages[page_n - 1]
         if page.image is None:
             return f"Page {page_n} has no drawing — can't use it as the cover."
-        # Validate style before mutating anything — a bad value
-        # shouldn't half-commit the cover.
-        style = input_.get("style")
-        if style is not None and style not in VALID_COVER_STYLES:
-            return (
-                f"Invalid style '{style}'. Valid styles: "
-                f"{sorted(VALID_COVER_STYLES)}."
-            )
         draft.cover_image = page.image
         if style is not None:
             draft.cover_style = style
@@ -314,11 +332,13 @@ def set_cover_tool(get_draft: Callable[[], Draft | None]) -> Tool:
         name="set_cover",
         description=(
             "Pick the book's cover. ``page`` names which page's drawing "
-            "to use as the cover image. ``style`` optionally picks the "
-            "cover template: 'full-bleed' (drawing covers the page, "
-            "title on a translucent band) or 'framed' (title at the "
-            "top, letterboxed drawing below). Defaults to 'full-bleed' "
-            "when omitted."
+            "to use as the cover image (required unless style='poster'). "
+            "``style`` optionally picks the cover template: 'full-bleed' "
+            "(drawing covers the page, title on a translucent band), "
+            "'framed' (title at the top, letterboxed drawing below), "
+            "or 'poster' (type-only cover, no drawing — for books whose "
+            "child-author didn't make a cover illustration). Defaults "
+            "to 'full-bleed' when omitted."
         ),
         input_schema={
             "type": "object",
@@ -329,7 +349,7 @@ def set_cover_tool(get_draft: Callable[[], Draft | None]) -> Tool:
                     "enum": sorted(VALID_COVER_STYLES),
                 },
             },
-            "required": ["page"],
+            "required": [],
         },
         handler=handler,
     )

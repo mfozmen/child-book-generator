@@ -8,6 +8,7 @@ from .config import (
     PAGE_W, PAGE_H, MARGIN, TOP_MARGIN, BOTTOM_MARGIN,
     TITLE_SIZE, AUTHOR_SIZE, BODY_SIZE, BACK_SIZE, LINE_HEIGHT,
     COVER_TITLE_SIZE, COVER_AUTHOR_SIZE, COVER_BAND_H, COVER_BAND_ALPHA,
+    COVER_POSTER_TITLE_SIZE,
     FONT_REGULAR, FONT_BOLD,
 )
 from .schema import Book, Page, VALID_COVER_STYLES
@@ -174,6 +175,42 @@ def _draw_cover_framed(c: Canvas, book: Book) -> None:
         c.drawString((PAGE_W - aw) / 2, BOTTOM_MARGIN, book.author)
 
 
+def _draw_cover_poster(c: Canvas, book: Book) -> None:
+    """Type-only cover: huge title centred on an empty page, author
+    in a strip along the bottom. No drawing. Intentional for books
+    whose child-author didn't make a cover illustration — the type
+    itself becomes the visual.
+
+    Shrink-to-fit still applies so long English titles stay on the
+    page (``_fit_title_size``). Subtitle, if present, sits under the
+    title with the same descender-clearance formula the other
+    templates use.
+    """
+    # Title: centred vertically with the subtitle (if any) clustered
+    # just below it.
+    title_size = _fit_title_size(
+        book.title, FONT_BOLD, COVER_POSTER_TITLE_SIZE, PAGE_W - 2 * MARGIN,
+    )
+    c.setFont(FONT_BOLD, title_size)
+    title_w = pdfmetrics.stringWidth(book.title, FONT_BOLD, title_size)
+    # Title baseline at page-middle so the eye lands on the main text.
+    title_y = PAGE_H / 2 + title_size * 0.35
+    c.drawString((PAGE_W - title_w) / 2, title_y, book.title)
+
+    if book.cover.subtitle:
+        c.setFont(FONT_REGULAR, COVER_AUTHOR_SIZE)
+        sw = pdfmetrics.stringWidth(
+            book.cover.subtitle, FONT_REGULAR, COVER_AUTHOR_SIZE,
+        )
+        subtitle_y = title_y - title_size * 0.35 - COVER_AUTHOR_SIZE
+        c.drawString((PAGE_W - sw) / 2, subtitle_y, book.cover.subtitle)
+
+    if book.author:
+        c.setFont(FONT_REGULAR, COVER_AUTHOR_SIZE)
+        aw = pdfmetrics.stringWidth(book.author, FONT_REGULAR, COVER_AUTHOR_SIZE)
+        c.drawString((PAGE_W - aw) / 2, BOTTOM_MARGIN, book.author)
+
+
 def draw_cover(c: Canvas, book: Book) -> None:
     """Dispatch to the renderer for ``book.cover.style``.
 
@@ -184,8 +221,11 @@ def draw_cover(c: Canvas, book: Book) -> None:
     the check back rather than relying on the ``else`` branch as a
     silent fallback.
     """
-    if book.cover.style == "framed":
+    style = book.cover.style
+    if style == "framed":
         _draw_cover_framed(c, book)
+    elif style == "poster":
+        _draw_cover_poster(c, book)
     else:
         _draw_cover_full_bleed(c, book)
     c.showPage()
