@@ -1,7 +1,7 @@
 # CHANGELOG
 
 
-## v1.1.0 (2026-04-16)
+## v2.0.0 (2026-04-16)
 
 ### Bug Fixes
 
@@ -150,6 +150,58 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 ### Chores
 
+- Drop the legacy 'python build.py' entry point
+  ([#38](https://github.com/mfozmen/littlepress-ai/pull/38),
+  [`2b01a6a`](https://github.com/mfozmen/littlepress-ai/commit/2b01a6a22fe11c2a9f789db38bf34d913af7caac))
+
+* chore: drop the legacy ``python build.py`` entry point
+
+The ``python build.py book.json`` path predates the agent flow. Every current user reaches for
+  ``littlepress draft.pdf`` — nobody hand-authors a book.json any more — and the legacy CLI was only
+  held in place by its own test and its own example fixtures.
+
+Deleted:
+
+- ``build.py`` (the standalone CLI entry) and ``tests/test_build.py`` (smoke test that drove it). -
+  ``examples/book.json`` + placeholder PNGs. Only ``test_build.py`` referenced them. - README's
+  "Usage — direct renderer (still works)" section and the ``book.json`` schema block. The shape is
+  internal now; users hit it through the agent, never typed by hand. - CLAUDE.md references to
+  ``build.py`` and the old Commands block (now shows ``littlepress`` as the primary entry).
+  Project-layout list refreshed with the shape the code has actually grown into (cover templates,
+  collect_input_pdf, next_version_number, etc.).
+
+Kept:
+
+- ``src/schema.py::load_book`` as a library API. Unused inside the project after this PR, but a
+  thin, well-tested JSON → ``Book`` reader is the right shape for an external caller that wants to
+  parse a ``book.json`` — cheap to keep, easy to delete later if that never materialises.
+
+All 413 tests still pass; no production-code behaviour moved.
+
+BREAKING CHANGE: ``python build.py book.json`` no longer exists. The only supported entry point is
+  the ``littlepress`` command, which drives the interactive agent flow. Any automation relying on
+  the legacy path needs to be rewritten to feed a PDF through the agent.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* ci: drop build.py from sonar.sources
+
+The SonarCloud scan on PR #38 failed with "The folder 'build.py' does not exist" because the legacy
+  entry point got deleted but sonar-project.properties still listed it under sonar.sources. Narrow
+  the paths to ``src`` only — that's the whole production tree now.
+
+* build: drop ``examples`` from hatch sdist include list
+
+Companion to the ``examples/`` directory deletion in this same PR. Hatchling is tolerant of missing
+  include paths, so this wasn't a runtime blocker — just stale config now that the directory is
+  gone.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
 - **release**: 1.0.2 [skip ci]
   ([`3cb7491`](https://github.com/mfozmen/littlepress-ai/commit/3cb7491a4a93c354a2dcbbf63f5a12d308e20b59))
 
@@ -158,6 +210,9 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - **release**: 1.0.2 [skip ci]
   ([`95e2a6c`](https://github.com/mfozmen/littlepress-ai/commit/95e2a6c8c37e9d9f02ae5a52dc0d2a8d47121767))
+
+- **release**: 1.1.0 [skip ci]
+  ([`7e00bf5`](https://github.com/mfozmen/littlepress-ai/commit/7e00bf5c553083d628ca7d4924ef1dd8f3caa512))
 
 - **release**: 1.1.0 [skip ci]
   ([`0af9b30`](https://github.com/mfozmen/littlepress-ai/commit/0af9b3031066e4e84eca80847c586c328b749f6a))
@@ -911,6 +966,12 @@ Addresses review feedback on #26.
 Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### BREAKING CHANGES
+
+- ``python build.py book.json`` no longer exists. The only supported entry point is the
+  ``littlepress`` command, which drives the interactive agent flow. Any automation relying on the
+  legacy path needs to be rewritten to feed a PDF through the agent.
 
 
 ## v1.0.1 (2026-04-15)
