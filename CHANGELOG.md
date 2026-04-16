@@ -1,7 +1,7 @@
 # CHANGELOG
 
 
-## v1.0.2 (2026-04-16)
+## v1.1.0 (2026-04-16)
 
 ### Bug Fixes
 
@@ -100,6 +100,9 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 ### Chores
 
 - **release**: 1.0.2 [skip ci]
+  ([`3cb7491`](https://github.com/mfozmen/littlepress-ai/commit/3cb7491a4a93c354a2dcbbf63f5a12d308e20b59))
+
+- **release**: 1.0.2 [skip ci]
   ([`0876c0e`](https://github.com/mfozmen/littlepress-ai/commit/0876c0e2b01ca2931a4c5ede2738baa6fb81fe05))
 
 - **release**: 1.0.2 [skip ci]
@@ -142,6 +145,73 @@ PSR creates the release tag on its local commit C. When the retry loop pulls --r
 Capture the tag name up front (git tag --points-at HEAD) and re-point it with git tag -f "$TAG" HEAD
   after each pull --rebase. --follow-tags then has a reachable target and the tag ships with the
   commit.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- **repl**: Auto-load PDF when its path is dragged onto the terminal
+  ([#25](https://github.com/mfozmen/littlepress-ai/pull/25),
+  [`1dc05f0`](https://github.com/mfozmen/littlepress-ai/commit/1dc05f0a3957bd0225d58ba054ae7609e5c37cb2))
+
+* feat(repl): auto-load PDF when its path is dragged onto the terminal
+
+Terminals paste a file's full path when the user drags it onto the window — quoted on Windows
+  (PowerShell), escaped on Unix. Detecting that case and routing it through /load saves the user
+  from typing "/load " in front every time.
+
+Non-slash input now takes a three-way split: 1. Starts with "/" → slash dispatch (unchanged). 2.
+  Resolves to an existing .pdf file → treat as /load <path>. 3. Anything else → agent chat
+  (unchanged).
+
+The path classifier is deliberately conservative (.pdf extension AND file exists) so chat mentions
+  like "can you open draft.pdf?" still reach the agent instead of being silently swallowed. Reuses
+  the _unquote helper from PR #24 so quoted and tilde-expanded paths work.
+
+Seven tests pin happy-path (plain path, quoted path, uppercase .PDF, ~-expansion), guard negatives
+  (non-PDF file, chat with a .pdf mention but no such file), and verify /load still works.
+
+README gets a short drag-and-drop blurb; PLAN.md's entry ships.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* test: close remaining meaningful coverage gaps
+
+Four targeted regression tests for branches that were flagged but weren't worth a dedicated scenario
+  before:
+
+- _looks_like_pdf_path OSError path — malformed paths (Windows device names, encoding issues) must
+  classify as "not a PDF" instead of crashing the dispatcher. - agent.Agent._drive with a mixed
+  text+tool_use response — Claude routinely emits "let me check…" alongside the tool call; both the
+  text print and the tool_use execution must happen. - _show_key_guidance when webbrowser.open
+  raises — locked-down envs (no browser, permission error). URL still surfaces; no "opened the page"
+  claim. - _validate_silently with no validator injected — silent resume of a saved key accepts it
+  without calling anything. - keyring_store legacy-service get_password failure — load_key swallows
+  and continues instead of crashing the REPL.
+
+Total coverage 99% (up from 99% — same percentage, but 10 missed lines down to 2). The two lines
+  left (Agent.messages property getter and cli.py's if __name__ == "__main__" guard) are trivial and
+  not worth test-for-test's-sake scenarios.
+
+* fix(repl): check PDF classifier before slash dispatch
+
+Addresses review feedback on #25. Real bug on Linux / macOS: dragged paths are absolute
+  ("/home/user/draft.pdf", "/Users/...") and start with "/". The original dispatch order checked
+  ``line.startswith('/')`` first, so those paths were parsed as unknown slash commands and drag-drop
+  silently died.
+
+The Windows tests didn't catch this because tmp_path there starts with a drive letter (C:\Users\...)
+  — not a slash.
+
+Hoist the PDF classifier check above the slash check. The classifier is conservative (.pdf extension
+  AND file exists), so real commands like /help / /exit / /render can't match.
+
+New regression test (platform-independent, via monkeypatch) simulates the Linux-style absolute-path
+  drag and asserts /load is invoked instead of /dispatch_slash.
 
 ---------
 
