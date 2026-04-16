@@ -3,12 +3,13 @@ from pathlib import Path
 import json
 
 VALID_LAYOUTS = {"image-top", "image-full", "text-only", "image-bottom"}
-# Cover styles the renderer knows how to draw. ``full-bleed`` puts the
-# drawing across the whole page with the title on a translucent band;
-# ``framed`` centres the drawing under a title band at the top — two
-# children's-book conventions. Defaults to ``full-bleed``, the more
-# visually assertive of the two.
-VALID_COVER_STYLES = {"full-bleed", "framed"}
+# Cover styles the renderer knows how to draw:
+# - ``full-bleed``: drawing across the whole page with the title on
+#   a translucent band. Default — the most visually assertive option.
+# - ``framed``: letterboxed drawing under a title band at the top.
+# - ``poster``: type-only; no drawing. Fallback for books whose
+#   child-author didn't make a cover illustration.
+VALID_COVER_STYLES = {"full-bleed", "framed", "poster"}
 
 
 @dataclass

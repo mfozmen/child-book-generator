@@ -112,6 +112,8 @@ def test_valid_cover_styles_is_a_constant_set():
     """The tool surface and the renderer both enum against this set."""
     assert "full-bleed" in VALID_COVER_STYLES
     assert "framed" in VALID_COVER_STYLES
+    # Type-only "poster" for books without a cover drawing.
+    assert "poster" in VALID_COVER_STYLES
 
 
 def test_cover_dataclass_has_style_field_defaulting_to_full_bleed():

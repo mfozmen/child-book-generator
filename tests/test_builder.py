@@ -195,6 +195,82 @@ def test_cover_full_bleed_subtitle_clears_title_descenders(
     )
 
 
+def test_poster_title_never_overflows_page_even_at_long_length(tmp_path, monkeypatch):
+    """_fit_title_size must shrink long titles ALL the way down rather
+    than clipping at a floor that's still wider than the page. A 40-
+    char title starting from ``COVER_POSTER_TITLE_SIZE`` used to settle
+    at an 18-pt floor where the text still ran off the page. The floor
+    now only advises the skill; the render-path's shrink guarantees fit."""
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfgen.canvas import Canvas
+
+    from src.config import FONT_BOLD, MARGIN, PAGE_W
+
+    long_title = "The Extraordinarily Long Book Name That Overflows"
+    # Sanity: at the poster preferred size the title really is too wide.
+    from src.config import COVER_POSTER_TITLE_SIZE
+    assert (
+        pdfmetrics.stringWidth(long_title, FONT_BOLD, COVER_POSTER_TITLE_SIZE)
+        > PAGE_W - 2 * MARGIN
+    )
+
+    captured: list[tuple[str, float]] = []
+    orig_setfont = Canvas.setFont
+    orig_drawstring = Canvas.drawString
+    current_size: list[float] = [0]
+
+    def spy_setfont(self, name, size, *a, **kw):
+        current_size[0] = size
+        return orig_setfont(self, name, size, *a, **kw)
+
+    def spy_draw(self, x, y, text, *a, **kw):
+        captured.append((text, current_size[0]))
+        return orig_drawstring(self, x, y, text, *a, **kw)
+
+    monkeypatch.setattr(Canvas, "setFont", spy_setfont)
+    monkeypatch.setattr(Canvas, "drawString", spy_draw)
+
+    book = Book(
+        title=long_title,
+        cover=Cover(image=None, style="poster"),
+        back_cover=BackCover(),
+        pages=[Page(text="x", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+    build_pdf(book, tmp_path / "poster.pdf")
+
+    # The title drawString call happened at some font size; at THAT size
+    # the title must fit the page's inner width.
+    title_calls = [(t, sz) for t, sz in captured if t == long_title]
+    assert title_calls, "poster should have drawn the title"
+    _, used_size = title_calls[0]
+    rendered_w = pdfmetrics.stringWidth(long_title, FONT_BOLD, used_size)
+    assert rendered_w <= PAGE_W - 2 * MARGIN + 0.5, (
+        f"Title rendered at {used_size:.1f}pt is {rendered_w:.1f}pt wide, "
+        f"but usable width is {PAGE_W - 2 * MARGIN:.1f}pt — title clips."
+    )
+
+
+def test_draw_cover_raises_on_unknown_style(tmp_path):
+    """The ``Book → draw_cover`` contract is that ``cover.style`` has
+    been validated upstream (``load_book`` or ``to_book``). If a Book
+    is constructed directly with a bogus style, the dispatcher must
+    surface it rather than silently falling back to full-bleed."""
+    import pytest as _pytest
+
+    img = _cover_image(tmp_path)
+    book = Book(
+        title="T",
+        cover=Cover(image=img.name, style="bogus-style"),
+        back_cover=BackCover(),
+        pages=[Page(text="x", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+
+    with _pytest.raises(ValueError, match="bogus-style"):
+        build_pdf(book, tmp_path / "out.pdf")
+
+
 def test_cover_title_shrinks_to_fit_page_width(tmp_path):
     """At 34pt DejaVu Sans Bold a 25-char English title overshoots A5
     width (≈420pt). The renderer must shrink the title to fit rather
@@ -247,6 +323,96 @@ def test_to_book_rejects_invalid_cover_style(tmp_path):
 
     with _pytest.raises(ValueError, match="fullbleed"):
         to_book(draft, tmp_path)
+
+
+def test_cover_poster_renders_title_and_author_without_image(tmp_path):
+    """``poster`` is the type-only fallback for books that don't have
+    a cover drawing. Big title, big author, nothing else — no attempt
+    to render the image even if one happens to be set."""
+    img = _cover_image(tmp_path)
+    book = Book(
+        title="Sea Songs",
+        author="Yusuf",
+        # Image is present but poster intentionally ignores it.
+        cover=Cover(image=img.name, style="poster"),
+        back_cover=BackCover(),
+        pages=[Page(text="x", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+    out = tmp_path / "book.pdf"
+    build_pdf(book, out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    assert "Sea Songs" in cover_text
+    assert "Yusuf" in cover_text
+
+
+def test_cover_poster_renders_subtitle_under_title(tmp_path):
+    """``poster`` supports a subtitle just like the other templates
+    so a tagline ("a story by …") can live on the cover."""
+    book = Book(
+        title="Blank Canvas",
+        author="Ada",
+        cover=Cover(image=None, subtitle="a story by Ada", style="poster"),
+        back_cover=BackCover(),
+        pages=[Page(text="x", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+    out = tmp_path / "book.pdf"
+    build_pdf(book, out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    assert "Blank Canvas" in cover_text
+    assert "a story by Ada" in cover_text
+    assert "Ada" in cover_text
+
+
+def test_cover_poster_handles_missing_image_gracefully(tmp_path):
+    """poster is the template we *want* to use when there's no cover
+    drawing, so it must not require one."""
+    book = Book(
+        title="Blank Canvas",
+        author="Ada",
+        cover=Cover(image=None, style="poster"),
+        back_cover=BackCover(),
+        pages=[Page(text="x", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+    out = tmp_path / "book.pdf"
+    build_pdf(book, out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    assert "Blank Canvas" in cover_text
+
+
+def test_draw_cover_dispatches_poster_to_its_own_renderer(tmp_path, monkeypatch):
+    """Confirm the dispatcher branches to _draw_cover_poster when
+    style == "poster" (and not to the full-bleed fallback)."""
+    from src import pages
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        pages, "_draw_cover_poster",
+        lambda _c, _b: calls.append("poster"),
+    )
+    monkeypatch.setattr(
+        pages, "_draw_cover_full_bleed",
+        lambda _c, _b: calls.append("full-bleed"),
+    )
+
+    book = Book(
+        title="T",
+        cover=Cover(style="poster"),
+        back_cover=BackCover(),
+        pages=[Page(text="x", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+    build_pdf(book, tmp_path / "out.pdf")
+
+    assert calls == ["poster"]
 
 
 def test_cover_framed_renders_subtitle_under_title(tmp_path):
