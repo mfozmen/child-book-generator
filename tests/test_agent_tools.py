@@ -401,6 +401,71 @@ def test_set_cover_requires_draft():
     assert "no draft" in result.lower()
 
 
+def test_set_cover_accepts_optional_style_argument():
+    """``style`` lets the agent pick between the cover templates
+    (``full-bleed`` or ``framed``) in the same call that picks the
+    drawing — otherwise the user would need two tool rounds."""
+    img = Path("images/page-01.png")
+    draft = Draft(
+        source_pdf=Path("x.pdf"),
+        title="T",
+        pages=[DraftPage(text="p1", image=img)],
+    )
+    tool = set_cover_tool(get_draft=lambda: draft)
+
+    result = tool.handler({"page": 1, "style": "framed"})
+
+    assert draft.cover_image == img
+    assert draft.cover_style == "framed"
+    # The reply mentions the style so the user sees what got picked.
+    assert "framed" in result.lower()
+
+
+def test_set_cover_defaults_style_to_full_bleed_when_absent():
+    """Existing callers that only pass ``page`` still work — no
+    breaking change. Style stays at its previous value (default
+    full-bleed) when the arg isn't provided."""
+    draft = Draft(
+        source_pdf=Path("x.pdf"),
+        title="T",
+        pages=[DraftPage(text="p", image=Path("a.png"))],
+    )
+    tool = set_cover_tool(get_draft=lambda: draft)
+
+    tool.handler({"page": 1})
+
+    assert draft.cover_style == "full-bleed"
+
+
+def test_set_cover_rejects_invalid_style():
+    draft = Draft(
+        source_pdf=Path("x.pdf"),
+        title="T",
+        pages=[DraftPage(text="p", image=Path("a.png"))],
+    )
+    tool = set_cover_tool(get_draft=lambda: draft)
+
+    result = tool.handler({"page": 1, "style": "cinemascope"})
+
+    # Bad style rejected at the tool boundary; cover state unchanged.
+    assert draft.cover_image is None
+    assert draft.cover_style == "full-bleed"
+    assert "cinemascope" in result.lower() or "invalid" in result.lower()
+
+
+def test_set_cover_schema_advertises_style_enum():
+    """The tool's schema lists the valid styles so the LLM can pick
+    one deterministically (without hallucinating a template name)."""
+    tool = set_cover_tool(get_draft=lambda: None)
+
+    style_schema = tool.input_schema["properties"].get("style")
+    assert style_schema is not None
+    assert set(style_schema["enum"]) == {"full-bleed", "framed"}
+    # Style stays OPTIONAL — old callers that only send page continue
+    # working.
+    assert "style" not in tool.input_schema.get("required", [])
+
+
 # --- choose_layout -------------------------------------------------------
 
 

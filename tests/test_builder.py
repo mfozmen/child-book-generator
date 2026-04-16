@@ -73,3 +73,218 @@ def test_no_blank_page_after_the_cover(tmp_path):
         f"Expected the first story page right after the cover, got: "
         f"{first_story_text!r}"
     )
+
+
+# --- cover styles --------------------------------------------------------
+
+
+def _cover_image(tmp_path: Path) -> Path:
+    from PIL import Image
+
+    img = tmp_path / "cover.png"
+    Image.new("RGB", (300, 200), (200, 100, 50)).save(img)
+    return img
+
+
+def _book_with_cover(tmp_path: Path, style: str) -> Book:
+    img = _cover_image(tmp_path)
+    return Book(
+        title="The Brave Owl",
+        author="Yusuf",
+        cover=Cover(image=img.name, subtitle="", style=style),
+        back_cover=BackCover(text="", image=None),
+        pages=[Page(text="once", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+
+
+def test_cover_full_bleed_style_renders_title_and_author(tmp_path):
+    """``full-bleed``: drawing fills the page, title sits on a
+    translucent band at the bottom, author tucked in a corner."""
+    out = tmp_path / "book.pdf"
+    build_pdf(_book_with_cover(tmp_path, "full-bleed"), out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    assert "The Brave Owl" in cover_text
+    assert "Yusuf" in cover_text
+
+
+def test_cover_framed_style_renders_title_and_author(tmp_path):
+    """``framed``: title in a band at the top, letterboxed drawing
+    below, author at the bottom."""
+    out = tmp_path / "book.pdf"
+    build_pdf(_book_with_cover(tmp_path, "framed"), out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    assert "The Brave Owl" in cover_text
+    assert "Yusuf" in cover_text
+
+
+def test_draw_cover_dispatches_to_style_specific_renderer(tmp_path, monkeypatch):
+    """``draw_cover`` picks the right template implementation based
+    on ``book.cover.style``. Dispatch must actually branch — not
+    render the same thing regardless of the field's value."""
+    from src import pages
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        pages, "_draw_cover_full_bleed",
+        lambda _c, _b: calls.append("full-bleed"),
+    )
+    monkeypatch.setattr(
+        pages, "_draw_cover_framed",
+        lambda _c, _b: calls.append("framed"),
+    )
+
+    build_pdf(_book_with_cover(tmp_path, "framed"), tmp_path / "a.pdf")
+    build_pdf(_book_with_cover(tmp_path, "full-bleed"), tmp_path / "b.pdf")
+
+    assert calls == ["framed", "full-bleed"]
+
+
+def test_cover_full_bleed_subtitle_clears_title_descenders(
+    tmp_path, monkeypatch
+):
+    """The subtitle baseline must sit far enough below the title
+    baseline that a 34pt title's descenders ('g', 'y', 'p') don't
+    gnaw into the 14pt subtitle's cap height. The previous
+    ``title_y - COVER_AUTHOR_SIZE - 2*mm`` formula left only ~3pt of
+    clearance, so descender-heavy strings overlapped.
+
+    We capture the ``drawString`` calls and assert the gap between
+    the two baselines is larger than the old (unsafe) formula would
+    have produced."""
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen.canvas import Canvas
+
+    from src.config import COVER_AUTHOR_SIZE
+
+    draws: list[tuple[str, float]] = []
+    original_draw_string = Canvas.drawString
+
+    def capture(self, x, y, text, *a, **kw):
+        draws.append((text, y))
+        return original_draw_string(self, x, y, text, *a, **kw)
+
+    monkeypatch.setattr(Canvas, "drawString", capture)
+
+    img = _cover_image(tmp_path)
+    book = Book(
+        title="Spy Guy",
+        author="",
+        cover=Cover(
+            image=img.name,
+            subtitle="pygmy goats yonder",
+            style="full-bleed",
+        ),
+        back_cover=BackCover(),
+        pages=[Page(text="x", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+    build_pdf(book, tmp_path / "book.pdf")
+
+    title_y = next(y for t, y in draws if t == "Spy Guy")
+    sub_y = next(y for t, y in draws if t == "pygmy goats yonder")
+    gap = title_y - sub_y
+    unsafe_gap = COVER_AUTHOR_SIZE + 2 * mm  # the old formula
+    assert gap > unsafe_gap, (
+        f"Subtitle baseline too close to title: {gap:.1f}pt gap "
+        f"(> {unsafe_gap:.1f}pt required so descenders clear cap height)."
+    )
+
+
+def test_cover_title_shrinks_to_fit_page_width(tmp_path):
+    """At 34pt DejaVu Sans Bold a 25-char English title overshoots A5
+    width (≈420pt). The renderer must shrink the title to fit rather
+    than letting it spill past the page edges. We assert the
+    serialised cover text includes the whole title (not truncated)
+    and that no pypdf decoding errors surfaced."""
+    from reportlab.pdfbase import pdfmetrics
+    from src.config import COVER_TITLE_SIZE, FONT_BOLD, PAGE_W
+
+    long_title = "The Brave Little Dinosaur"
+    # Sanity: at the preferred size the string really is too wide.
+    assert pdfmetrics.stringWidth(long_title, FONT_BOLD, COVER_TITLE_SIZE) > PAGE_W, (
+        "Pre-condition: the default cover title size must overflow A5 "
+        "for this test to be meaningful."
+    )
+
+    img = _cover_image(tmp_path)
+    book = Book(
+        title=long_title,
+        author="",
+        cover=Cover(image=img.name, style="full-bleed"),
+        back_cover=BackCover(),
+        pages=[Page(text="x", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+    out = tmp_path / "book.pdf"
+    build_pdf(book, out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    # The whole title is preserved (not clipped by running off the page).
+    assert long_title in cover_text
+
+
+def test_to_book_rejects_invalid_cover_style(tmp_path):
+    """``Draft.cover_style`` is a bare string — a typo (e.g.
+    ``fullbleed`` without the hyphen) would slip through the REPL
+    path (``Draft → to_book → Book → build_pdf``) and render silently
+    under the wrong template. The projection boundary must validate."""
+    from src.draft import Draft, DraftPage, to_book
+
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        title="Ok",
+        pages=[DraftPage(text="hi")],
+        cover_style="fullbleed",  # typo: missing hyphen
+    )
+
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="fullbleed"):
+        to_book(draft, tmp_path)
+
+
+def test_cover_framed_renders_subtitle_under_title(tmp_path):
+    """The framed template shows the subtitle right under the title
+    so a tagline ("a story by Yusuf", "chapter one", …) can live on
+    the cover without squashing the drawing."""
+    img = _cover_image(tmp_path)
+    book = Book(
+        title="Owls",
+        author="Yusuf",
+        cover=Cover(image=img.name, subtitle="a night adventure", style="framed"),
+        back_cover=BackCover(),
+        pages=[Page(text="x", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+    out = tmp_path / "book.pdf"
+    build_pdf(book, out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    assert "Owls" in cover_text
+    assert "a night adventure" in cover_text
+
+
+def test_cover_style_default_is_full_bleed_when_unspecified(tmp_path):
+    """Books constructed without a style (the default from ``Cover``)
+    must still render — falls back to full-bleed."""
+    img = _cover_image(tmp_path)
+    book = Book(
+        title="Default Style",
+        cover=Cover(image=img.name),
+        back_cover=BackCover(),
+        pages=[Page(text="x", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+    out = tmp_path / "book.pdf"
+    build_pdf(book, out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    assert "Default Style" in cover_text

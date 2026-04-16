@@ -22,7 +22,7 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from src.pdf_ingest import extract_images, extract_pages
-from src.schema import BackCover, Book, Cover, Page
+from src.schema import VALID_COVER_STYLES, BackCover, Book, Cover, Page
 
 
 @dataclass
@@ -40,6 +40,7 @@ class Draft:
     author: str = ""
     cover_image: Path | None = None
     cover_subtitle: str = ""
+    cover_style: str = "full-bleed"
     back_cover_text: str = ""
 
 
@@ -191,6 +192,16 @@ def to_book(draft: Draft, source_dir: Path) -> Book:
     """
     if not draft.title.strip():
         raise ValueError("Draft is missing a title.")
+    if draft.cover_style not in VALID_COVER_STYLES:
+        # The REPL path (Draft → to_book → Book → build_pdf) skips
+        # load_book's validation, so a typo set directly on the draft
+        # (e.g. ``fullbleed`` without the hyphen) would otherwise fall
+        # through to the renderer's dispatch default and silently
+        # render under the wrong template. Catch it here instead.
+        raise ValueError(
+            f"Invalid cover style '{draft.cover_style}'. "
+            f"Valid styles: {sorted(VALID_COVER_STYLES)}."
+        )
     source_dir = Path(source_dir)
 
     def _rel(p: Path | None) -> str | None:
@@ -215,6 +226,7 @@ def to_book(draft: Draft, source_dir: Path) -> Book:
         cover=Cover(
             image=_rel(draft.cover_image),
             subtitle=draft.cover_subtitle,
+            style=draft.cover_style,
         ),
         back_cover=BackCover(text=draft.back_cover_text),
         pages=schema_pages,

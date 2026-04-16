@@ -3,12 +3,19 @@ from pathlib import Path
 import json
 
 VALID_LAYOUTS = {"image-top", "image-full", "text-only", "image-bottom"}
+# Cover styles the renderer knows how to draw. ``full-bleed`` puts the
+# drawing across the whole page with the title on a translucent band;
+# ``framed`` centres the drawing under a title band at the top — two
+# children's-book conventions. Defaults to ``full-bleed``, the more
+# visually assertive of the two.
+VALID_COVER_STYLES = {"full-bleed", "framed"}
 
 
 @dataclass
 class Cover:
     image: str | None = None
     subtitle: str = ""
+    style: str = "full-bleed"
 
 
 @dataclass
@@ -47,6 +54,13 @@ def load_book(json_path: Path) -> Book:
     back_raw = raw.get("back_cover", {}) or {}
     pages_raw = raw.get("pages", []) or []
 
+    cover_style = cover_raw.get("style", "full-bleed")
+    if cover_style not in VALID_COVER_STYLES:
+        raise ValueError(
+            f"cover: invalid style '{cover_style}'. "
+            f"Valid styles: {sorted(VALID_COVER_STYLES)}"
+        )
+
     pages = []
     for i, p in enumerate(pages_raw):
         layout = p.get("layout", "image-top")
@@ -64,7 +78,11 @@ def load_book(json_path: Path) -> Book:
     book = Book(
         title=raw["title"],
         author=raw.get("author", ""),
-        cover=Cover(image=cover_raw.get("image"), subtitle=cover_raw.get("subtitle", "")),
+        cover=Cover(
+            image=cover_raw.get("image"),
+            subtitle=cover_raw.get("subtitle", ""),
+            style=cover_style,
+        ),
         back_cover=BackCover(text=back_raw.get("text", ""), image=back_raw.get("image")),
         pages=pages,
         source_dir=json_path.resolve().parent,

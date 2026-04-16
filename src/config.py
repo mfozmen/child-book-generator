@@ -14,6 +14,13 @@ TITLE_SIZE = 28
 AUTHOR_SIZE = 14
 BODY_SIZE = 14
 BACK_SIZE = 12
+# Cover-specific knobs — bigger type than the body for shelf-appeal.
+COVER_TITLE_SIZE = 34
+COVER_AUTHOR_SIZE = 14
+# Height of the translucent band over the full-bleed drawing, and the
+# header band on the framed variant.
+COVER_BAND_H = 42 * mm
+COVER_BAND_ALPHA = 0.72
 
 LINE_HEIGHT = 1.35
 
