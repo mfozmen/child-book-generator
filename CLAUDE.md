@@ -4,21 +4,16 @@ An open-source tool that turns a child's story draft into a print-ready picture 
 
 ## Direction
 
-The project is evolving from a **static** generator (hand-authored `book.json` + `images/`) into a **dynamic** one: the user drops a PDF draft (scanned handwriting + drawings) and the tool extracts text and illustrations to produce a polished book automatically. The existing A5/booklet pipeline is preserved; the new work lives at the ingestion layer.
-
-Planned: `src/pdf_ingest.py` converting a PDF into `book.json` + `images/`, wired into `build.py` via `--from-pdf <path>`.
+The user drops a PDF draft (scanned handwriting + drawings), picks an LLM provider, and the agent walks the conversation to a printable book. Deterministic pieces (PDF parsing, layout, rendering, imposition) live under `src/`; the agent wraps them as narrow tools that always surface decisions to the user.
 
 ## Commands
 
 ```bash
 pip install -e '.[dev]'
 
-python build.py book.json                 # A5 picture book
-python build.py book.json --impose        # A5 + A4 imposed booklet
-python build.py book.json -o output/x.pdf # custom output path
+littlepress path/to/draft.pdf             # primary entry point — interactive agent
+littlepress                               # no arg → drops into REPL, /load later
 ```
-
-Default output: `output/<slugified-title>.pdf`.
 
 ## Architecture
 
@@ -27,21 +22,20 @@ Primary flow is `littlepress draft.pdf` → interactive agent → printable PDF.
 - `src/cli.py` — `littlepress` console entry point (also aliased as `littlepress-ai` matching the PyPI name). Pre-loads a PDF when given, restores memory if one matches.
 - `src/repl.py` — read loop, slash-command dispatch, provider picker, confirmation prompt. Owns the in-memory `Draft`.
 - `src/agent.py` — tool-use loop that drives the active LLM.
-- `src/agent_tools.py` — tools registered with the agent: `read_draft`, `propose_typo_fix`, `set_metadata`, `set_cover`, `choose_layout`, `render_book`. **This is where preserve-child-voice is enforced** — no tool rewrites page text freely.
-- `src/providers/llm.py` — `LLMProvider` protocol + `NullProvider` + `AnthropicProvider`. `chat()` for one-shot text, `turn()` for the tool-use loop.
-- `src/providers/validator.py` — provider key-validation pings (Anthropic implemented; rest no-op for now).
-- `src/draft.py` — `Draft` / `DraftPage`: lenient in-memory working shape. `from_pdf` ingests; `to_book` projects to the strict `Book` the renderer wants. `slugify` is the single source of truth for output filenames, shared by the agent's `render_book` tool, the REPL's `/render`, and `build.py`.
+- `src/agent_tools.py` — tools registered with the agent: `read_draft`, `propose_typo_fix`, `set_metadata`, `set_cover`, `choose_layout`, `propose_layouts`, `render_book`. **This is where preserve-child-voice is enforced** — no tool rewrites page text freely.
+- `src/providers/llm.py` — `LLMProvider` protocol + `NullProvider`, `AnthropicProvider`, `GoogleProvider`, `OpenAIProvider`. `chat()` for one-shot text, `turn()` for the tool-use loop.
+- `src/providers/validator.py` — provider key-validation pings (Anthropic, Google, OpenAI implemented; Ollama pending).
+- `src/draft.py` — `Draft` / `DraftPage`: lenient in-memory working shape. `from_pdf` ingests; `to_book` projects to the strict `Book` the renderer wants. `slugify` is the single source of truth for output filenames, shared by the agent's `render_book` tool and the REPL's `/render`. `collect_input_pdf` mirrors the user's PDF into `.book-gen/input/` so memory survives file moves. `next_version_number` + `atomic_copy` support the versioned render flow.
 - `src/memory.py` — per-project persistence at `.book-gen/draft.json`. Atomic write, fsync, schema-versioned.
 - `src/session.py` — per-working-directory session state (active provider, etc.) at `.book-gen/session.json`.
-- `src/schema.py` — strict `Book` / `Page` / `Cover` / `BackCover` dataclasses + `book.json` loader used by the renderer.
-- `src/config.py` — A5 page size, margins, fonts.
+- `src/schema.py` — strict `Book` / `Page` / `Cover` / `BackCover` dataclasses + `load_book` (kept as a library API for reading a `book.json` off disk — useful for external tooling).
+- `src/config.py` — A5 page size, margins, fonts, cover template dimensions.
 - `src/fonts.py` — DejaVu Sans registration (required for non-ASCII).
-- `src/pages.py` — page layouts (`image-top`, `image-bottom`, `image-full`, `text-only`).
+- `src/pages.py` — page layouts (`image-top`, `image-bottom`, `image-full`, `text-only`) + cover templates (`full-bleed`, `framed`, `poster`).
 - `src/builder.py` — ReportLab-based A5 PDF assembly.
 - `src/imposition.py` — 2-up saddle-stitch A4 booklet via `pypdf`.
 - `src/pdf_ingest.py` — text + image extraction from the input PDF.
-- `build.py` — legacy standalone `python build.py book.json` path (still works).
-- `.book-gen/` — per-project runtime state (gitignored): `session.json`, `draft.json`, `images/`, `output/`.
+- `.book-gen/` — per-project runtime state (gitignored): `session.json`, `draft.json`, `input/`, `images/`, `output/`.
 
 ## Book schema
 
