@@ -727,6 +727,14 @@ def _cmd_load(repl: Repl, args: str) -> None:
         f"[green]Loaded {len(draft.pages)} pages[/green] from {pdf_path.name} "
         f"({with_images} with an embedded illustration)."
     )
+    # Kick the agent off so the user doesn't stare at silence after the
+    # load. Matches the CLI-arg bootstrap path. Offline (NullProvider)
+    # stays quiet — there's no agent to greet with.
+    if not isinstance(repl._llm, NullProvider):
+        try:
+            repl._agent.say(_AGENT_GREETING_HINT)
+        except Exception as e:
+            repl._console.print(f"[red]Agent error:[/red] {e}")
     return None
 
 

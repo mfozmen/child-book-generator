@@ -78,8 +78,13 @@ def test_dragging_pdf_onto_terminal_loads_draft(tmp_path):
     repl.run()
 
     assert repl.draft is not None
-    # Agent was not invoked — the line didn't go through chat.
-    assert llm.calls == []
+    # The raw path didn't leak to the agent as a chat message — it went
+    # through /load. (Post-load the agent IS invoked with the greeting,
+    # but the user's line itself never becomes user-chat content.)
+    for call in llm.calls:
+        for msg in call:
+            if msg["role"] == "user" and isinstance(msg["content"], str):
+                assert str(pdf) not in msg["content"]
     # Confirm we see the /load success message.
     assert "loaded" in buf.getvalue().lower()
 
@@ -93,7 +98,11 @@ def test_quoted_drag_drop_path_also_loads(tmp_path):
     repl.run()
 
     assert repl.draft is not None
-    assert llm.calls == []
+    # Same invariant: the raw quoted path never reaches the agent as chat.
+    for call in llm.calls:
+        for msg in call:
+            if msg["role"] == "user" and isinstance(msg["content"], str):
+                assert str(pdf) not in msg["content"]
 
 
 def test_pdf_mention_in_chat_is_not_auto_loaded(tmp_path):
@@ -132,7 +141,10 @@ def test_pdf_case_insensitive_extension(tmp_path):
     repl.run()
 
     assert repl.draft is not None
-    assert llm.calls == []
+    for call in llm.calls:
+        for msg in call:
+            if msg["role"] == "user" and isinstance(msg["content"], str):
+                assert str(pdf) not in msg["content"]
 
 
 def test_home_expansion_in_drag_drop_path(tmp_path, monkeypatch):
