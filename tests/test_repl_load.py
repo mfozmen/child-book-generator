@@ -109,6 +109,26 @@ def test_load_on_non_pdf_reports_error(tmp_path):
     assert repl.draft is None
 
 
+def test_load_mirrors_the_pdf_into_book_gen_input(tmp_path):
+    """``/load`` must mirror the source PDF into ``.book-gen/input/``
+    so the session's state keys off a path we own — the user can delete
+    the original later without losing memory."""
+    external_dir = tmp_path / "Desktop"
+    external_dir.mkdir()
+    pdf = _write_pdf(external_dir, [{"text": "hi"}])
+
+    repl, _ = _make(tmp_path, [f"/load {pdf}", "/exit"])
+    repl.run()
+
+    input_dir = tmp_path / ".book-gen" / "input"
+    assert input_dir.is_dir()
+    collected = list(input_dir.glob("*.pdf"))
+    assert len(collected) == 1
+    assert collected[0].read_bytes() == pdf.read_bytes()
+    # The draft points at the in-repo copy, not the original path.
+    assert repl.draft.source_pdf == collected[0]
+
+
 def test_loading_twice_replaces_previous_draft(tmp_path):
     pdf_a = _write_pdf(tmp_path / "a" if (tmp_path / "a").mkdir() or True else tmp_path, [{"text": "first"}])
     pdf_b_dir = tmp_path / "b"
@@ -120,7 +140,11 @@ def test_loading_twice_replaces_previous_draft(tmp_path):
 
     assert repl.draft is not None
     assert len(repl.draft.pages) == 2
-    assert repl.draft.source_pdf == pdf_b
+    # /load collects the PDF into .book-gen/input/; source_pdf is the
+    # in-repo copy, not the original. We just check the content lines
+    # up (2 pages → pdf_b's story).
+    assert repl.draft.source_pdf.is_file()
+    assert repl.draft.source_pdf.read_bytes() == pdf_b.read_bytes()
 
 
 def test_load_kicks_the_agent_off_when_a_real_provider_is_active(tmp_path):
@@ -245,4 +269,7 @@ def test_load_quoted_path_with_spaces(tmp_path):
     repl.run()
 
     assert repl.draft is not None
-    assert repl.draft.source_pdf == pdf
+    # /load mirrors the PDF into .book-gen/input/ — the in-repo copy
+    # has the same bytes but a hashed filename, not the original path.
+    assert repl.draft.source_pdf.is_file()
+    assert repl.draft.source_pdf.read_bytes() == pdf.read_bytes()

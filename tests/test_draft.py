@@ -7,7 +7,15 @@ from pathlib import Path
 
 import pytest
 
-from src.draft import Draft, DraftPage, from_pdf, next_version_number, slugify, to_book
+from src.draft import (
+    Draft,
+    DraftPage,
+    collect_input_pdf,
+    from_pdf,
+    next_version_number,
+    slugify,
+    to_book,
+)
 
 
 def _make_png(path, color):
@@ -213,6 +221,106 @@ def test_next_version_ignores_stable_copies_and_non_versioned_files(tmp_path):
     (tmp_path / "readme.md").write_text("x")
 
     assert next_version_number(tmp_path, "book") == 1
+
+
+# --- collect_input_pdf ---------------------------------------------------
+
+
+def test_collect_input_pdf_copies_external_file_into_book_gen_input(tmp_path):
+    """A PDF dropped in Downloads/Desktop should be copied into
+    ``<session-root>/.book-gen/input/<stem>-<hash>.pdf`` so the session
+    keys off a path we control — the user's Downloads folder can be
+    cleaned without destroying memory."""
+    source = tmp_path / "Downloads" / "story.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"PDF-CONTENT")
+
+    session_root = tmp_path / "project"
+    session_root.mkdir()
+
+    collected = collect_input_pdf(source, session_root)
+
+    input_dir = session_root / ".book-gen" / "input"
+    assert collected.parent == input_dir
+    # Hash is baked into the filename so repeat collections find the
+    # same path without a byte-compare.
+    assert collected.stem.startswith("story-")
+    assert collected.suffix == ".pdf"
+    assert collected.read_bytes() == b"PDF-CONTENT"
+    # Original stays where the user left it — we don't move, we copy.
+    assert source.is_file()
+
+
+def test_collect_input_pdf_is_idempotent_for_identical_content(tmp_path):
+    """Reloading the same PDF on a later run must not crash or rewrite
+    — same bytes produce the same hashed name, so the existing file is
+    returned untouched."""
+    source = tmp_path / "story.pdf"
+    source.write_bytes(b"SAME-BYTES")
+    session_root = tmp_path / "project"
+    session_root.mkdir()
+
+    first = collect_input_pdf(source, session_root)
+    mtime_before = first.stat().st_mtime_ns
+
+    # Touch the source to a different mtime; content is identical.
+    source.write_bytes(b"SAME-BYTES")
+
+    second = collect_input_pdf(source, session_root)
+
+    assert first == second
+    # Same-hash destination was reused, not rewritten — mtime unchanged.
+    assert second.stat().st_mtime_ns == mtime_before
+
+
+def test_collect_input_pdf_distinguishes_different_content_same_name(tmp_path):
+    """Two PDFs happen to share a basename (``draft.pdf``) but have
+    different content. Collecting both must produce two distinct
+    in-repo paths — otherwise their memories would cross-wire."""
+    a = tmp_path / "a" / "draft.pdf"
+    b = tmp_path / "b" / "draft.pdf"
+    a.parent.mkdir()
+    b.parent.mkdir()
+    a.write_bytes(b"CONTENT-A")
+    b.write_bytes(b"CONTENT-B")
+    session_root = tmp_path / "project"
+    session_root.mkdir()
+
+    collected_a = collect_input_pdf(a, session_root)
+    collected_b = collect_input_pdf(b, session_root)
+
+    assert collected_a != collected_b
+    assert collected_a.read_bytes() == b"CONTENT-A"
+    assert collected_b.read_bytes() == b"CONTENT-B"
+
+
+def test_collect_input_pdf_noop_when_path_already_under_input(tmp_path):
+    """``/load .book-gen/input/draft-<hash>.pdf`` (user pointing at the
+    already-collected copy) must not recurse into itself — return the
+    path unchanged."""
+    session_root = tmp_path / "project"
+    input_dir = session_root / ".book-gen" / "input"
+    input_dir.mkdir(parents=True)
+    already_in_place = input_dir / "draft-deadbeef.pdf"
+    already_in_place.write_bytes(b"BYTES")
+
+    collected = collect_input_pdf(already_in_place, session_root)
+
+    assert collected == already_in_place
+    assert collected.read_bytes() == b"BYTES"
+
+
+def test_collect_input_pdf_creates_input_dir_if_missing(tmp_path):
+    """First-ever collection on a brand-new session must create
+    ``.book-gen/input/`` — there's no directory yet."""
+    source = tmp_path / "story.pdf"
+    source.write_bytes(b"X")
+    session_root = tmp_path / "fresh"
+
+    collected = collect_input_pdf(source, session_root)
+
+    assert collected.parent.is_dir()
+    assert collected.parent == session_root / ".book-gen" / "input"
 
 
 def test_next_version_does_not_confuse_slugs_ending_with_version_digits(tmp_path):

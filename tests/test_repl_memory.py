@@ -184,14 +184,140 @@ def test_relaunch_restores_draft_from_memory(tmp_path, monkeypatch):
     assert captured["title"] == "Remembered Book"
 
 
-def test_relaunch_with_different_pdf_ignores_memory(tmp_path, monkeypatch):
-    """Memory from draft A must not apply when the user runs with draft B."""
+def test_memory_from_before_collect_input_migrates_on_first_relaunch(
+    tmp_path, monkeypatch
+):
+    """Users with a saved session from before the collect_input_pdf
+    feature have ``source_pdf`` = the original arg path; the first
+    relaunch after upgrade must not silently throw their session
+    away. On lookup miss we fall back to the pre-collection path and,
+    on a hit, migrate the stored source_pdf to the new in-repo path
+    so subsequent launches go through the fast path."""
+    from src import cli, memory, session as session_mod
+    from src.draft import Draft, DraftPage
+
+    pdf = _write_pdf(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    session_mod.save(tmp_path, session_mod.Session(provider="none"))
+
+    # Hand-craft a pre-PR memory file: source_pdf pointing at the
+    # original (not the collected copy).
+    legacy = Draft(
+        source_pdf=pdf.resolve(),
+        title="Legacy Title",
+        pages=[DraftPage(text="legacy")],
+    )
+    memory.save_draft(tmp_path, legacy)
+
+    # Sanity: memory exists and keys off the legacy path.
+    saved = memory.load_draft(tmp_path, expected_source=pdf)
+    assert saved is not None and saved.title == "Legacy Title"
+
+    # First relaunch after upgrade — the CLI now collects the PDF
+    # into .book-gen/input/, so expected_source is the hashed copy,
+    # which won't match the legacy record by path.
+    captured = {}
+    from src import repl as repl_mod
+
+    def spy(self):
+        captured["title"] = self._draft.title if self._draft else None
+        captured["source"] = self._draft.source_pdf if self._draft else None
+        raise SystemExit(0)
+
+    monkeypatch.setattr(repl_mod.Repl, "run", spy)
+    monkeypatch.setattr(
+        "builtins.input", lambda _p="": (_ for _ in ()).throw(EOFError)
+    )
+
+    try:
+        cli.main([str(pdf)])
+    except SystemExit:
+        pass
+
+    # Legacy memory was found via the fallback path.
+    assert captured["title"] == "Legacy Title"
+    # And migrated: source_pdf now points at the in-repo collected copy.
+    input_dir = tmp_path / ".book-gen" / "input"
+    assert captured["source"].parent == input_dir
+
+    # Re-save on migration so subsequent launches skip the fallback.
+    persisted = memory.load_draft(tmp_path, expected_source=captured["source"])
+    assert persisted is not None
+    assert persisted.source_pdf.parent == input_dir
+
+
+def test_memory_survives_the_original_pdf_being_moved_or_deleted(
+    tmp_path, monkeypatch
+):
+    """``collect_input_pdf`` was added precisely so memory survives
+    the user cleaning up their Downloads folder. Set a title on the
+    first launch, then delete the original PDF; launching again with
+    the in-repo copy must still restore the saved state.
+    """
     from src import cli, session as session_mod
 
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    pdf = _write_pdf(downloads)
+
+    monkeypatch.chdir(tmp_path)
+    session_mod.save(tmp_path, session_mod.Session(provider="none"))
+
+    # First launch: save a title.
+    monkeypatch.setattr(
+        "builtins.input",
+        _scripted(["/title Survives Cleanup", "/exit"]),
+    )
+    assert cli.main([str(pdf)]) == 0
+
+    # Locate the in-repo copy that collect_input_pdf produced.
+    collected_pdfs = list((tmp_path / ".book-gen" / "input").iterdir())
+    assert len(collected_pdfs) == 1, (
+        "collect_input_pdf should have mirrored the PDF into "
+        ".book-gen/input/"
+    )
+    collected = collected_pdfs[0]
+
+    # User cleans Downloads — original is gone.
+    pdf.unlink()
+    assert not pdf.is_file()
+
+    # Second launch with the in-repo copy: memory restores.
+    captured = {}
+    from src import repl as repl_mod
+
+    def spy(self):
+        captured["title"] = self._draft.title if self._draft else None
+        raise SystemExit(0)
+
+    monkeypatch.setattr(repl_mod.Repl, "run", spy)
+    monkeypatch.setattr("builtins.input", lambda _p="": (_ for _ in ()).throw(EOFError))
+
+    try:
+        cli.main([str(collected)])
+    except SystemExit:
+        pass
+
+    assert captured["title"] == "Survives Cleanup"
+
+
+def test_relaunch_with_different_pdf_ignores_memory(tmp_path, monkeypatch):
+    """Memory from draft A must not apply when the user runs with draft B.
+
+    The two drafts have distinct content, so ``collect_input_pdf``
+    lands them on distinct in-repo paths (content-hashed filenames)
+    and their memories stay separate."""
+    from src import cli, session as session_mod
+
+    # Give the two drafts DIFFERENT content so the content-hashed
+    # collected paths are distinct — otherwise identical PDFs would
+    # logically share one book's memory.
     pdf_a = _write_pdf(tmp_path)
+    pdf_a.write_bytes(pdf_a.read_bytes() + b"A-MARKER")
     pdf_b_dir = tmp_path / "other"
     pdf_b_dir.mkdir()
     pdf_b = _write_pdf(pdf_b_dir)
+    pdf_b.write_bytes(pdf_b.read_bytes() + b"B-MARKER")
 
     monkeypatch.chdir(tmp_path)
 
@@ -221,6 +347,6 @@ def test_relaunch_with_different_pdf_ignores_memory(tmp_path, monkeypatch):
     except SystemExit:
         pass
 
-    # Fresh ingest: title empty, source_pdf is B.
+    # Fresh ingest: title empty, collected source matches B's bytes.
     assert captured["title"] == ""
-    assert captured["source"] == pdf_b
+    assert captured["source"].read_bytes() == pdf_b.read_bytes()

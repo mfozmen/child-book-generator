@@ -795,6 +795,11 @@ def _cmd_load(repl: Repl, args: str) -> None:
     if not pdf_path.is_file():
         repl._console.print(f"[red]File not found:[/red] {pdf_path}")
         return None
+    # Collect the PDF into .book-gen/input/ so the session keys off a
+    # path we control — the user can delete the original without
+    # losing the draft's memory.
+    session_root = repl._session_root or Path.cwd()
+    pdf_path = draft_mod.collect_input_pdf(pdf_path, session_root)
     try:
         draft = draft_mod.from_pdf(pdf_path, repl._images_dir())
     except Exception as e:  # pypdf raises several flavours of error; treat as one.
