@@ -103,7 +103,7 @@ def test_render_slugifies_title_into_filename(tmp_path):
 
     output_dir = tmp_path / ".book-gen" / "output"
     stable = output_dir / "kucuk_ejderha.pdf"
-    versioned = output_dir / "kucuk_ejderha-v1.pdf"
+    versioned = output_dir / "kucuk_ejderha.v1.pdf"
     # Turkish characters ascii-folded, spaces become underscores, all lowercase.
     assert stable.is_file()
     assert versioned.is_file()
@@ -256,8 +256,8 @@ def test_render_rerenders_keep_previous_versioned_copy(tmp_path):
 
     output_dir = tmp_path / ".book-gen" / "output"
     stable = output_dir / "book.pdf"
-    v1 = output_dir / "book-v1.pdf"
-    v2 = output_dir / "book-v2.pdf"
+    v1 = output_dir / "book.v1.pdf"
+    v2 = output_dir / "book.v2.pdf"
     assert stable.is_file()
     assert v1.is_file(), "first render's snapshot must survive the second render"
     assert v2.is_file(), "second render must produce its own snapshot"
@@ -265,7 +265,7 @@ def test_render_rerenders_keep_previous_versioned_copy(tmp_path):
 
 def test_render_writes_versioned_copy_alongside_stable(tmp_path):
     """A single ``/render`` lands both the stable ``<slug>.pdf`` and a
-    ``<slug>-v1.pdf`` snapshot so nothing is lost if the user renders
+    ``<slug>.v1.pdf`` snapshot so nothing is lost if the user renders
     again later."""
     pdf = _write_pdf(tmp_path, [{"text": "hi"}])
 
@@ -277,11 +277,56 @@ def test_render_writes_versioned_copy_alongside_stable(tmp_path):
 
     output_dir = tmp_path / ".book-gen" / "output"
     stable = output_dir / "book.pdf"
-    v1 = output_dir / "book-v1.pdf"
+    v1 = output_dir / "book.v1.pdf"
     assert stable.is_file()
     assert v1.is_file()
     # The snapshot filename surfaces so the user knows a copy was kept.
-    assert "book-v1" in buf.getvalue()
+    assert "book.v1" in buf.getvalue()
+
+
+def test_render_custom_path_surfaces_build_failure(tmp_path, monkeypatch):
+    """``/render <path>`` must report build errors cleanly and skip
+    the booklet step when the A5 didn't land (the early-return in
+    _run_custom_render)."""
+    def boom(_book, _out):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr("src.builder.build_pdf", boom)
+
+    pdf = _write_pdf(tmp_path, [{"text": "hi"}])
+    out = tmp_path / "custom" / "book.pdf"
+
+    repl, buf = _make(
+        tmp_path,
+        [f"/load {pdf}", "/title X", f"/render --impose {out}", "/exit"],
+    )
+    assert repl.run() == 0
+    # Error surfaced, no booklet attempted (no "Wrote" line for booklet).
+    assert "render failed" in buf.getvalue().lower()
+    assert not out.is_file()
+    assert not (out.parent / f"{out.stem}_A4_booklet.pdf").is_file()
+
+
+def test_render_warns_when_stable_copy_is_locked(tmp_path, monkeypatch):
+    """If ``<slug>.pdf`` is held open by a PDF viewer (Windows), the
+    stable mirror raises PermissionError — the REPL reports a
+    yellow hint without aborting. The versioned snapshot still lands."""
+    def fail_replace(_src, _dst):
+        raise PermissionError("file in use")
+
+    monkeypatch.setattr("src.draft.os.replace", fail_replace)
+
+    pdf = _write_pdf(tmp_path, [{"text": "hi"}])
+    repl, buf = _make(
+        tmp_path, [f"/load {pdf}", "/title Book", "/render", "/exit"]
+    )
+    assert repl.run() == 0
+
+    versioned = tmp_path / ".book-gen" / "output" / "book.v1.pdf"
+    assert versioned.is_file(), "versioned snapshot must still write"
+    output = buf.getvalue().lower()
+    assert "couldn't update" in output
+    assert "viewer" in output or "open" in output
 
 
 def test_render_custom_path_does_not_version(tmp_path):
@@ -299,4 +344,4 @@ def test_render_custom_path_does_not_version(tmp_path):
 
     assert out.is_file()
     # No snapshot next to the user-chosen path.
-    assert not (out.parent / "book-v1.pdf").is_file()
+    assert not (out.parent / "book.v1.pdf").is_file()

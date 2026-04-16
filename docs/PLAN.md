@@ -47,6 +47,7 @@ Items below came out of the first real end-to-end test (Yavru Dinozor). Listed r
 - **Per-page AI illustration generation.** Cover-only generation (in Next up) is the first step. Per-page is bigger — style consistency across pages, re-prompt on user feedback. Defer until the cover tool ships.
 - **OCR for handwritten scans.** Current PDFs have extractable text; add when a real draft needs it.
 - **Full parametric layout engine.** `choose_layout` applies the skill's rule 1 and simple aspect-ratio branching; parametric splits can wait.
+- **Cap / prune old render snapshots.** Every render keeps a ``.vN.pdf`` snapshot, so heavy iteration on a 10 MB picture book can accumulate hundreds of megabytes of PDFs. Intentional for now — the user can compare or roll back freely — but eventually we'll want either a per-project cap (keep last N), an age-based sweep, or a ``/prune`` command. Pick whichever emerges from real usage.
 
 ---
 
