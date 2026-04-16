@@ -160,6 +160,9 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
   ([`95e2a6c`](https://github.com/mfozmen/littlepress-ai/commit/95e2a6c8c37e9d9f02ae5a52dc0d2a8d47121767))
 
 - **release**: 1.1.0 [skip ci]
+  ([`9cc8709`](https://github.com/mfozmen/littlepress-ai/commit/9cc87096b4861db28f97bfd89b646f346d2d53da))
+
+- **release**: 1.1.0 [skip ci]
   ([`45ca1d1`](https://github.com/mfozmen/littlepress-ai/commit/45ca1d1d9e8fdbf156d00b90d2bfa12bb95e3571))
 
 - **release**: 1.1.0 [skip ci]
@@ -383,6 +386,70 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
   intentionally doesn't pop up — it's a print artefact). - Cover the platform dispatch in
   open_in_default_viewer directly, working around the conftest auto-mock via a module-load-time
   import binding. Gets src/agent_tools.py back to 100% coverage.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **pages**: Two cover templates (full-bleed and framed)
+  ([#32](https://github.com/mfozmen/littlepress-ai/pull/32),
+  [`37aa749`](https://github.com/mfozmen/littlepress-ai/commit/37aa749a4be4fcd2ac9935b6e79b0dab8a55f6a9))
+
+* feat(pages): two cover templates (full-bleed and framed)
+
+The previous draw_cover crammed title + author + image into an upper/lower split — the drawing felt
+  squeezed and the text looked like an afterthought. Replace it with two deliberate templates the
+  agent picks between:
+
+- full-bleed (default): the drawing covers the full page; a translucent band at the bottom carries
+  the title with the author centred inside it. Best for dramatic illustrations where the artwork is
+  the point. - framed: a title band at the top, a letterboxed drawing below, the author in a thin
+  strip along the bottom. Calmer; better when the illustration needs breathing room around it.
+
+Cover carries a new ``style`` field (Cover, Draft, book.json, memory). Defaults to "full-bleed"
+  everywhere so existing book.json files and saved sessions load unchanged. schema.py validates the
+  style on load; agent_tools.set_cover gains an optional ``style`` arg (enum of valid styles in the
+  tool schema, rejected at the tool boundary).
+
+Cover-specific config moved to src/config.py (COVER_TITLE_SIZE, COVER_AUTHOR_SIZE, COVER_BAND_H,
+  COVER_BAND_ALPHA) so visual knobs aren't buried inside pages.py.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix(pages): address PR review for cover templates
+
+- Full-bleed subtitle cleared title descenders. The old formula subtracted COVER_AUTHOR_SIZE + 2mm
+  below the title baseline, which left about 3pt between descenders on 'g'/'y'/'p' at 34pt and the
+  subtitle's cap height. Bumped the gap to title_size * 0.35, which gives ~12pt / 4mm — enough
+  breathing room for descending glyphs. Same formula now in both cover templates.
+
+- Shrink-to-fit long titles. COVER_TITLE_SIZE = 34 made a 25-char English title ("The Brave Little
+  Dinosaur") overshoot A5 width (~420pt). Added _fit_title_size() that scales the font down
+  proportionally when stringWidth exceeds the available width, with an 18pt floor so extreme cases
+  clip rather than shrink to unreadable. Both cover templates call it.
+
+- Validate cover_style at the Draft → Book boundary. Draft.cover_style is a bare str; a typo set by
+  anything other than the set_cover tool (memory restore with a legacy value, manual editing, a
+  future slash command) would silently render as full-bleed. to_book now raises on unknown styles so
+  the REPL path has the same guarantee schema.load_book gives the standalone builder.
+
+- Updated draw_cover docstring to match: by the time we dispatch, the style has been validated by
+  either load_book or to_book, so the else-branch isn't a silent fallback for garbage input.
+
+* docs: plan more cover templates + select-cover-template skill
+
+The two templates shipping in PR #32 (full-bleed, framed) cover the two conventions children's books
+  use most, but more are worth adding: poster (type-only, for when the child didn't draw a cover),
+  portrait-frame (illustration inside a decorative border), title-band-top (colour panel behind
+  title), spine-wrap (for the A4 booklet).
+
+More importantly — *which* template fits *which* book is a judgment call, not a menu for the user to
+  click through. Mirror the select-page-layout pattern: a .claude/skills/select-cover-template/
+  skill encodes the decision rules (title length, tone, image aspect and busyness, whether there's
+  even a cover drawing), and the agent consults it before calling set_cover. Renderer stays stupid;
+  the reasoning lives in one auditable place.
 
 ---------
 
