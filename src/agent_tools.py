@@ -22,7 +22,7 @@ from typing import Callable
 
 from src.agent import Tool
 from src.builder import build_pdf
-from src.draft import Draft, slugify, to_book
+from src.draft import Draft, atomic_copy, next_version_number, slugify, to_book
 from src.imposition import impose_a5_to_a4
 from src.schema import VALID_LAYOUTS
 
@@ -368,6 +368,72 @@ def choose_layout_tool(get_draft: Callable[[], Draft | None]) -> Tool:
     )
 
 
+def _mirror_stable(versioned: Path, stable: Path) -> bool:
+    """Atomically replace ``stable`` with a copy of ``versioned``.
+
+    Returns ``True`` on success, ``False`` if the stable path is locked
+    (typical on Windows when the user has the previous PDF open in a
+    viewer). A locked stable file isn't a render failure — the versioned
+    file is fresh — so the caller keeps going and tells the user.
+    """
+    try:
+        atomic_copy(versioned, stable)
+        return True
+    except OSError:
+        return False
+
+
+def _render_message(
+    versioned: Path,
+    stable: Path,
+    *,
+    stable_updated: bool,
+    opened: bool,
+) -> str:
+    """Assemble the A5 success line for the agent's reply."""
+    if not stable_updated:
+        return (
+            f"Wrote snapshot {versioned}. Couldn't update {stable.name} "
+            f"(is it open in a PDF viewer? close it and copy "
+            f"{versioned.name} over {stable.name} to refresh)."
+        )
+    tail = (
+        " and opened it in your viewer."
+        if opened
+        else ". Open it manually — couldn't launch a PDF viewer here."
+    )
+    return f"Wrote A5 book to {stable} (also kept snapshot {versioned.name}){tail}"
+
+
+def _impose_and_mirror(
+    versioned_a5: Path,
+    stable_a5: Path,
+    stable_updated: bool,
+    message: str,
+) -> str:
+    """Produce the A4 booklet and mirror it alongside the A5 pair."""
+    versioned_booklet = versioned_a5.with_name(
+        f"{versioned_a5.stem}_A4_booklet.pdf"
+    )
+    stable_booklet = stable_a5.with_name(f"{stable_a5.stem}_A4_booklet.pdf")
+    try:
+        impose_a5_to_a4(versioned_a5, versioned_booklet)
+    except Exception as e:
+        return (
+            f"{message} Booklet imposition failed: {e}. The A5 "
+            "stayed on disk — the user can still print it."
+        )
+    booklet_stable_updated = stable_updated and _mirror_stable(
+        versioned_booklet, stable_booklet
+    )
+    booklet_target = stable_booklet if booklet_stable_updated else versioned_booklet
+    return (
+        f"{message} Also wrote A4 booklet to {booklet_target} (snapshot "
+        f"{versioned_booklet.name}). Tell the user to print "
+        "double-sided (flipped on short edge), fold, and staple."
+    )
+
+
 def render_book_tool(
     get_draft: Callable[[], Draft | None],
     get_session_root: Callable[[], Path],
@@ -404,43 +470,47 @@ def render_book_tool(
 
         impose = bool(input_.get("impose", False))
         source_dir = Path(get_session_root()) / ".book-gen"
-        out_path = (source_dir / "output" / f"{slugify(draft.title)}.pdf").resolve()
+        output_dir = source_dir / "output"
+        slug = slugify(draft.title)
+        # next_version_number needs the directory to exist so it can
+        # scan for prior snapshots; create it up front.
+        output_dir.mkdir(parents=True, exist_ok=True)
+        version = next_version_number(output_dir, slug)
+        versioned_a5 = (output_dir / f"{slug}.v{version}.pdf").resolve()
+        stable_a5 = (output_dir / f"{slug}.pdf").resolve()
 
         try:
             book = to_book(draft, source_dir)
-            build_pdf(book, out_path)
+            # Render to the versioned filename — that's the canonical
+            # artefact for this render. The stable name is a pointer.
+            build_pdf(book, versioned_a5)
         except Exception as e:
             return f"Render failed: {e}"
 
+        # Mirror to the stable name via atomic replace so an interrupted
+        # copy leaves either the previous stable file or the new one —
+        # never a half-written one. Windows holds an exclusive lock on
+        # open PDFs; if the user has the previous stable copy open in
+        # Acrobat we surface that separately without hiding the fact
+        # that the render itself succeeded.
+        stable_updated = _mirror_stable(versioned_a5, stable_a5)
+
+        target = stable_a5 if stable_updated else versioned_a5
         try:
-            opener(out_path)
+            opener(target)
             opened = True
         except Exception:
             # Viewer can't launch (headless env, OS permission) —
             # file is on disk and the path is in the reply.
             opened = False
 
-        if opened:
-            message = f"Wrote A5 book to {out_path} and opened it in your viewer."
-        else:
-            message = (
-                f"Wrote A5 book to {out_path}. Open it manually — couldn't "
-                "launch a PDF viewer here."
-            )
+        message = _render_message(
+            versioned_a5, stable_a5, stable_updated=stable_updated, opened=opened
+        )
 
         if impose:
-            booklet = out_path.with_name(f"{out_path.stem}_A4_booklet.pdf")
-            try:
-                impose_a5_to_a4(out_path, booklet)
-            except Exception as e:
-                return (
-                    f"{message} Booklet imposition failed: {e}. The A5 "
-                    "stayed on disk — the user can still print it."
-                )
-            message += (
-                f" Also wrote A4 booklet to {booklet}. Tell the user to "
-                "print double-sided (flipped on short edge), fold, and "
-                "staple."
+            message = _impose_and_mirror(
+                versioned_a5, stable_a5, stable_updated, message
             )
 
         return message

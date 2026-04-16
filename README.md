@@ -28,6 +28,7 @@ What it does today:
 - Runs an agent conversation (Claude by default; OpenAI / Gemini / Ollama supported behind the picker). The agent replies in whatever language you type in.
 - The agent edits the draft through narrow tools that always surface to you: propose a typo fix (y/n), set title / author / cover / layout, render the book. Page text is **only** changed by `propose_typo_fix`, bounded to 3 words and 30 chars per side — no tool rewrites the child's story.
 - Writes an A5 PDF under `.book-gen/output/` and, when you ask, an A4 2-up booklet ready to print, fold, and staple. After a successful render, the A5 pops open in your OS default PDF viewer so you don't have to hunt for the file; the booklet stays on disk (it's a print artefact, not a reading copy).
+- Never overwrites a previous render. Each render keeps a numbered snapshot alongside the stable `<slug>.pdf` (e.g. `the_brave_owl.v1.pdf`, `.v2.pdf`, …) so you can compare drafts or roll back. Snapshots accumulate forever for now — prune them manually if you hit disk-space pressure. The snapshot filename is printed every time you render.
 - Remembers what you decided: rerunning `littlepress same-draft.pdf` picks up where the last session left off instead of asking everything again.
 
 Roadmap lives in `docs/PLAN.md`.

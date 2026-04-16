@@ -658,51 +658,130 @@ def _extract_impose_flag(args: str) -> tuple[bool, str]:
     return True, remaining.strip()
 
 
-def _cmd_render(repl: Repl, args: str) -> None:
-    """Render the loaded draft into a finished A5 PDF."""
-    if not _require_draft(repl):
-        return None
+def _require_title(repl: Repl) -> bool:
     if not repl.draft.title.strip():
         repl._console.print(
             "[yellow]The draft has no title.[/yellow] "
             "Set one with [cyan]/title <name>[/cyan], then try again."
         )
-        return None
+        return False
+    return True
 
+
+def _mirror_or_warn(repl: Repl, src: Path, dst: Path) -> bool:
+    """Atomically copy ``src`` onto ``dst``; warn if the dst is locked.
+
+    Windows holds an exclusive lock on PDFs opened in a viewer; if the
+    user has the previous stable copy open in Acrobat, updating it
+    fails with ``PermissionError``. That isn't a render failure — the
+    versioned snapshot is fresh on disk — so we log a yellow hint and
+    keep going rather than claiming the whole render blew up.
+    """
+    from src.draft import atomic_copy
+
+    try:
+        atomic_copy(src, dst)
+        return True
+    except OSError:
+        repl._console.print(
+            f"[yellow]Couldn't update {dst.name}[/yellow] "
+            f"— is it open in a PDF viewer? Close it, then copy "
+            f"{src.name} over {dst.name} to refresh."
+        )
+        return False
+
+
+def _render_to_file(repl: Repl, source_dir: Path, out: Path) -> bool:
+    """Render the loaded draft to exactly ``out``. Used by both the
+    custom-path and versioned paths (the versioned path's ``out`` is
+    the ``.vN.pdf`` snapshot)."""
     from src.builder import build_pdf
-    from src.draft import slugify, to_book
+    from src.draft import to_book
 
-    # Pull --impose off without re-tokenising the rest of the string —
-    # the user's output path may contain runs of whitespace that
-    # split()+' '.join() would silently collapse.
-    impose, remaining = _extract_impose_flag(args)
-
-    source_dir = (repl._session_root or Path.cwd()) / ".book-gen"
-    if remaining:
-        out_path = Path(remaining).expanduser()
-    else:
-        out_path = source_dir / "output" / f"{slugify(repl.draft.title)}.pdf"
     try:
         book = to_book(repl.draft, source_dir)
-        build_pdf(book, out_path)
+        build_pdf(book, out)
     except Exception as e:
         repl._console.print(f"[red]Render failed:[/red] {e}")
-        return None
-    repl._console.print(f"[green]Wrote[/green] {out_path}")
+        return False
+    return True
 
-    if impose:
-        # A5 is already on disk; the booklet is a derived artefact. If it
-        # fails we keep the A5 and surface the error so the user still has
-        # something to print.
-        from src import imposition
 
-        booklet = out_path.with_name(f"{out_path.stem}_A4_booklet.pdf")
-        try:
-            imposition.impose_a5_to_a4(out_path, booklet)
-        except Exception as e:
-            repl._console.print(f"[red]Booklet imposition failed:[/red] {e}")
-            return None
+def _impose_to_file(repl: Repl, src: Path, booklet: Path) -> bool:
+    from src import imposition
+
+    try:
+        imposition.impose_a5_to_a4(src, booklet)
+    except Exception as e:
+        repl._console.print(f"[red]Booklet imposition failed:[/red] {e}")
+        return False
+    return True
+
+
+def _resolve_versioned_paths(repl: Repl, source_dir: Path) -> tuple[Path, Path]:
+    from src.draft import next_version_number, slugify
+
+    output_dir = source_dir / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    slug = slugify(repl.draft.title)
+    version = next_version_number(output_dir, slug)
+    return (
+        output_dir / f"{slug}.v{version}.pdf",
+        output_dir / f"{slug}.pdf",
+    )
+
+
+def _run_custom_render(
+    repl: Repl, out: Path, impose: bool, source_dir: Path
+) -> None:
+    """``/render <path>`` escape hatch — no versioning, no mirroring."""
+    if not _render_to_file(repl, source_dir, out):
+        return
+    repl._console.print(f"[green]Wrote[/green] {out}")
+    if not impose:
+        return
+    booklet = out.with_name(f"{out.stem}_A4_booklet.pdf")
+    if _impose_to_file(repl, out, booklet):
         repl._console.print(f"[green]Wrote[/green] {booklet}")
+
+
+def _run_versioned_render(
+    repl: Repl, impose: bool, source_dir: Path
+) -> None:
+    versioned, stable = _resolve_versioned_paths(repl, source_dir)
+    if not _render_to_file(repl, source_dir, versioned):
+        return
+    stable_ok = _mirror_or_warn(repl, versioned, stable)
+    repl._console.print(f"[green]Wrote[/green] {stable if stable_ok else versioned}")
+    repl._console.print(f"  [dim]snapshot: {versioned.name}[/dim]")
+    if not impose:
+        return
+    versioned_booklet = versioned.with_name(f"{versioned.stem}_A4_booklet.pdf")
+    stable_booklet = stable.with_name(f"{stable.stem}_A4_booklet.pdf")
+    if not _impose_to_file(repl, versioned, versioned_booklet):
+        return
+    booklet_ok = stable_ok and _mirror_or_warn(repl, versioned_booklet, stable_booklet)
+    repl._console.print(
+        f"[green]Wrote[/green] {stable_booklet if booklet_ok else versioned_booklet}"
+    )
+    repl._console.print(f"  [dim]snapshot: {versioned_booklet.name}[/dim]")
+
+
+def _cmd_render(repl: Repl, args: str) -> None:
+    """Render the loaded draft into a finished A5 PDF."""
+    if not _require_draft(repl) or not _require_title(repl):
+        return None
+    # --impose is pulled off without re-tokenising the rest of the
+    # string — the user's output path may contain runs of whitespace
+    # that split()+' '.join() would silently collapse.
+    impose, remaining = _extract_impose_flag(args)
+    source_dir = (repl._session_root or Path.cwd()) / ".book-gen"
+    if remaining:
+        _run_custom_render(
+            repl, Path(remaining).expanduser(), impose, source_dir
+        )
+    else:
+        _run_versioned_render(repl, impose, source_dir)
     return None
 
 
