@@ -43,6 +43,31 @@ Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
+- **repl**: Kick the agent off after a mid-session /load
+  ([#27](https://github.com/mfozmen/littlepress-ai/pull/27),
+  [`d543b83`](https://github.com/mfozmen/littlepress-ai/commit/d543b837a43ad27d14a83966bacfd779cd079ec0))
+
+Reported by the maintainer: dragging a PDF onto a live session loaded the draft but the agent stayed
+  silent afterwards — the user saw "Loaded 8 pages" and then nothing.
+
+The CLI-arg bootstrap already calls agent.say(greeting) when it's launched with a PDF. That never
+  fired for drag-drop or /load because those happen inside the main read loop, after run()'s "did we
+  start with a draft?" check has already passed.
+
+After a successful load, if a real (non-Null) provider is active, _cmd_load now calls
+  agent.say(_AGENT_GREETING_HINT) — same prompt that kicks read_draft + a friendly "Hi, I see N
+  pages..." opener. Offline provider stays silent as before.
+
+Also updated the three pre-existing drag-drop tests: their "agent wasn't invoked at all" invariant
+  is now "the raw path didn't leak to the agent as chat" — the load itself still triggers a greeting
+  turn, which is the whole point of this fix.
+
+297 tests green; src/repl.py remains at 99% coverage.
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
 - **repl**: Retry with same key on transient errors instead of re-reading
   ([#22](https://github.com/mfozmen/littlepress-ai/pull/22),
   [`86939ac`](https://github.com/mfozmen/littlepress-ai/commit/86939acfe12276581bd8762d81397a4bc6ba5b1e))
@@ -107,6 +132,9 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - **release**: 1.0.2 [skip ci]
   ([`95e2a6c`](https://github.com/mfozmen/littlepress-ai/commit/95e2a6c8c37e9d9f02ae5a52dc0d2a8d47121767))
+
+- **release**: 1.1.0 [skip ci]
+  ([`0b4b9ae`](https://github.com/mfozmen/littlepress-ai/commit/0b4b9aeb8d2ff8108e99beea1d883dfc8aed3732))
 
 - **release**: 1.1.0 [skip ci]
   ([`5facc08`](https://github.com/mfozmen/littlepress-ai/commit/5facc08c8bc2fe5b08a366347b3ca5cd5a367131))
