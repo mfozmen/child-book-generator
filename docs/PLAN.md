@@ -33,6 +33,7 @@ All five PRs from the original plan merged:
 ## Next up
 
 - **More LLM providers — real `chat()` + `turn()` for Gemini / OpenAI / Ollama.** Today only Anthropic has a working implementation; the others are in the picker but fall back to `NullProvider`. Gemini is the priority because its free tier (1.5k req/day, tool-use capable) lets users run Littlepress without a credit card. Ollama enables fully offline use. One PR per provider keeps reviews small.
+- **Drag-and-drop PDF auto-load.** Most terminals (PowerShell, macOS Terminal, GNOME Terminal, etc.) paste the full path when a file is dragged onto the window — quoted on Windows, escaped on Unix. Detect a non-slash input line that resolves to an existing `.pdf` file and route it through `_cmd_load` automatically instead of forwarding to the agent. Reuses the `_unquote` helper from PR #24. Classify the "is this a path?" check conservatively (`.pdf` extension + file exists) so a user chatting "can you open draft.pdf" doesn't silently trigger a load.
 - **Claude-Code-style `/` menu in the REPL.** When the user types `/` alone (or starts typing `/l…` etc.), show the slash commands with one-line descriptions as an auto-completion menu — same UX as Claude Code / Cursor's slash menu. Requires swapping the current `builtins.input` for `prompt_toolkit.PromptSession` with a custom `Completer`. As part of this, surface the commands in a **logical order** rather than registration order:
   1. `/load <pdf>` — ingest a PDF draft
   2. `/pages` — list pages in the draft
