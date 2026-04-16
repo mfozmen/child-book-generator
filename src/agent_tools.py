@@ -335,12 +335,36 @@ def set_cover_tool(get_draft: Callable[[], Draft | None]) -> Tool:
     )
 
 
+_RHYTHM_RULES_FOR_TOOL_DESC = (
+    "Rhythm rules (from select-page-layout skill): avoid the same "
+    "layout three pages in a row; cap image-full at ~30% of inner "
+    "pages so it stays a visual statement; alternate image-top / "
+    "image-bottom to keep cadence varied."
+)
+
+
+def _neighbour_summary(draft: Draft, page_n: int, radius: int = 2) -> str:
+    """Adjacent pages' layouts around ``page_n`` — surfaced in
+    ``choose_layout``'s reply so the agent can sanity-check the
+    rhythm without another ``read_draft`` round-trip."""
+    start = max(1, page_n - radius)
+    end = min(len(draft.pages), page_n + radius)
+    entries = []
+    for i in range(start, end + 1):
+        marker = " (this page)" if i == page_n else ""
+        entries.append(f"p{i}={draft.pages[i - 1].layout}{marker}")
+    return ", ".join(entries)
+
+
 def choose_layout_tool(get_draft: Callable[[], Draft | None]) -> Tool:
     """Tool: set the per-page layout.
 
-    Enforces the first rule of the select-page-layout skill: a page with
-    no image must render as ``text-only``. Agent can pick among the four
-    valid layouts for pages that do have an image.
+    Enforces the first rule of the select-page-layout skill: a page
+    with no image must render as ``text-only``. Agent can pick among
+    the four valid layouts for pages that do have an image. After
+    applying, the reply includes the adjacent pages' layouts so the
+    agent can keep an eye on the rhythm without re-calling
+    ``read_draft``.
     """
 
     def handler(input_: dict) -> str:
@@ -369,14 +393,21 @@ def choose_layout_tool(get_draft: Callable[[], Draft | None]) -> Tool:
             )
         page.layout = layout
         suffix = f" ({reason})" if reason else ""
-        return f"Page {page_n} layout set to {layout}{suffix}."
+        neighbours = _neighbour_summary(draft, page_n)
+        return (
+            f"Page {page_n} layout set to {layout}{suffix}. "
+            f"Surrounding rhythm: {neighbours}."
+        )
 
     return Tool(
         name="choose_layout",
         description=(
             "Set the per-page layout. Valid: image-top, image-bottom, "
             "image-full, text-only. Pages without a drawing must be "
-            "text-only. Include a short reason so the user sees why."
+            "text-only. Include a short reason so the user sees why. "
+            + _RHYTHM_RULES_FOR_TOOL_DESC
+            + " The reply includes the neighbouring pages' layouts so "
+            "you can check the rhythm before picking the next page."
         ),
         input_schema={
             "type": "object",
@@ -509,7 +540,11 @@ def propose_layouts_tool(
             "answering per-page. Use this right after metadata is "
             "settled. For surgical tweaks afterwards, use choose_layout. "
             "Valid layouts: image-top, image-bottom, image-full, "
-            "text-only. Pages without a drawing must be text-only."
+            "text-only. Pages without a drawing must be text-only. "
+            + _RHYTHM_RULES_FOR_TOOL_DESC
+            + " Since you see every page at once here, use that view "
+            "to make the cadence feel varied on paper — not just in the "
+            "summary table."
         ),
         input_schema={
             "type": "object",

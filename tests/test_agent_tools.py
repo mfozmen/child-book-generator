@@ -528,6 +528,146 @@ def test_choose_layout_requires_draft():
     assert "no draft" in result.lower()
 
 
+def test_choose_layout_reply_includes_neighbour_layouts_for_rhythm_check():
+    """After applying a layout the tool tells the agent what the
+    adjacent pages are set to, so the LLM can see the rhythm without
+    re-reading the whole draft. Meets the 'neighbour context' hook
+    that ``.claude/skills/select-page-layout`` assumes.
+
+    Each of the five seeded pages gets a distinct starting layout so
+    the assertions pin each position unambiguously — in particular
+    the post-mutation layout for the page that just changed, which a
+    naive ``"X" in result`` check could miss if a neighbour already
+    carried that value.
+    """
+    img = Path("x.png")
+    draft = Draft(
+        source_pdf=Path("x.pdf"),
+        title="Book",
+        pages=[
+            DraftPage(text="p1", image=img, layout="image-top"),
+            DraftPage(text="p2", image=img, layout="image-bottom"),
+            DraftPage(text="p3", image=img, layout="text-only"),
+            DraftPage(text="p4", image=img, layout="image-full"),
+            DraftPage(text="p5", image=None, layout="text-only"),
+        ],
+    )
+    tool = choose_layout_tool(get_draft=lambda: draft)
+
+    # Flip page 3 from text-only → image-bottom; the post-mutation
+    # neighbour summary must show the NEW layout for page 3, not the
+    # seeded value.
+    result = tool.handler({"page": 3, "layout": "image-bottom", "reason": "vary"})
+
+    # Pin every position in the ±2 window by its ``p<n>=layout``
+    # signature so a refactor of the format can't silently weaken the
+    # assertion (no `"image-top" in result` escape hatch).
+    assert "p1=image-top" in result
+    assert "p2=image-bottom" in result
+    # Page 3 is the one we just mutated — assert the NEW value, not
+    # the seeded "text-only".
+    assert "p3=image-bottom" in result
+    # Page 3 is also marked as the page we just touched.
+    assert "(this page)" in result
+    assert "p4=image-full" in result
+    assert "p5=text-only" in result
+
+
+def test_choose_layout_neighbour_summary_clamps_at_first_page(tmp_path):
+    """Boundary: when the edited page is near the start, the window
+    must clamp to page 1 (``max(1, page_n - radius)``) rather than
+    emitting p0/p-1 entries."""
+    img = Path("x.png")
+    draft = Draft(
+        source_pdf=Path("x.pdf"),
+        title="Book",
+        pages=[
+            DraftPage(text="p1", image=img, layout="image-top"),
+            DraftPage(text="p2", image=img, layout="image-bottom"),
+            DraftPage(text="p3", image=img, layout="text-only"),
+        ],
+    )
+    tool = choose_layout_tool(get_draft=lambda: draft)
+
+    result = tool.handler({"page": 1, "layout": "image-full", "reason": "x"})
+
+    assert "p0" not in result
+    assert "p-1" not in result
+    # p1 (this page), p2, p3 — the window from 1 with radius 2.
+    assert "p1=image-full" in result
+    assert "p2=image-bottom" in result
+    assert "p3=text-only" in result
+
+
+def test_choose_layout_neighbour_summary_clamps_at_last_page(tmp_path):
+    """Boundary: when the edited page is near the end, the window
+    must clamp to the last page (``min(len(pages), page_n + radius)``)
+    rather than walking past the end."""
+    img = Path("x.png")
+    draft = Draft(
+        source_pdf=Path("x.pdf"),
+        title="Book",
+        pages=[
+            DraftPage(text="p1", image=img, layout="image-top"),
+            DraftPage(text="p2", image=img, layout="image-bottom"),
+            DraftPage(text="p3", image=img, layout="text-only"),
+        ],
+    )
+    tool = choose_layout_tool(get_draft=lambda: draft)
+
+    result = tool.handler({"page": 3, "layout": "image-full", "reason": "x"})
+
+    # p1, p2, p3 (this page); no p4/p5.
+    assert "p1=image-top" in result
+    assert "p2=image-bottom" in result
+    assert "p3=image-full" in result
+    assert "p4" not in result
+
+
+def test_choose_layout_neighbour_summary_handles_single_page_draft(tmp_path):
+    """Boundary: a one-page book has no neighbours. The summary must
+    still include the page itself without referencing ghost pages."""
+    img = Path("x.png")
+    draft = Draft(
+        source_pdf=Path("x.pdf"),
+        title="Book",
+        pages=[DraftPage(text="p1", image=img, layout="image-top")],
+    )
+    tool = choose_layout_tool(get_draft=lambda: draft)
+
+    result = tool.handler({"page": 1, "layout": "image-full", "reason": "x"})
+
+    assert "p1=image-full" in result
+    assert "(this page)" in result
+    # No ghost neighbours.
+    assert "p0" not in result
+    assert "p2" not in result
+
+
+def test_choose_layout_description_encodes_rhythm_rules():
+    """Bake the rules from the select-page-layout skill into the tool
+    description so the LLM sees them at decision time. Three-in-a-row
+    avoidance and the image-full cap are the ones most often violated."""
+    tool = choose_layout_tool(get_draft=lambda: None)
+
+    desc = tool.description.lower()
+    assert "three" in desc or "3 in a row" in desc or "same layout" in desc
+    assert "image-full" in desc
+    # 30% cap for image-full is the sharpest single rule to encode.
+    assert "30" in desc or "~30" in desc
+
+
+def test_propose_layouts_description_encodes_rhythm_rules():
+    tool = propose_layouts_tool(
+        get_draft=lambda: None, confirm=lambda _p: True,
+    )
+
+    desc = tool.description.lower()
+    assert "three" in desc or "same layout" in desc or "vary" in desc
+    assert "image-full" in desc
+    assert "30" in desc or "~30" in desc
+
+
 # --- propose_layouts -----------------------------------------------------
 
 
