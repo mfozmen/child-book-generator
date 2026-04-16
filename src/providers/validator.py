@@ -235,13 +235,16 @@ def _check_ollama(_spec: ProviderSpec, _api_key: str) -> None:
             "pip install --force-reinstall littlepress-ai"
         ) from e
 
+    import os
+
+    host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
     try:
         client = ollama.Client(timeout=_VALIDATION_TIMEOUT_SECONDS)
         client.list()
     except Exception as e:  # noqa: BLE001 — surface every failure the same way
         raise TransientValidationError(
-            "Ollama isn't reachable — make sure the daemon is running "
-            f"on http://localhost:11434. ({e})"
+            f"Ollama isn't reachable — make sure the daemon is running "
+            f"on {host}. ({e})"
         ) from e
 
 

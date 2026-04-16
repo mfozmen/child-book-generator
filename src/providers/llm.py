@@ -817,8 +817,6 @@ def _import_ollama():
             "The 'ollama' client is missing. Try: "
             "pip install --force-reinstall littlepress-ai"
         ) from e
-    if ollama is None:
-        raise ImportError("ollama client is not available")
     return ollama
 
 

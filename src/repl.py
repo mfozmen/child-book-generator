@@ -282,6 +282,18 @@ class Repl:
         if spec is None:
             return self._prompt_for_provider()
         if not spec.requires_api_key:
+            # Key-less providers (Ollama) still need a reachability
+            # check on resume — otherwise a dead daemon produces a
+            # ConnectionError on the first agent turn rather than at
+            # startup. Matches the keyed-provider's _validate_silently
+            # → _resume_with_key parity.
+            err = self._validate_silently(spec, "")
+            if err is not None:
+                self._console.print(
+                    f"[yellow]{spec.display_name} isn't reachable:[/yellow] "
+                    f"{err}. Falling back to the provider picker."
+                )
+                return self._prompt_for_provider()
             return spec, None
         return self._resume_with_key(spec)
 
