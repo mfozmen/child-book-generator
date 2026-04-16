@@ -669,8 +669,10 @@ def _cmd_render(repl: Repl, args: str) -> None:
         )
         return None
 
+    import shutil
+
     from src.builder import build_pdf
-    from src.draft import slugify, to_book
+    from src.draft import next_version_number, slugify, to_book
 
     # Pull --impose off without re-tokenising the rest of the string —
     # the user's output path may contain runs of whitespace that
@@ -679,16 +681,32 @@ def _cmd_render(repl: Repl, args: str) -> None:
 
     source_dir = (repl._session_root or Path.cwd()) / ".book-gen"
     if remaining:
+        # User named an explicit path — no versioning. Treat it as the
+        # escape hatch it is.
         out_path = Path(remaining).expanduser()
+        stable_path: Path | None = None
+        versioned_path = out_path
     else:
-        out_path = source_dir / "output" / f"{slugify(repl.draft.title)}.pdf"
+        output_dir = source_dir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        slug = slugify(repl.draft.title)
+        version = next_version_number(output_dir, slug)
+        versioned_path = output_dir / f"{slug}-v{version}.pdf"
+        stable_path = output_dir / f"{slug}.pdf"
+        out_path = stable_path
     try:
         book = to_book(repl.draft, source_dir)
-        build_pdf(book, out_path)
+        # Render to the versioned path — it's the canonical artefact for
+        # this render. The stable path is just a pointer at the latest.
+        build_pdf(book, versioned_path)
+        if stable_path is not None:
+            shutil.copyfile(versioned_path, stable_path)
     except Exception as e:
         repl._console.print(f"[red]Render failed:[/red] {e}")
         return None
     repl._console.print(f"[green]Wrote[/green] {out_path}")
+    if stable_path is not None:
+        repl._console.print(f"  [dim]snapshot: {versioned_path.name}[/dim]")
 
     if impose:
         # A5 is already on disk; the booklet is a derived artefact. If it
@@ -696,13 +714,26 @@ def _cmd_render(repl: Repl, args: str) -> None:
         # something to print.
         from src import imposition
 
-        booklet = out_path.with_name(f"{out_path.stem}_A4_booklet.pdf")
+        versioned_booklet = versioned_path.with_name(
+            f"{versioned_path.stem}_A4_booklet.pdf"
+        )
+        stable_booklet = (
+            stable_path.with_name(f"{stable_path.stem}_A4_booklet.pdf")
+            if stable_path is not None
+            else versioned_booklet
+        )
         try:
-            imposition.impose_a5_to_a4(out_path, booklet)
+            imposition.impose_a5_to_a4(versioned_path, versioned_booklet)
+            if stable_path is not None:
+                shutil.copyfile(versioned_booklet, stable_booklet)
         except Exception as e:
             repl._console.print(f"[red]Booklet imposition failed:[/red] {e}")
             return None
-        repl._console.print(f"[green]Wrote[/green] {booklet}")
+        repl._console.print(f"[green]Wrote[/green] {stable_booklet}")
+        if stable_path is not None:
+            repl._console.print(
+                f"  [dim]snapshot: {versioned_booklet.name}[/dim]"
+            )
     return None
 
 

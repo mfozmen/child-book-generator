@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -22,7 +23,7 @@ from typing import Callable
 
 from src.agent import Tool
 from src.builder import build_pdf
-from src.draft import Draft, slugify, to_book
+from src.draft import Draft, next_version_number, slugify, to_book
 from src.imposition import impose_a5_to_a4
 from src.schema import VALID_LAYOUTS
 
@@ -404,16 +405,29 @@ def render_book_tool(
 
         impose = bool(input_.get("impose", False))
         source_dir = Path(get_session_root()) / ".book-gen"
-        out_path = (source_dir / "output" / f"{slugify(draft.title)}.pdf").resolve()
+        output_dir = source_dir / "output"
+        slug = slugify(draft.title)
+        # Claim the next -vN slot *before* building so two concurrent
+        # renders don't fight over the same number. Also: next_version
+        # needs to read an existing directory, so create it up front.
+        output_dir.mkdir(parents=True, exist_ok=True)
+        version = next_version_number(output_dir, slug)
+        versioned_a5 = (output_dir / f"{slug}-v{version}.pdf").resolve()
+        stable_a5 = (output_dir / f"{slug}.pdf").resolve()
 
         try:
             book = to_book(draft, source_dir)
-            build_pdf(book, out_path)
+            # Render to the versioned filename — that's the canonical
+            # artefact for this render. The stable name is a pointer.
+            build_pdf(book, versioned_a5)
+            shutil.copyfile(versioned_a5, stable_a5)
         except Exception as e:
             return f"Render failed: {e}"
 
         try:
-            opener(out_path)
+            # Open the stable name — that's what the user thinks of as
+            # "the book"; versioned copies are the archive.
+            opener(stable_a5)
             opened = True
         except Exception:
             # Viewer can't launch (headless env, OS permission) —
@@ -421,26 +435,36 @@ def render_book_tool(
             opened = False
 
         if opened:
-            message = f"Wrote A5 book to {out_path} and opened it in your viewer."
+            message = (
+                f"Wrote A5 book to {stable_a5} (also kept snapshot "
+                f"{versioned_a5.name}) and opened it in your viewer."
+            )
         else:
             message = (
-                f"Wrote A5 book to {out_path}. Open it manually — couldn't "
+                f"Wrote A5 book to {stable_a5} (also kept snapshot "
+                f"{versioned_a5.name}). Open it manually — couldn't "
                 "launch a PDF viewer here."
             )
 
         if impose:
-            booklet = out_path.with_name(f"{out_path.stem}_A4_booklet.pdf")
+            versioned_booklet = versioned_a5.with_name(
+                f"{versioned_a5.stem}_A4_booklet.pdf"
+            )
+            stable_booklet = stable_a5.with_name(
+                f"{stable_a5.stem}_A4_booklet.pdf"
+            )
             try:
-                impose_a5_to_a4(out_path, booklet)
+                impose_a5_to_a4(versioned_a5, versioned_booklet)
+                shutil.copyfile(versioned_booklet, stable_booklet)
             except Exception as e:
                 return (
                     f"{message} Booklet imposition failed: {e}. The A5 "
                     "stayed on disk — the user can still print it."
                 )
             message += (
-                f" Also wrote A4 booklet to {booklet}. Tell the user to "
-                "print double-sided (flipped on short edge), fold, and "
-                "staple."
+                f" Also wrote A4 booklet to {stable_booklet} (snapshot "
+                f"{versioned_booklet.name}). Tell the user to print "
+                "double-sided (flipped on short edge), fold, and staple."
             )
 
         return message

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from src.draft import Draft, DraftPage, from_pdf, slugify, to_book
+from src.draft import Draft, DraftPage, from_pdf, next_version_number, slugify, to_book
 
 
 def _make_png(path, color):
@@ -163,3 +163,53 @@ def test_slugify_falls_back_to_book_when_only_symbols():
 def test_slugify_lowercases_and_ascii_folds_turkish():
     assert slugify("Küçük Ejderha") == "kucuk_ejderha"
     assert slugify("ÖZNUR") == "oznur"
+
+
+# --- next_version_number -------------------------------------------------
+
+
+def test_next_version_returns_one_for_fresh_output_dir(tmp_path):
+    """No previous renders → first version is v1."""
+    assert next_version_number(tmp_path, "book") == 1
+
+
+def test_next_version_returns_one_for_missing_output_dir(tmp_path):
+    """Brand-new session has no output/ yet; helper handles it."""
+    missing = tmp_path / "does" / "not" / "exist"
+    assert next_version_number(missing, "book") == 1
+
+
+def test_next_version_bumps_past_highest_existing(tmp_path):
+    (tmp_path / "book-v1.pdf").write_bytes(b"a")
+    (tmp_path / "book-v2.pdf").write_bytes(b"b")
+    (tmp_path / "book-v5.pdf").write_bytes(b"e")
+
+    # Gaps are respected — the version space is monotonic, never reused.
+    assert next_version_number(tmp_path, "book") == 6
+
+
+def test_next_version_counts_booklet_snapshots_too(tmp_path):
+    """A5 and its booklet share a version number. If a booklet
+    snapshot exists at v3 but no A5 snapshot, the next number still
+    skips to v4 so the pair stays aligned."""
+    (tmp_path / "book-v3_A4_booklet.pdf").write_bytes(b"b")
+
+    assert next_version_number(tmp_path, "book") == 4
+
+
+def test_next_version_ignores_other_slugs(tmp_path):
+    (tmp_path / "other-v7.pdf").write_bytes(b"x")
+    (tmp_path / "book-v1.pdf").write_bytes(b"y")
+
+    # An unrelated slug's versions don't pollute this slug's counter.
+    assert next_version_number(tmp_path, "book") == 2
+
+
+def test_next_version_ignores_stable_copies_and_non_versioned_files(tmp_path):
+    """A stable ``<slug>.pdf`` alone (from the pre-versioning era or
+    after the user deleted the snapshots) must not be mistaken for a
+    versioned file — otherwise the counter breaks on first render."""
+    (tmp_path / "book.pdf").write_bytes(b"a")
+    (tmp_path / "readme.md").write_text("x")
+
+    assert next_version_number(tmp_path, "book") == 1

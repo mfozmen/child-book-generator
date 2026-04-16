@@ -12,6 +12,7 @@ ingestion path just copies what ``src/pdf_ingest`` returned.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -81,6 +82,24 @@ def slugify(text: str) -> str:
     return (
         "".join(ch for ch in cleaned if ch.isalnum() or ch in "_-").lower() or "book"
     )
+
+
+def next_version_number(output_dir: Path, slug: str) -> int:
+    """Return the next ``-vN`` number for ``slug`` inside ``output_dir``.
+
+    Scans both ``<slug>-vN.pdf`` (A5) and ``<slug>-vN_A4_booklet.pdf``
+    (booklet) — they share a version space so a render and its booklet
+    always end up tagged with the same number.
+    """
+    if not output_dir.exists():
+        return 1
+    pattern = re.compile(rf"^{re.escape(slug)}-v(\d+)(?:_A4_booklet)?\.pdf$")
+    nums: set[int] = set()
+    for p in output_dir.iterdir():
+        m = pattern.match(p.name)
+        if m:
+            nums.add(int(m.group(1)))
+    return (max(nums) + 1) if nums else 1
 
 
 def to_book(draft: Draft, source_dir: Path) -> Book:

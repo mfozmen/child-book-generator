@@ -86,11 +86,10 @@ def test_render_writes_pdf_under_session_output_dir(tmp_path):
 
     output_dir = tmp_path / ".book-gen" / "output"
     assert output_dir.is_dir()
-    pdfs = list(output_dir.glob("*.pdf"))
-    assert len(pdfs) == 1
-    assert pdfs[0].stat().st_size > 0
+    stable = output_dir / "my_book.pdf"
+    assert stable.is_file() and stable.stat().st_size > 0
     # Output location is surfaced to the user so they can find it.
-    assert str(pdfs[0].name) in buf.getvalue()
+    assert stable.name in buf.getvalue()
 
 
 def test_render_slugifies_title_into_filename(tmp_path):
@@ -102,10 +101,12 @@ def test_render_slugifies_title_into_filename(tmp_path):
     )
     repl.run()
 
-    pdfs = list((tmp_path / ".book-gen" / "output").glob("*.pdf"))
-    assert len(pdfs) == 1
+    output_dir = tmp_path / ".book-gen" / "output"
+    stable = output_dir / "kucuk_ejderha.pdf"
+    versioned = output_dir / "kucuk_ejderha-v1.pdf"
     # Turkish characters ascii-folded, spaces become underscores, all lowercase.
-    assert pdfs[0].stem == "kucuk_ejderha"
+    assert stable.is_file()
+    assert versioned.is_file()
 
 
 def test_render_accepts_custom_output_path(tmp_path):
@@ -240,7 +241,11 @@ def test_render_impose_failure_is_reported(tmp_path, monkeypatch):
     assert "imposition broke" in buf.getvalue()
 
 
-def test_render_rerenders_cleanly(tmp_path):
+def test_render_rerenders_keep_previous_versioned_copy(tmp_path):
+    """Each default-path ``/render`` keeps a ``<slug>-vN.pdf`` snapshot
+    alongside the stable ``<slug>.pdf``. Rendering the same draft twice
+    used to overwrite the single file in place, destroying the earlier
+    PDF; now the first render's versioned copy survives."""
     pdf = _write_pdf(tmp_path, [{"text": "first"}])
 
     repl, _ = _make(
@@ -249,6 +254,49 @@ def test_render_rerenders_cleanly(tmp_path):
     )
     repl.run()
 
-    # Two renders → one file (same slug). No crash.
-    pdfs = list((tmp_path / ".book-gen" / "output").glob("*.pdf"))
-    assert len(pdfs) == 1
+    output_dir = tmp_path / ".book-gen" / "output"
+    stable = output_dir / "book.pdf"
+    v1 = output_dir / "book-v1.pdf"
+    v2 = output_dir / "book-v2.pdf"
+    assert stable.is_file()
+    assert v1.is_file(), "first render's snapshot must survive the second render"
+    assert v2.is_file(), "second render must produce its own snapshot"
+
+
+def test_render_writes_versioned_copy_alongside_stable(tmp_path):
+    """A single ``/render`` lands both the stable ``<slug>.pdf`` and a
+    ``<slug>-v1.pdf`` snapshot so nothing is lost if the user renders
+    again later."""
+    pdf = _write_pdf(tmp_path, [{"text": "hi"}])
+
+    repl, buf = _make(
+        tmp_path,
+        [f"/load {pdf}", "/title Book", "/render", "/exit"],
+    )
+    repl.run()
+
+    output_dir = tmp_path / ".book-gen" / "output"
+    stable = output_dir / "book.pdf"
+    v1 = output_dir / "book-v1.pdf"
+    assert stable.is_file()
+    assert v1.is_file()
+    # The snapshot filename surfaces so the user knows a copy was kept.
+    assert "book-v1" in buf.getvalue()
+
+
+def test_render_custom_path_does_not_version(tmp_path):
+    """An explicit ``/render <path>`` writes exactly to <path> — the
+    user asked for a specific location, don't sneak a versioned copy
+    in next to it."""
+    pdf = _write_pdf(tmp_path, [{"text": "hi"}])
+    out = tmp_path / "custom" / "book.pdf"
+
+    repl, _ = _make(
+        tmp_path,
+        [f"/load {pdf}", "/title Book", f"/render {out}", "/exit"],
+    )
+    repl.run()
+
+    assert out.is_file()
+    # No snapshot next to the user-chosen path.
+    assert not (out.parent / "book-v1.pdf").is_file()
