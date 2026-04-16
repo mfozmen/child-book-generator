@@ -132,6 +132,7 @@ def _to_dict(draft: Draft) -> dict:
             str(_resolve(draft.cover_image)) if draft.cover_image else None
         ),
         "cover_subtitle": draft.cover_subtitle,
+        "cover_style": draft.cover_style,
         "back_cover_text": draft.back_cover_text,
         "pages": [
             {
@@ -160,6 +161,7 @@ def _from_dict(data: dict) -> Draft:
         author=data.get("author", ""),
         cover_image=Path(cover) if cover else None,
         cover_subtitle=data.get("cover_subtitle", ""),
+        cover_style=data.get("cover_style", "full-bleed"),
         back_cover_text=data.get("back_cover_text", ""),
         pages=pages,
     )

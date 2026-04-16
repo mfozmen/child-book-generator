@@ -24,7 +24,7 @@ from src.agent import Tool
 from src.builder import build_pdf
 from src.draft import Draft, atomic_copy, next_version_number, slugify, to_book
 from src.imposition import impose_a5_to_a4
-from src.schema import VALID_LAYOUTS
+from src.schema import VALID_COVER_STYLES, VALID_LAYOUTS
 
 
 def open_in_default_viewer(path: Path) -> None:
@@ -278,7 +278,8 @@ def set_metadata_tool(get_draft: Callable[[], Draft | None]) -> Tool:
 
 
 def set_cover_tool(get_draft: Callable[[], Draft | None]) -> Tool:
-    """Tool: use one of the page drawings as the cover image."""
+    """Tool: pick a page's drawing as the cover image and, optionally,
+    the cover style template."""
 
     def handler(input_: dict) -> str:
         draft = get_draft()
@@ -293,19 +294,41 @@ def set_cover_tool(get_draft: Callable[[], Draft | None]) -> Tool:
         page = draft.pages[page_n - 1]
         if page.image is None:
             return f"Page {page_n} has no drawing — can't use it as the cover."
+        # Validate style before mutating anything — a bad value
+        # shouldn't half-commit the cover.
+        style = input_.get("style")
+        if style is not None and style not in VALID_COVER_STYLES:
+            return (
+                f"Invalid style '{style}'. Valid styles: "
+                f"{sorted(VALID_COVER_STYLES)}."
+            )
         draft.cover_image = page.image
-        return f"Cover set to page {page_n}'s drawing ({page.image})."
+        if style is not None:
+            draft.cover_style = style
+        msg = f"Cover set to page {page_n}'s drawing ({page.image})"
+        if style is not None:
+            msg += f" with '{style}' layout"
+        return msg + "."
 
     return Tool(
         name="set_cover",
         description=(
-            "Use one of the draft's page drawings as the book's cover image. "
-            "The user should have already picked which page — this tool "
-            "doesn't ask."
+            "Pick the book's cover. ``page`` names which page's drawing "
+            "to use as the cover image. ``style`` optionally picks the "
+            "cover template: 'full-bleed' (drawing covers the page, "
+            "title on a translucent band) or 'framed' (title at the "
+            "top, letterboxed drawing below). Defaults to 'full-bleed' "
+            "when omitted."
         ),
         input_schema={
             "type": "object",
-            "properties": {"page": {"type": "integer", "minimum": 1}},
+            "properties": {
+                "page": {"type": "integer", "minimum": 1},
+                "style": {
+                    "type": "string",
+                    "enum": sorted(VALID_COVER_STYLES),
+                },
+            },
             "required": ["page"],
         },
         handler=handler,
