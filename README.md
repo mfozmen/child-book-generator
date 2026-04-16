@@ -95,6 +95,8 @@ Today's slash commands (still available as escape hatches):
 
 On first launch the shell asks which provider to use — Claude, GPT, Gemini, or Ollama. Picking a cloud provider also prompts for its API key, which is read silently (nothing echoed to the terminal) and saved to your OS keychain so you only have to paste it once. Ollama is keyless (runs on your own machine). `/logout` forgets the saved key and drops you to offline mode.
 
+**Drag-and-drop**: you can drag a PDF file onto the terminal window — most shells paste the full path. Press Enter and Littlepress ingests it as if you'd typed `/load <path>`.
+
 ## Usage — direct renderer (still works)
 
 If you already have a `book.json`, you can skip the REPL:

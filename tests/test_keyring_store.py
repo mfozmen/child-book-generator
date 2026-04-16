@@ -170,6 +170,36 @@ def test_delete_also_clears_legacy_entries(fake):
     assert fake.get_password("child-book-generator", "anthropic") is None
 
 
+def test_legacy_get_failure_is_skipped_during_migration(monkeypatch):
+    """If reading the legacy service raises, the migration loop moves
+    on silently rather than crashing load_key — the current service
+    is still returned (or None if empty)."""
+
+    class FlakyRead:
+        class errors:
+            class PasswordDeleteError(Exception):
+                pass
+
+        def __init__(self):
+            self.store: dict = {}
+
+        def get_password(self, service, _username):
+            if service == "child-book-generator":
+                raise RuntimeError("backend flaky on legacy read")
+            return self.store.get(service)
+
+        def set_password(self, service, _username, value):
+            self.store[service] = value
+
+        def delete_password(self, *_a, **_kw):
+            pass
+
+    monkeypatch.setattr(keyring_store, "_keyring", FlakyRead())
+
+    # Must not raise; returns None (nothing under current, legacy errored).
+    assert keyring_store.load_key("anthropic") is None
+
+
 def test_migration_tolerates_write_failure(monkeypatch):
     """If moving the legacy entry to the new service fails mid-way,
     load_key must still return the value so the current launch works."""

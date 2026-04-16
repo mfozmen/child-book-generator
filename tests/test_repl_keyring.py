@@ -189,6 +189,49 @@ def test_logout_on_offline_provider_is_a_gentle_noop(tmp_path):
     assert repl.provider.name == "none"
 
 
+def test_guidance_survives_webbrowser_exception(tmp_path, monkeypatch):
+    """Some locked-down environments make webbrowser.open raise
+    (NotImplementedError, permission error). Guidance must still print
+    the URL so the user can copy it manually."""
+    import webbrowser
+
+    def boom(*_a, **_kw):
+        raise PermissionError("no browser")
+
+    monkeypatch.setattr(webbrowser, "open", boom)
+
+    repl, buf = _make(
+        tmp_path,
+        ["1"],  # pick Anthropic, EOF on the key prompt
+        secrets=[],
+        validate=lambda _s, _k: None,
+    )
+    repl.run()
+
+    out = buf.getvalue()
+    # URL still surfaced; no "opened the page" claim.
+    assert "console.anthropic.com" in out
+    assert "opened the page" not in out.lower()
+
+
+def test_resume_skips_silent_validation_when_no_validator(tmp_path):
+    """If the REPL is wired without a validator callback, silent
+    resume should still accept the saved key without calling anything."""
+    session.save(tmp_path, session.Session(provider="anthropic"))
+    keyring_store.save_key("anthropic", "sk-ant-saved")
+
+    repl, _ = _make(
+        tmp_path,
+        ["/exit"],
+        secrets=[],
+        validate=None,
+    )
+    repl.run()
+
+    assert repl.provider.name == "anthropic"
+    assert repl.api_key == "sk-ant-saved"
+
+
 def test_guidance_omits_browser_line_on_headless(tmp_path, monkeypatch):
     """webbrowser.open returns False on headless Linux — the REPL must
     not lie about opening a browser in that case."""

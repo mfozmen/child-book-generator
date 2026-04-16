@@ -61,6 +61,25 @@ def _unquote(s: str) -> str:
     return s
 
 
+def _looks_like_pdf_path(line: str) -> bool:
+    """True if ``line`` resolves to an existing ``.pdf`` file.
+
+    Deliberately conservative: both the extension check AND the file-
+    exists check must pass. A chat mention like "open draft.pdf"
+    passes the extension check but shouldn't be auto-loaded; gating
+    on ``is_file()`` keeps that case on the chat path.
+    """
+    cleaned = _unquote(line.strip())
+    if not cleaned.lower().endswith(".pdf"):
+        return False
+    try:
+        return Path(cleaned).expanduser().is_file()
+    except OSError:
+        # Weird / malformed paths (Windows device names, encoding) —
+        # treat as "not a path", let chat handle it.
+        return False
+
+
 _AGENT_GREETING_HINT = (
     "The user just gave you a PDF draft. Call read_draft to see what's in "
     "it, greet them in the same language they will use (they haven't "
@@ -462,6 +481,19 @@ class Repl:
             )
 
     def _dispatch(self, line: str) -> int | None:
+        # Drag-and-drop convenience: terminals paste a file path when
+        # the user drags a file onto the window. If the pasted line
+        # resolves to an existing PDF, shortcut to /load instead of
+        # forwarding to slash dispatch or the agent.
+        #
+        # This check MUST run before the ``startswith("/")`` slash
+        # check: on Linux / macOS the dragged path is an absolute
+        # path like ``/home/user/draft.pdf`` — a naive slash-first
+        # dispatcher parses it as an unknown slash command. The
+        # classifier is conservative (.pdf extension AND file exists),
+        # so real slash commands like ``/help`` don't match.
+        if _looks_like_pdf_path(line):
+            return _cmd_load(self, line)
         if line.startswith("/"):
             return self._dispatch_slash(line)
         return self._dispatch_chat(line)

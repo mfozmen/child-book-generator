@@ -207,6 +207,39 @@ def test_agent_remembers_previous_turns():
     assert contents[1]["role"] == "assistant"
 
 
+def test_assistant_response_with_text_and_tool_use_mixed():
+    """Claude can emit text *and* a tool_use in the same response
+    ("let me check..." → call tool). Both must be handled: the text
+    block prints, the tool_use fires, and non-tool_use blocks are
+    skipped when building tool_results."""
+    results = []
+
+    def handler(_input):
+        results.append("ran")
+        return "ok"
+
+    tool = Tool(
+        name="collect",
+        description="",
+        input_schema={"type": "object", "properties": {}},
+        handler=handler,
+    )
+    mixed = AgentResponse(
+        content=[
+            {"type": "text", "text": "let me check"},
+            {"type": "tool_use", "id": "a", "name": "collect", "input": {}},
+        ],
+        stop_reason="tool_use",
+    )
+    llm = _ScriptedLLM([mixed, _text("done")])
+    agent, buf = _make_agent(llm, tools=[tool])
+
+    agent.say("do it")
+
+    assert results == ["ran"]
+    assert "let me check" in buf.getvalue()
+
+
 def test_multiple_tool_calls_in_one_turn_all_executed():
     """Some LLM responses contain several tool_use blocks at once."""
     results = []
