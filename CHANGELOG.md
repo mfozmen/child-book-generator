@@ -5,6 +5,32 @@
 
 ### Bug Fixes
 
+- **builder**: Stop inserting surprise blank pages in rendered books
+  ([#28](https://github.com/mfozmen/littlepress-ai/pull/28),
+  [`4ae2dfc`](https://github.com/mfozmen/littlepress-ai/commit/4ae2dfcd8ade9b520757d3b5f000f87a8c3d25da))
+
+The A5 PDF used to carry two blank pages the user never asked for:
+
+1. A blank right after the cover — the "inside-front cover left blank" bookbinding convention. In a
+  short children's book this reads as "why is there an empty page?" (the maintainer flagged it on
+  the first end-to-end test). 2. A conditional blank before the back cover when the overall page
+  count was odd — there to keep booklet pagination even.
+
+Neither earns its keep. imposition.impose_a5_to_a4 pads to multiples of 4 on its own when the user
+  actually asks for a booklet, so the conditional pad was redundant for booklet output and wrong for
+  plain A5 where nobody needs it. The inside-front blank is a bookbinding convention that doesn't
+  match the "short family book" product.
+
+New contract, pinned by four regression tests in test_builder.py: ``cover + N story pages + back
+  cover`` — nothing else. 1-page book → 3 PDF pages. 5-page book → 7 PDF pages. 8-page book → 10.
+
+Also drop the now-unused draw_blank helper from src/pages.py — no production or test path references
+  it anymore.
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
 - **repl**: Accept /exit in the provider picker
   ([#23](https://github.com/mfozmen/littlepress-ai/pull/23),
   [`2478190`](https://github.com/mfozmen/littlepress-ai/commit/24781907d09377cc3be64d567423357d52ebe393))
@@ -132,6 +158,9 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - **release**: 1.0.2 [skip ci]
   ([`95e2a6c`](https://github.com/mfozmen/littlepress-ai/commit/95e2a6c8c37e9d9f02ae5a52dc0d2a8d47121767))
+
+- **release**: 1.1.0 [skip ci]
+  ([`b991923`](https://github.com/mfozmen/littlepress-ai/commit/b991923bcf065147a1d0e0cc3bee04b5b1fc69b9))
 
 - **release**: 1.1.0 [skip ci]
   ([`270c679`](https://github.com/mfozmen/littlepress-ai/commit/270c6794527e8d284ae8c1d339e614f43090bb54))
