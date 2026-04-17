@@ -1,8 +1,33 @@
 name: Release
 
+# Manual-only. The original push-on-main trigger caused two cycles of
+# bad auto-bumps: the push=false workaround skipped VCS release
+# creation entirely (so tags and GitHub Releases never appeared), and
+# an old `BREAKING CHANGE:` footer in the legacy-removal commit kept
+# forcing every subsequent bump to v2.0.0. Switching to
+# workflow_dispatch puts the version call back in a human's hands —
+# trigger with `gh workflow run release.yml -f force=minor` (or major,
+# patch, or empty for PSR's own calculation) from the Actions UI or
+# the gh CLI when we actually want to cut a release.
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: >-
+          Force the bump level regardless of the commit history.
+          Defaults to `minor` so the first dispatch in this repo
+          doesn't re-trigger the stale BREAKING CHANGE footer that
+          came with PR #38 (legacy build.py removal) and would
+          otherwise push another major bump. Override only when
+          you've intentionally staged a different level.
+        required: false
+        default: minor
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - prerelease
 
 concurrency:
   group: release-${{ github.ref }}
@@ -27,48 +52,18 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Python Semantic Release (bump + tag, no push)
+      - name: Python Semantic Release
         id: release
         uses: python-semantic-release/python-semantic-release@v9.15.2
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          # Push=false so PSR writes the version bump commit + tag
-          # locally but doesn't push. We push in the next step with
-          # a rebase-retry so a non-fast-forward from another push
-          # arriving during this run doesn't lose the bump.
-          push: "false"
-
-      - name: Push release commit with rebase-retry
-        if: steps.release.outputs.released == 'true'
-        # When another push lands on main while PSR is running (e.g.
-        # a fast second merge), the naive push rejects as non-fast-
-        # forward and the whole bump is wasted. Rebase our release
-        # commit onto the fresh tip and retry a few times.
-        #
-        # Tag safety: PSR creates the release tag on our local commit.
-        # After a rebase, that commit's SHA changes and the tag points
-        # at an orphaned (unreachable) commit; `--follow-tags` then
-        # silently skips pushing it and the release tag never reaches
-        # the remote. Re-point the tag at HEAD before each push so
-        # `--follow-tags` has a reachable target.
-        run: |
-          set -e
-          TAG="$(git tag --points-at HEAD | head -n1)"
-          echo "Pushing release commit (tag: ${TAG:-<none>})"
-          for attempt in 1 2 3 4 5; do
-            git pull --rebase origin main
-            if [ -n "$TAG" ]; then
-              git tag -f "$TAG" HEAD
-            fi
-            if git push origin main --follow-tags; then
-              echo "Pushed release on attempt $attempt."
-              exit 0
-            fi
-            echo "Push attempt $attempt failed; retrying..."
-            sleep 3
-          done
-          echo "Release push failed after 5 attempts."
-          exit 1
+          # Let PSR push the bump commit, the tag, and cut the GitHub
+          # Release in one go — no manual push step, no rebase-retry
+          # dance. ``concurrency`` above already serialises release
+          # runs, so the race the retry loop tried to defend against
+          # can't happen.
+          push: "true"
+          force: ${{ inputs.force }}
 
       # No artifacts yet — PSR just bumps the version, writes
       # CHANGELOG.md, tags, and cuts a GitHub Release with the

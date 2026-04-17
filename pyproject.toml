@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "littlepress-ai"
-version = "2.0.0"
+version = "1.0.1"
 description = "Littlepress turns a child's picture-book draft PDF into a print-ready A5 book and A4 booklet. An AI agent walks the conversation; the child's voice is preserved end-to-end."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -96,13 +96,15 @@ version_toml = ["pyproject.toml:project.version"]
 branch = "main"
 commit_message = "chore(release): {version} [skip ci]"
 changelog_file = "CHANGELOG.md"
-# No build, no artifact upload until PyPI publishing lands. PSR still bumps
-# the version, writes CHANGELOG.md, tags, and cuts a GitHub Release with
-# the auto-generated notes. When we're ready to publish, flip these flags
-# and add a build_command that runs inside the PSR container's venv.
-build_command = ""
-upload_to_pypi = false
-upload_to_release = false
+# No build or artifact upload yet. PSR's defaults already match what
+# we want: bump the version, write CHANGELOG.md, tag, and cut a
+# GitHub Release with auto-generated notes — no build artifacts, no
+# PyPI push. When we're ready to publish, add a ``build_command`` +
+# the publish-action step in release.yml. The legacy PSR v7/v8 keys
+# (``build_command``, ``upload_to_pypi``, ``upload_to_release``) were
+# removed — v9 silently ignores the latter two under this section,
+# and an explicit empty ``build_command`` is indistinguishable from
+# the default. Leaving them in invited config drift.
 
 [tool.semantic_release.commit_parser_options]
 allowed_tags = ["feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"]
