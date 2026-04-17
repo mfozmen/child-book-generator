@@ -1,6 +1,146 @@
 # CHANGELOG
 
 
+## v1.1.1 (2026-04-17)
+
+### Bug Fixes
+
+- **agent**: Flag image-only PDFs and surface AI cover option
+  ([#44](https://github.com/mfozmen/littlepress-ai/pull/44),
+  [`ae77a81`](https://github.com/mfozmen/littlepress-ai/commit/ae77a8153485c1564ceaec33d383cd6c036c217c))
+
+* fix(agent): flag image-only PDFs and surface AI cover option
+
+Two agent-surface gaps the first real end-to-end test (Yavru Dinozor, a Samsung Notes PDF export)
+  exposed. The product code for both was already present; the missing piece was information reaching
+  the LLM correctly, so most of the diff is test coverage that pins the new contract.
+
+### Image-only pages
+
+Samsung Notes (and phone-scan exports generally) render each page as a single PNG screenshot. Text
+  glyphs live as pixels inside the image; the PDF has no ``/Font`` resource on any page.
+  ``pypdf.extract_text`` correctly returns empty, and ``read_draft`` duly showed every page as
+  ``Page N (drawing, ...):`` with a trailing blank. The LLM reading that summary guessed wrong —
+  "hepsinde drawing var, text yok; belki resim kitabı mı?" — and started asking the user whether
+  they wanted text at all, when the child visibly had text on every page.
+
+Fix: ``read_draft`` now decorates each image-only page with an
+
+inline ``— image-only, no extractable text`` marker and emits a single summary NOTE at the end
+  naming the pages. The NOTE spells out the preserve-child-voice invariant ("Do not invent,
+  paraphrase, or 'guess' the child's words") and names the forward path ("ask the user to transcribe
+  each page's text verbatim"). One warning per draft, not one per page, so the signal doesn't dilute
+  on a large book.
+
+### AI cover discoverability on non-OpenAI providers
+
+``generate_cover_illustration`` is registered only when the active provider is OpenAI (PR #41).
+  Claude / Gemini / Ollama users never see the tool, so cover-picking silently becomes a "pick one
+  of your drawings or go with poster" choice — the AI option looks like it doesn't exist. Added a
+  one-line hint to ``set_cover``'s description (every provider's LLM reads it) pointing the user at
+  ``/model`` when they want an AI-generated cover.
+
+### Tests
+
+Seven new tests in ``test_agent_tools.py``:
+
+- image-only page flag + preserve-child-voice instruction present - flag absent for pages that carry
+  extracted text (no false positive) - flag absent for text-only pages without an image (no
+  contradiction with "no drawing") - mixed draft: only the image-only pages appear in the summary
+  note, the text-carrying pages stay untouched - explanatory NOTE fires exactly once per draft, not
+  per page - NOTE wording explicitly mentions "transcribe" and child-voice - ``set_cover``
+  description includes both an "AI / generate" reference and an "OpenAI / /model" switch hint
+
+Preserve-child-voice suite stays passing: no tool rewrites page text; the change only affects how
+  ``read_draft`` *reports* existing state to the agent.
+
+### PLAN
+
+Moved OCR from deferred → Next-up (real user need), added a ``read_draft`` hint item (now
+  implemented, so this PR removes it again below), a ``generate_cover_illustration`` discoverability
+  item, and a SonarCloud backlog item (12 open issues: 10 × cognitive complexity + 1 × unused param
+  + 1 × f-string + 1 × redundant exception). Dedicated refactor PR follows.
+
+* fix(agent): address PR review — echo child-voice guard, compact flag
+
+Four findings from the PR review:
+
+1. Main finding — ``set_cover``'s new AI-cover hint didn't echo the PRESERVE-CHILD-VOICE guard that
+  PR #41 put into ``generate_cover_illustration``'s description. On Claude / Gemini / Ollama
+  sessions the AI tool's description is invisible, so ``set_cover`` is the *only* place those agents
+  read about AI cover generation. Without the echo, a non-OpenAI agent following the ``/model`` hint
+  would show up in OpenAI with a prompt that paraphrases the child's page text — exactly the
+  scenario PR #41's final review round was meant to prevent. Added a one-sentence echo
+  ("PRESERVE-CHILD-VOICE applies to the AI cover prompt too: describe the cover scene in your own
+  words … do not quote or paraphrase the child's page text into the prompt") and a paired test.
+
+2. Sub-threshold — ``read_draft``'s docstring and LLM-facing ``description`` still promised only
+  "text, drawing, layout" and didn't mention the new image-only flag / NOTE contract. Updated both
+  so the LLM trusts the marker when it appears.
+
+3. Sub-threshold — consistency inside this same PR. The test
+  ``test_read_draft_note_only_fires_once_not_per_page`` explicitly pinned "one English-sentence
+  warning per draft, not per page," but the per-page line still repeated "— image-only, no
+  extractable text" for every flagged page — undermining the very single-emit rule the test was
+  protecting. Replaced the per-page English phrase with a compact ``[image-only]`` tag; the full
+  preserve-child-voice explanation stays in the single summary NOTE. New test pins the compact-tag /
+  single-NOTE contract together.
+
+4. Sub-threshold — PLAN.md's SonarCloud line numbers would drift with every merge. Replaced them
+  with stable file + symbol pairs ("``src/agent_tools.py`` — in ``set_cover_tool``'s poster branch"
+  rather than ":322") and a note to re-run the API query when starting the cleanup PR.
+
+Tests: three new pins on top of the seven from the previous commit
+
+in this PR, all four of the review findings now regression-guarded. 472 tests green.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+### Continuous Integration
+
+- Re-enable auto release on push to main after v1.1.0 reset
+  ([#43](https://github.com/mfozmen/littlepress-ai/pull/43),
+  [`29132a7`](https://github.com/mfozmen/littlepress-ai/commit/29132a794ed97ceb8e4ab52eb1efdeec2254815f))
+
+* ci: re-enable push-on-main release trigger alongside workflow_dispatch
+
+With v1.1.0 cut from the previous PR, PSR's last-tag reference point is now fresh. The stale
+  ``BREAKING CHANGE:`` footer from PR #38 sits behind v1.1.0 in history, so PSR won't see it again —
+  future automatic bumps stay in the 1.x line until a deliberate breaking change is staged.
+
+Restore the push trigger so merges to main auto-bump again per Conventional Commits (feat → minor,
+  fix/perf → patch). Keep ``workflow_dispatch`` for emergency forced bumps, and switch its default
+  from ``minor`` to ``patch`` — the one-time minor was a transition tool; the safer default for a
+  one-off forced bump is patch.
+
+PSR's own release commits are tagged ``[skip ci]`` in ``commit_message``, so the infinite push →
+  release → push loop is prevented by GitHub Actions' skip-ci convention without a dedicated guard.
+
+* ci: address PR review for push-trigger restore
+
+Two sub-threshold findings from the PR review:
+
+1. ``default: patch`` meant a bare manual dispatch silently forced a patch bump, even when the
+  commit history would have warranted minor or major. Now that v1.1.0 is tagged and the stale
+  BREAKING CHANGE footer is behind it, PSR's commit-scan is safe again — default back to empty and
+  put ``""`` back in the choices list. Manual dispatchers pick a level only when they actually want
+  to override; everyone else gets "what PSR thinks this should be".
+
+2. ``paths-ignore: [CHANGELOG.md]`` added to the push trigger as defense-in-depth against the
+  release → push → release loop. Today GitHub Actions' ``GITHUB_TOKEN`` auto-suppresses workflow
+  re-triggers from token-authored commits, and PSR's ``[skip ci]`` commit message tag is a second
+  layer. The guard becomes load-bearing the moment auth moves to a PAT (e.g. to trigger a downstream
+  publish workflow from the release). Better to add it now than chase a mystery re-run later.
+  ``pyproject.toml`` stays eligible because legitimate human edits (dep bumps, metadata) still need
+  a release scan.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+
 ## v1.1.0 (2026-04-17)
 
 ### Bug Fixes
@@ -210,6 +350,9 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - **release**: 1.0.2 [skip ci]
   ([`95e2a6c`](https://github.com/mfozmen/littlepress-ai/commit/95e2a6c8c37e9d9f02ae5a52dc0d2a8d47121767))
+
+- **release**: 1.1.0 [skip ci]
+  ([`115b7dc`](https://github.com/mfozmen/littlepress-ai/commit/115b7dc7357165d4680e23e448152f2c316f8066))
 
 - **release**: 1.1.0 [skip ci]
   ([`7e00bf5`](https://github.com/mfozmen/littlepress-ai/commit/7e00bf5c553083d628ca7d4924ef1dd8f3caa512))
