@@ -133,6 +133,12 @@ def read_draft_tool(get_draft: Callable[[], Draft | None]) -> Tool:
     Read-only. Returns the child's text verbatim so the agent can see
     exactly what was written, including typos and invented words — the
     agent decides what to flag for the user.
+
+    Pages whose image carries the child's text visually but whose PDF
+    text layer is empty (Samsung Notes exports, phone scans, etc.) are
+    pre-flagged with ``[image-only]`` and a single summary NOTE at the
+    end that tells the agent to ask the user to transcribe rather than
+    invent — preserve-child-voice enforced at the surface.
     """
 
     def handler(_input: dict) -> str:
@@ -147,10 +153,36 @@ def read_draft_tool(get_draft: Callable[[], Draft | None]) -> Tool:
         lines.append(f"Author: {author}")
         lines.append(f"Cover drawing set: {cover}")
         lines.append(f"{len(draft.pages)} pages:")
+        image_only_pages: list[int] = []
         for i, page in enumerate(draft.pages, start=1):
             marker = "drawing" if page.image is not None else "no drawing"
             text = page.text.strip().replace("\n", " ")
-            lines.append(f"  Page {i} ({marker}, layout={page.layout}): {text}")
+            # Samsung-Notes exports (and other image-text PDFs) have
+            # pages with a drawing but no ``/Font`` resource — the
+            # child's text lives visually inside the image and pypdf
+            # returns empty. Flag these with a compact ``[image-only]``
+            # tag; the English-sentence explanation (preserve-child-
+            # voice, transcribe, don't invent) lives in the single
+            # summary NOTE below so the signal isn't diluted by N
+            # copies of the same line. Pages without an image are
+            # already covered by "no drawing".
+            image_only = page.image is not None and not text
+            tag = " [image-only]" if image_only else ""
+            if image_only:
+                image_only_pages.append(i)
+            lines.append(
+                f"  Page {i} ({marker}, layout={page.layout}):{tag} {text}"
+            )
+        if image_only_pages:
+            which = ", ".join(str(n) for n in image_only_pages)
+            lines.append(
+                f"NOTE: page(s) {which} are image-only — the PDF has no "
+                "text layer there, likely a Samsung Notes / phone-scan "
+                "export where the text is rendered inside the image. "
+                "OCR is not available yet; ask the user to transcribe "
+                "each page's text verbatim. Do not invent, paraphrase, "
+                "or 'guess' the child's words — preserve-child-voice."
+            )
         return "\n".join(lines)
 
     return Tool(
@@ -158,8 +190,13 @@ def read_draft_tool(get_draft: Callable[[], Draft | None]) -> Tool:
         description=(
             "Read the currently-loaded PDF draft. Returns the title, author, "
             "cover status, page count, and for each page whether it has a "
-            "drawing, its layout, and the child's exact text. Call this at "
-            "the start of a session to see what you're working with."
+            "drawing, its layout, and the child's exact text. Pages whose "
+            "text layer is empty but whose image carries text visually "
+            "(Samsung Notes / phone-scan exports) are flagged "
+            "``[image-only]`` with a summary NOTE — when that fires, ask "
+            "the user to transcribe each flagged page; never invent or "
+            "paraphrase the child's words. Call this at the start of a "
+            "session to see what you're working with."
         ),
         input_schema={"type": "object", "properties": {}, "required": []},
         handler=handler,
@@ -350,7 +387,15 @@ def set_cover_tool(get_draft: Callable[[], Draft | None]) -> Tool:
             "'portrait-frame' (drawing inside a decorative border, "
             "title above), 'title-band-top' (coloured band with title "
             "at the top, drawing below), or 'poster' (type-only cover, "
-            "no drawing). Defaults to 'full-bleed' when omitted."
+            "no drawing). Defaults to 'full-bleed' when omitted. "
+            "If the user wants an AI-generated cover instead of reusing "
+            "a page's drawing, the ``generate_cover_illustration`` tool "
+            "is available on the OpenAI provider — tell users on other "
+            "providers they can switch via /model to access it. "
+            "PRESERVE-CHILD-VOICE applies to the AI cover prompt too: "
+            "describe the cover scene in your own words from the story's "
+            "themes; do not quote or paraphrase the child's page text "
+            "into the prompt."
         ),
         input_schema={
             "type": "object",

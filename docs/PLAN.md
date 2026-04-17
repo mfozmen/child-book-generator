@@ -35,13 +35,18 @@ All five PRs from the original plan merged:
 
 Items below came out of the first real end-to-end test (Yavru Dinozor). Listed roughly in "most visible to the user" order.
 
+- **OCR for "image-text" PDFs (Samsung Notes exports, handwritten scans).** The Yavru Dinozor PDF is produced by Samsung Notes: each page is a single PNG screenshot, no `/Font` resource, text glyphs are pixels inside the image. `pypdf` / `pdfminer` / `PyMuPDF` all (correctly) return empty text. The agent's current fallback — ask the user to transcribe — works but shifts the burden to the user. A Tesseract + `tur` lang-pack pass over each page image would recover typed text (100% for Samsung-Notes-style matbaa yazısı, best-effort for actual handwriting) before the agent ever asks. Opt-in dependency (`pytesseract`); gracefully skip when not installed. Replaces the older vague "OCR for handwritten scans" deferred item.
+- **SonarCloud issue backlog (12 open).** One dedicated refactor PR. Line numbers drift with every merge; the rule + file + symbol pair below is stable — run the API query when starting the PR to re-confirm hotspots:
+  - 10 × `python:S3776` cognitive complexity — `src/providers/llm.py` (6 functions around content-block translation / `turn()` dispatch), `src/agent_tools.py` (3 — ``set_cover_tool``, ``render_book_tool``, one helper), `src/cli.py::main`, `src/repl.py::run`.
+  - 1 × `python:S3457` f-string with no replacement field — in `set_cover_tool`'s poster-style branch.
+  - 1 × `python:S1172` unused `draft` parameter — in the layout-batch rejection helper.
+  - 1 × `python:S5713` redundant exception class — `src/providers/image.py` (`binascii.Error` and `ValueError` where one is a subclass of the other).
 - **Spine-wrap cover template.** Five templates ship now (`full-bleed`, `framed`, `portrait-frame`, `title-band-top`, `poster`). The one remaining idea is `spine-wrap` — drawing spans front + spine + back for the A4 imposed booklet. This needs multi-page cover rendering support that the current `draw_cover` (single page) doesn't have; defer until a real user asks for it.
 - **More image providers for AI cover generation.** First-slice ships OpenAI `gpt-image-1` (see "Shipped" below). Stability / Replicate / a local Stable Diffusion daemon are all plausible follow-ups — plug them in behind the existing `ImageProvider` protocol and add a user-visible way to pick.
 
 ## Explicitly deferred (don't build unless asked)
 
 - **Per-page AI illustration generation.** Cover-only generation (in Next up) is the first step. Per-page is bigger — style consistency across pages, re-prompt on user feedback. Defer until the cover tool ships.
-- **OCR for handwritten scans.** Current PDFs have extractable text; add when a real draft needs it.
 - **Full parametric layout engine.** `choose_layout` applies the skill's rule 1 and simple aspect-ratio branching; parametric splits can wait.
 - **Cap / prune old render snapshots.** Every render keeps a ``.vN.pdf`` snapshot, so heavy iteration on a 10 MB picture book can accumulate hundreds of megabytes of PDFs. Intentional for now — the user can compare or roll back freely — but eventually we'll want either a per-project cap (keep last N), an age-based sweep, or a ``/prune`` command. Pick whichever emerges from real usage.
 
