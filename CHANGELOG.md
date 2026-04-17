@@ -1,7 +1,7 @@
 # CHANGELOG
 
 
-## v2.0.0 (2026-04-16)
+## v2.0.0 (2026-04-17)
 
 ### Bug Fixes
 
@@ -261,6 +261,9 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 - **release**: 1.1.0 [skip ci]
   ([`5facc08`](https://github.com/mfozmen/littlepress-ai/commit/5facc08c8bc2fe5b08a366347b3ca5cd5a367131))
+
+- **release**: 2.0.0 [skip ci]
+  ([`7d659cb`](https://github.com/mfozmen/littlepress-ai/commit/7d659cb8c7ce1d6fd71ec9a75749c93f1b7d9d92))
 
 - **release**: 2.0.0 [skip ci]
   ([`5ba289c`](https://github.com/mfozmen/littlepress-ai/commit/5ba289c5e7126cedabc2a368d104ef2d225e7644))
@@ -603,6 +606,98 @@ propose_layouts takes every page in one call, validates the batch as a unit (out
 
 Tool registered in Repl._build_agent alongside the per-page tool; both stay available so the agent
   can pick the right one per phase.
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **pages**: Portrait-frame and title-band-top cover templates
+  ([#40](https://github.com/mfozmen/littlepress-ai/pull/40),
+  [`a7d5a4e`](https://github.com/mfozmen/littlepress-ai/commit/a7d5a4e67438a27c2c992e8c56f060e5df66bb9b))
+
+* feat(pages): portrait-frame and title-band-top cover templates
+
+Two new cover templates, completing the five-template set the plan called for (spine-wrap is
+  deferred — multi-page cover support):
+
+- ``portrait-frame``: the drawing sits inside a visible rounded-rect border (like a framed picture
+  on a wall), title centred above the frame, author below it. Good for quiet single-figure
+  illustrations that benefit from a stage — the border prevents the drawing from looking lonely on a
+  full page.
+
+- ``title-band-top``: a warm-toned coloured band at the top holds the title; the drawing fills the
+  remaining space below; author at the bottom. More assertive than framed — the colour band lifts
+  the title off the page, especially useful when a long title sits over a busy illustration that
+  would swallow plain type.
+
+Both templates use _fit_title_size for shrink-to-fit. The select-cover-template skill gains two new
+  decision rules: quiet/small-figure → portrait-frame, long-title + busy drawing → title-band-top.
+
+Also: .review_tmp/ added to .gitignore (stale files from code-review
+
+agent).
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix(pages): address PR review for portrait-frame and title-band-top
+
+Four findings:
+
+1. portrait-frame was missing subtitle rendering — every other image-carrying template renders it.
+  Added subtitle between the title and the frame, with the frame_top computed from the subtitle
+  baseline when present. New test pins it.
+
+2. title-band-top's subtitle could overflow below the coloured band when the title shrinks (long
+  title → smaller title_size → subtitle baseline drops past band bottom). Added a clamp: if the
+  candidate subtitle y-coordinate would exit the band, the subtitle is silently skipped rather than
+  rendered over the drawing without the coloured background.
+
+3. Skill frontmatter still said "(full-bleed, framed, poster)" and the "Goal state" section listed
+  portrait-frame / title-band-top as future work. Updated the description to name all five templates
+  and trimmed the goal section to only spine-wrap.
+
+4. Decision-tree gap for long title (>32 chars) + quiet drawing. portrait-frame's narrower width
+  (inset border) would shrink the title further; added rule 4: long title + quiet drawing → framed
+  (not portrait-frame). portrait-frame demoted to rule 5 with an explicit "short title" qualifier.
+
+* refactor(pages): drop dead subtitle_bottom store in title-band-top
+
+Sonar flagged `subtitle_bottom` in `_draw_cover_title_band_top` as an unused local (rule
+  python:S1854). It was copied from `portrait-frame` where the variable feeds `frame_top`; in
+  `title-band-top` the image rect is driven by `band_bottom` instead, so the assignment is dead.
+  Pass `candidate_y` directly to `drawString` and remove the shadow var.
+
+Also adds `test_cover_title_band_top_renders_subtitle` pinning the subtitle contract for this
+  template — the existing suite exercised the title and author but not the subtitle branch.
+
+* fix(pages): address second-round PR review for new cover templates
+
+Six findings from PR #40's second review pass:
+
+1. Skill decision tree had two rules numbered `5` after the previous fix inserted rule 4 without
+  cascading the renumber. Downshifted the last three to 6 / 7 / 8 so "first match wins" ordering is
+  unambiguous.
+
+2. `_draw_cover_portrait_frame` lost its descender clearance on the no-subtitle path. The earlier
+  fix collapsed `frame_top` to `title_y - 4*mm` when no subtitle, losing the `title_size * 0.35`
+  breathing room that full-bleed / framed both preserve. Seed `subtitle_bottom` with `title_y -
+  title_size * 0.35` so the frame stays clear of 'g'/'y'/'p' descenders regardless of subtitle.
+
+3. `VALID_COVER_STYLES` block comment listed only three templates; added bullets for
+  `portrait-frame` and `title-band-top`.
+
+4. CLAUDE.md listed only three templates in two places (architecture bullet and skill description);
+  brought both in line with the five we ship.
+
+5. `COVER_BAND_H` comment claimed it was used by `framed`; actually `title-band-top` is the second
+  consumer, and `framed` doesn't use it at all. Updated the comment to reflect reality.
+
+6. `_draw_cover_title_band_top` subtitle clamp was dead code with inverted physics in its rationale:
+  shrinking the title size makes `candidate_y` larger (subtitle moves up), not smaller. The guard
+  would only trip above ~57pt, but `_fit_title_size` caps at 34pt and only shrinks. Removed the
+  guard and rewrote the comment to state what the geometry actually guarantees.
+
+---------
 
 Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 
