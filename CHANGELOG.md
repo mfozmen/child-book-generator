@@ -1,6 +1,187 @@
 # CHANGELOG
 
 
+## v1.2.0 (2026-04-17)
+
+### Features
+
+- **agent**: Transcribe_page tool — OCR image-only PDFs via LLM vision
+  ([#46](https://github.com/mfozmen/littlepress-ai/pull/46),
+  [`6ddbd4d`](https://github.com/mfozmen/littlepress-ai/commit/6ddbd4dfd6b8c2993b9d048b051f76a240bd6fa5))
+
+* feat(agent): transcribe_page tool via LLM vision for image-only PDFs
+
+Samsung Notes PDFs (and phone-scan exports generally) carry each page as a single PNG. No ``/Font``
+  resource, no extractable text, ``pypdf`` / ``pdfminer`` / ``PyMuPDF`` all correctly return empty —
+  but the child's text is clearly rendered inside the image. The previous fallback ("ask the user to
+  type it") worked for a one-page smoke test and cratered as soon as a real draft showed up: nobody
+  wants to retype their kid's eight-page dinosaur story by hand.
+
+New agent tool ``transcribe_page(page: int)`` uses whatever multimodal LLM the user has already
+  configured (Claude 3+, GPT-4o, Gemini 1.5+, LLaVA on Ollama) to OCR a single page. The page's
+  image goes as a base64 content block alongside a preserve-child-voice prompt ("transcribe verbatim
+  — do not fix, polish, or improve the wording"). The reply lands in ``draft.pages[n-1].text``; the
+  agent then confirms the transcription with the user before treating it as ground truth.
+
+Why vision rather than Tesseract: zero additional dependency, runs on the user's already-configured
+  provider, handles Turkish matbaa yazısı and moderate handwriting out of the box, and the vision
+  prompt can carry the preserve-child-voice rule directly (a plain OCR engine can't). Tesseract
+  stays on the roadmap as an offline fallback for Ollama / NullProvider users.
+
+### What the agent sees now
+
+``read_draft``'s summary NOTE for image-only pages now points at the new tool explicitly: "Use the
+  ``transcribe_page`` tool to OCR each flagged page via the active LLM's vision capability." The
+  agent no longer has to guess or ask the user to transcribe by hand — it has a tool.
+
+### Tests
+
+Eight new unit tests in ``test_agent_tools.py`` covering:
+
+- No-draft guard - Out-of-range page rejection - Imageless-page rejection (no vision round-trip
+  wasted) - Prompt + image block shape (base64 source, preserve-child-voice verbatim wording,
+  "child" context visible to the model) - Reply stored in ``draft.pages[n-1].text`` - LLM error →
+  draft untouched + clean error message - Reply whitespace trimmed at edges only (interior line
+  breaks preserved — the child's line breaks are part of their voice) - Schema requires only
+  ``page`` (LLM reads this to know what to pass)
+
+No behaviour change to existing tools; 480 tests green (was 472).
+
+### Docs
+
+- README.md — new Status bullet describing image-only PDFs + the ``transcribe_page`` escape hatch. -
+  docs/PLAN.md — OCR item downgraded from Next-up priority to "Tesseract offline fallback" since the
+  primary need is now met. Shipped row added for the new feature.
+
+* fix(agent): address PR #46 review — close preserve-child-voice gaps
+
+Seven findings — all valid, two of them critical safety issues.
+
+### Critical
+
+1. **Image content block was dropped on every provider except Anthropic.**
+  ``AnthropicProvider.chat`` forwards messages to the SDK verbatim, so the base64 image arrives at
+  Claude. The ``_messages_to_{gemini,openai,ollama}`` translators in ``src/providers/llm.py`` only
+  handle ``text / tool_use / tool_result`` blocks and silently discard ``image``. The vision model
+  on those providers saw only the text prompt and invented a transcription that then got written
+  into ``draft.pages[n-1].text`` — the maximal form of a preserve-child-voice violation. Gate the
+  tool to Anthropic at ``src/repl.py::_build_agent``, mirroring the OpenAI-only gate on
+  ``generate_cover_illustration``. Per-provider image-block translation is deliberately deferred to
+  its own PR; adding it under time pressure here risked subtle wire-format bugs.
+
+2. **No user confirmation before ``page.text`` was overwritten.** ``transcribe_page`` was the only
+  mutating tool in this module that skipped the ``confirm: Callable[[str], bool]`` gate. The
+  module's own top comment says "the only way page text ever changes is propose_typo_fix, which
+  requires a user y/n" — a contract this tool broke on day one. The handler now asks
+  ``confirm(preview_prompt)`` with the OCR reply (and, when a user-typed transcription is already
+  there, both the existing and the new text so the user sees what's being overwritten) and only
+  writes on approval.
+
+### Sub-threshold
+
+3. ``read_draft``'s LLM-facing ``description`` still told the agent to "ask the user to transcribe"
+  — updated to point at the ``transcribe_page`` tool, with an Anthropic-only caveat. 4. No image
+  size guard. Samsung Notes pages at full resolution routinely exceed Anthropic's 5 MB per-image
+  limit. Added ``_build_image_block`` with a Pillow ``thumbnail`` downscale to 1568 px on the long
+  edge (Anthropic's recommended max) and a PNG re-encode so the media type stays consistent. 5. Bare
+  ``except Exception`` lumped every failure into "may not support vision" and risked echoing
+  multi-KB base64 payloads back into the agent when an SDK interpolated the request body into the
+  error message. Split the catch: ``ImportError`` gets its own branch (SDK missing), everything else
+  goes through a generic handler that truncates ``str(e)[:200]``. 6. Provider returns ``""`` (Google
+  safety filter, OpenAI ``finish_reason=content_filter``) no longer silently blanks the page.
+  Pre-check before ``confirm`` runs; agent gets a clear "provider returned empty text" signal and
+  the draft is untouched. 7. ``docs/PLAN.md`` Shipped row: ``PR TBD`` → ``#46`` and the row now
+  names the three preserve-child-voice guardrails.
+
+Eight new pins in ``test_agent_tools.py`` on top of the eight the PR shipped:
+
+- confirmation gate (declined → draft untouched) - confirm prompt shape (page number + preview) -
+  overwrite warning when ``page.text`` is already populated - empty-reply guard - downscaling of
+  oversized images (3000x4000 test fixture) - ``read_draft`` description points at
+  ``transcribe_page``
+
+And two new REPL-integration pins in ``test_repl_tools.py``:
+
+- ``transcribe_page`` registered on Anthropic - ``transcribe_page`` NOT registered on OpenAI /
+  Google / Ollama
+
+Existing 8 transcribe_page tests updated to pass ``confirm`` through the factory — every call path
+  exercised. 488 tests green (was 480).
+
+- README.md — new Status bullet now names the three guardrails (Anthropic-only, verbatim prompt, y/n
+  confirm) explicitly. - docs/PLAN.md — Shipped row finalised with PR number and guardrails.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+### Refactoring
+
+- Clear easy SonarCloud issues + 3 cognitive-complexity wins
+  ([#45](https://github.com/mfozmen/littlepress-ai/pull/45),
+  [`37e1ab5`](https://github.com/mfozmen/littlepress-ai/commit/37e1ab567ffa7774844968a83b8f22f14229e508))
+
+* refactor: clear easy SonarCloud issues + 3 cognitive-complexity wins
+
+Knocks 6 of the 12 open SonarCloud findings off the backlog. The remaining 6 are all
+  ``python:S3776`` (cognitive complexity) in larger provider-translation functions and are better
+  handled in a dedicated follow-up PR so a single review can stay focused.
+
+### Fixed
+
+**Sonar-easy (3):**
+
+- ``python:S5713`` in ``src/providers/image.py`` — dropped the redundant ``binascii.Error`` catch
+  next to ``ValueError``; ``binascii.Error`` has been a ``ValueError`` subclass since 3.2, so the
+  parent covers both. Removed the now-unused ``binascii`` import. - ``python:S3457`` in three places
+  in ``src/agent_tools.py`` — dropped the ``f`` prefix on string fragments that carried no
+  replacement field (poster-style suffix, generate-cover confirm prompt header, two render-failure
+  hints). - ``python:S1172`` in ``src/agent_tools.py`` — ``_build_layout_prompt(draft, items)``
+  never used ``draft``. Dropped the parameter and updated the single caller.
+
+**Cognitive complexity (3):**
+
+- ``src/repl.py::Repl.run`` (16 → under 15). Extracted ``_greet_if_draft_loaded`` (the
+  pre-loaded-draft kick-off) and ``_read_loop`` (the main read / Ctrl-C / dispatch cycle). ``run``
+  now reads as a three-beat linear script. - ``src/cli.py::main`` (17 → under 15). Extracted
+  ``_load_pdf_into_repl`` (resolve path, mirror, restore or ingest) and
+  ``_restore_saved_draft_or_migrate`` (saved-draft lookup plus the one-shot legacy-path migration).
+  ``main``'s body is down to argparse, readline setup, repl construction, and a single guarded
+  pre-load call. - ``src/agent_tools.py::set_cover_tool::handler`` (17 → under 15). Split into
+  ``_validate_cover_inputs``, ``_apply_poster_cover``, and ``_apply_image_cover``. The handler is
+  now five lines: draft guard → validate → dispatch.
+
+### Verification
+
+- All 472 tests green. No behaviour changed; every refactor is pure extract-function with existing
+  test coverage continuing to guard the external contract.
+
+### Follow-up (deliberately out of scope here)
+
+Six remaining ``S3776`` findings, all in larger functions that deserve their own review cycle:
+
+- ``src/providers/llm.py`` — 4 complexity-18-to-43 functions around content-block translation and
+  ``turn()`` dispatch. - ``src/agent_tools.py`` — 2 more (``set_cover``-style handler refactor
+  worked here; the other tool handlers likely need similar extraction).
+
+Tracked in ``docs/PLAN.md``'s SonarCloud backlog item.
+
+* docs(plan): trim SonarCloud backlog after six items clear
+
+Review catch: CLAUDE.md requires trimming ``docs/PLAN.md`` in the same PR that ships the
+  corresponding work, but the backlog bullet was left at its pre-PR shape ("12 open") and still
+  listed the six rule-level targets this PR now closes (S5713, S3457, S1172, plus three S3776 wins
+  in ``set_cover``, ``cli.main``, ``repl.run``). Updated to "6 remaining" with the surviving
+  hotspots grouped by file: 5 × S3776 in ``src/providers/llm.py`` around the ``turn()``
+
+dispatch, 1 × S3776 in ``src/agent_tools.py`` for a tool handler the extract-function pattern hasn't
+  reached yet.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+
 ## v1.1.1 (2026-04-17)
 
 ### Bug Fixes
@@ -97,6 +278,11 @@ in this PR, all four of the review findings now regression-guarded. 472 tests gr
 ---------
 
 Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+### Chores
+
+- **release**: 1.1.1 [skip ci]
+  ([`52c4daa`](https://github.com/mfozmen/littlepress-ai/commit/52c4daabb7ff923cdb90c90f3fb038fc0b74c861))
 
 ### Continuous Integration
 
