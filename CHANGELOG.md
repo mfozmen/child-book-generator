@@ -263,6 +263,9 @@ Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
   ([`5facc08`](https://github.com/mfozmen/littlepress-ai/commit/5facc08c8bc2fe5b08a366347b3ca5cd5a367131))
 
 - **release**: 2.0.0 [skip ci]
+  ([`774f67e`](https://github.com/mfozmen/littlepress-ai/commit/774f67e3436ca8ef2277ed88ac564bfafbcb86c1))
+
+- **release**: 2.0.0 [skip ci]
   ([`7d659cb`](https://github.com/mfozmen/littlepress-ai/commit/7d659cb8c7ce1d6fd71ec9a75749c93f1b7d9d92))
 
 - **release**: 2.0.0 [skip ci]
@@ -500,6 +503,79 @@ Five findings, all valid:
 Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **agent**: Ai cover generation via OpenAI gpt-image-1
+  ([#41](https://github.com/mfozmen/littlepress-ai/pull/41),
+  [`526d95d`](https://github.com/mfozmen/littlepress-ai/commit/526d95da861704249ec3d992cdee6fc301ecfaf0))
+
+* feat(agent): AI cover generation via OpenAI gpt-image-1
+
+Optional ``generate_cover_illustration`` tool for when the child didn't draw a cover (or wants a
+  different one). The tool is registered only when the active provider is OpenAI and a key is
+  available — on other providers the agent doesn't see it, so there's no 401-on-first-use surprise.
+
+New files:
+
+- ``src/providers/image.py`` — ``ImageProvider`` protocol and ``OpenAIImageProvider`` (model
+  ``gpt-image-1``). Lazy SDK import so Ollama-only users don't need ``openai`` installed. All
+  failures (auth, rate, policy filter, empty response, missing SDK) surface as a single
+  ``ImageGenerationError`` the tool layer reports cleanly.
+
+- ``src/agent_tools.py::generate_cover_illustration_tool`` — takes a prompt + quality tier +
+  optional cover style. Shows the prompt and an estimated cost (low ≈ $0.02, medium ≈ $0.07, high ≈
+  $0.19 per portrait 1024x1536) in a y/n confirmation before any API call; on decline, nothing is
+  spent and cover state is untouched. On approval the PNG lands under
+  ``<session_root>/.book-gen/images/cover-<hash>.png`` and the draft's ``cover_image`` points at it.
+
+- ``tests/test_image_provider.py`` — 8 tests covering happy path, arg forwarding, parent-dir
+  creation, auth/API error wrapping, empty- response handling, missing-SDK handling, and protocol
+  membership.
+
+- ``tests/test_repl_tools.py`` — 3 integration tests for the REPL's conditional tool registration
+  (OpenAI-with-key yes, other providers no, OpenAI-without-key no).
+
+- 11 new unit tests in ``tests/test_agent_tools.py`` for the tool itself: draft requirement, prompt
+  / price confirmation, decline path,
+
+provider call, ``.book-gen/images/`` output location, style application, invalid style / quality
+  rejection, provider-error surfacing, empty-prompt rejection, schema shape.
+
+README, CLAUDE.md, and docs/PLAN.md updated to describe the new tool and move the "AI cover
+  generation" item from Next-up to Shipped.
+
+* fix(providers): address PR review for image provider and tool surface
+
+Four findings from the PR #41 review:
+
+1. Tool description lacked a preserve-child-voice invariant. CLAUDE.md names src/agent_tools.py as
+  the place the rule is enforced; the description now explicitly forbids paraphrasing the child's
+  page text into the image prompt ("PRESERVE-CHILD-VOICE: describe the cover scene in your own words
+  […] do NOT quote or paraphrase the child's page text"). Also pinned by a new test
+  (test_generate_cover_illustration_description_guards_child_voice).
+
+2. Non-atomic PNG write contradicted the docstring's "atomically" promise. Added
+  ``_atomic_write_bytes`` helper that writes to a sibling ``.tmp`` file and ``os.replace``s into the
+  final name, matching the pattern used by memory.py / draft.py::atomic_copy. Also wrapped
+  ``base64.b64decode`` so malformed base64 (binascii.Error) surfaces as ImageGenerationError rather
+  than escaping raw to the agent loop.
+
+3. OpenAI client had no timeout — the SDK default (~600 s) would hang the REPL on a network drop.
+  Added an explicit 120 s timeout at client construction (long enough for quality="high" renders
+  that legitimately take 30-90 s, short enough that a dead connection reaches the user promptly).
+
+4. Error classification used defensive getattr fallbacks that were dead code (the openai SDK is a
+  pinned dep), and lacked a connection/timeout branch. Switched to direct imports of
+  AuthenticationError / PermissionDeniedError / APIError / APIConnectionError / APITimeoutError
+  (matching validator.py::_check_openai), and split the network branch above APIError so a
+  connectivity failure reports "could not be reached" instead of looking like a policy rejection.
+
+New tests (4): - timeout kwarg passed to OpenAI client constructor - APIConnectionError wraps into a
+  network-specific ImageGenerationError - malformed base64 wraps into ImageGenerationError -
+  mid-write os.replace failure leaves no truncated file at final path
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 
 - **agent**: Auto-open the rendered A5 and surface absolute paths
   ([#29](https://github.com/mfozmen/littlepress-ai/pull/29),
