@@ -30,6 +30,7 @@ from src.agent_tools import (
     render_book_tool,
     set_cover_tool,
     set_metadata_tool,
+    transcribe_page_tool,
 )
 from src.draft import Draft
 from src.providers.image import OpenAIImageProvider
@@ -267,6 +268,19 @@ class Repl:
                 get_draft=get_draft, get_session_root=get_session_root
             ),
         ]
+        # Vision-OCR tool is Anthropic-only for now — the other
+        # providers' ``_messages_to_*`` translators silently drop
+        # image content blocks, which would make the LLM hallucinate
+        # a transcription and write it into the draft. Follow-up PR
+        # extends image-block support to Gemini / OpenAI / Ollama.
+        if self._provider is not None and self._provider.name == "anthropic":
+            tools.append(
+                transcribe_page_tool(
+                    get_draft=get_draft,
+                    get_llm=lambda: self._llm,
+                    confirm=self._confirm,
+                )
+            )
         # AI cover generation is OpenAI-only for now — don't advertise
         # a tool that would 401 on first use. When the user is on
         # another provider (or hasn't entered a key yet) the agent

@@ -15,6 +15,7 @@ from src.agent_tools import (
     render_book_tool,
     set_cover_tool,
     set_metadata_tool,
+    transcribe_page_tool,
 )
 from src.draft import Draft, DraftPage
 from src.providers.image import ImageGenerationError
@@ -1058,6 +1059,367 @@ def test_generate_cover_illustration_schema_advertises_style_and_quality(
         "full-bleed", "framed", "poster", "portrait-frame", "title-band-top",
     }
     assert tool.input_schema["required"] == ["prompt"]
+
+
+# --- transcribe_page ----------------------------------------------------
+
+
+class _FakeLLM:
+    """Captures the messages it was called with so tests can inspect
+    the transcription prompt + attached image."""
+
+    def __init__(self, reply: str = "transcribed text", raises: Exception | None = None):
+        self.reply = reply
+        self.raises = raises
+        self.calls: list[list] = []
+
+    def chat(self, messages):
+        self.calls.append(messages)
+        if self.raises is not None:
+            raise self.raises
+        return self.reply
+
+
+def _tiny_png(path: Path) -> Path:
+    """Write a real (1x1 white) PNG to ``path`` so ``PIL.Image.open``
+    can parse it. The vision tool needs a decodable image to
+    measure + optionally downscale before base64-encoding."""
+    from PIL import Image
+    Image.new("RGB", (1, 1), color=(255, 255, 255)).save(path, format="PNG")
+    return path
+
+
+def _image_only_draft(tmp_path) -> Draft:
+    """Draft with one page carrying an image but no extracted text —
+    the shape ``transcribe_page`` exists to handle."""
+    img = _tiny_png(tmp_path / "page-01.png")
+    return Draft(
+        source_pdf=tmp_path / "x.pdf",
+        title="Book",
+        author="A",
+        pages=[DraftPage(text="", image=img)],
+    )
+
+
+def test_transcribe_page_requires_a_loaded_draft(tmp_path):
+    tool = transcribe_page_tool(
+        get_draft=lambda: None,
+        get_llm=lambda: _FakeLLM(),
+        confirm=lambda _p: True,
+    )
+
+    result = tool.handler({"page": 1})
+
+    assert "no draft" in result.lower()
+
+
+def test_transcribe_page_rejects_out_of_range_page(tmp_path):
+    draft = _image_only_draft(tmp_path)
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: _FakeLLM(),
+        confirm=lambda _p: True,
+    )
+
+    result = tool.handler({"page": 99})
+
+    assert "99" in result or "out of" in result.lower()
+
+
+def test_transcribe_page_rejects_page_without_image(tmp_path):
+    """Imageless pages have nothing to transcribe — reject so the
+    agent doesn't waste a vision round-trip."""
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        title="Book",
+        author="A",
+        pages=[DraftPage(text="", image=None)],
+    )
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: _FakeLLM(),
+        confirm=lambda _p: True,
+    )
+
+    result = tool.handler({"page": 1})
+
+    assert "no image" in result.lower() or "no drawing" in result.lower()
+
+
+def test_transcribe_page_sends_image_and_preserve_child_voice_prompt(tmp_path):
+    """The tool must send the page's image (as a base64 content block)
+    alongside a prompt that tells the LLM vision to transcribe verbatim
+    — no "polishing," no typo fixes. Preserve-child-voice applies to
+    OCR output as strongly as to manual edits."""
+    draft = _image_only_draft(tmp_path)
+    llm = _FakeLLM(reply="once upon a time")
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: llm,
+        confirm=lambda _p: True,
+    )
+
+    tool.handler({"page": 1})
+
+    assert len(llm.calls) == 1
+    messages = llm.calls[0]
+    assert len(messages) == 1
+    content = messages[0]["content"]
+
+    # At least one image block with base64-encoded bytes.
+    image_blocks = [b for b in content if b.get("type") == "image"]
+    assert len(image_blocks) == 1
+    src = image_blocks[0]["source"]
+    assert src["type"] == "base64"
+    assert src["media_type"].startswith("image/")
+    assert src["data"]  # non-empty base64 string
+
+    # At least one text block with the verbatim / preserve-child-voice
+    # invariant.
+    text_blocks = [b for b in content if b.get("type") == "text"]
+    prompt = " ".join(b["text"].lower() for b in text_blocks)
+    assert "verbatim" in prompt or "exactly" in prompt
+    assert "not fix" in prompt or "don't fix" in prompt or "do not fix" in prompt
+    assert "child" in prompt
+
+
+def test_transcribe_page_stores_returned_text_in_draft(tmp_path):
+    """On a successful vision call and a user confirmation the reply
+    lands in ``draft.pages[n-1].text`` so the next ``read_draft``
+    sees it — no second tool call needed."""
+    draft = _image_only_draft(tmp_path)
+    llm = _FakeLLM(reply="Bir gün bir yumurta çatlamış")
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: llm,
+        confirm=lambda _p: True,
+    )
+
+    tool.handler({"page": 1})
+
+    assert draft.pages[0].text == "Bir gün bir yumurta çatlamış"
+
+
+def test_transcribe_page_does_not_touch_draft_on_llm_error(tmp_path):
+    """If the LLM raises (vision unsupported, rate limit, offline),
+    page text must stay untouched — the user can see the error and
+    fall back to manual transcription."""
+    draft = _image_only_draft(tmp_path)
+    llm = _FakeLLM(raises=RuntimeError("vision unsupported on this model"))
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: llm,
+        confirm=lambda _p: True,
+    )
+
+    result = tool.handler({"page": 1})
+
+    assert draft.pages[0].text == ""
+    assert "vision" in result.lower() or "failed" in result.lower()
+
+
+def test_transcribe_page_reply_is_stripped_before_storing(tmp_path):
+    """LLM sometimes wraps the reply in whitespace / newlines;
+    leading/trailing whitespace would render as a blank first line on
+    the page. Strip only the edges — do NOT collapse interior
+    whitespace (line breaks in the child's text are intentional)."""
+    draft = _image_only_draft(tmp_path)
+    llm = _FakeLLM(reply="\n\n  line one\nline two  \n\n")
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: llm,
+        confirm=lambda _p: True,
+    )
+
+    tool.handler({"page": 1})
+
+    assert draft.pages[0].text == "line one\nline two"
+
+
+def test_transcribe_page_schema_requires_only_page_number(tmp_path):
+    """Schema must name ``page`` as the only required input — the
+    LLM reads the schema to decide what to pass."""
+    tool = transcribe_page_tool(
+        get_draft=lambda: None,
+        get_llm=lambda: _FakeLLM(),
+        confirm=lambda _prompt: True,
+    )
+
+    assert tool.input_schema["required"] == ["page"]
+    assert "page" in tool.input_schema["properties"]
+
+
+def test_transcribe_page_blocks_on_user_confirmation_before_writing(tmp_path):
+    """PR #46 review #2 — OCR is a text-mutating operation on the
+    child's pages, same class as ``propose_typo_fix``. That tool
+    requires y/n before touching the text; ``transcribe_page`` must
+    do the same. Passing ``confirm=lambda _: False`` must leave the
+    draft untouched."""
+    draft = _image_only_draft(tmp_path)
+    llm = _FakeLLM(reply="a transcription the user hasn't seen yet")
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: llm,
+        confirm=lambda _prompt: False,
+    )
+
+    result = tool.handler({"page": 1})
+
+    # Draft unchanged — the user declined the OCR result.
+    assert draft.pages[0].text == ""
+    # Agent gets a clear signal to fall back (ask the user to type).
+    assert "declined" in result.lower() or "cancel" in result.lower()
+
+
+def test_transcribe_page_confirm_prompt_includes_preview_and_page_number(
+    tmp_path,
+):
+    """The confirmation prompt must show the user exactly what's
+    about to land in ``page.text`` — preview + which page — so the
+    approval is informed, not blind."""
+    draft = _image_only_draft(tmp_path)
+    llm = _FakeLLM(reply="Bir gün bir yumurta çatlamış")
+    seen: list[str] = []
+
+    def _confirm(prompt: str) -> bool:
+        seen.append(prompt)
+        return True
+
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: llm,
+        confirm=_confirm,
+    )
+
+    tool.handler({"page": 1})
+
+    assert seen, "confirm() must be called before writing page.text"
+    assert "Bir gün bir yumurta çatlamış" in seen[0]
+    assert "page 1" in seen[0].lower() or "page=1" in seen[0].lower()
+
+
+def test_transcribe_page_confirm_prompt_warns_when_overwriting_existing_text(
+    tmp_path,
+):
+    """If the user has already transcribed the page manually (per
+    the NOTE in ``read_draft`` from PR #44), a second OCR pass must
+    show both the existing text and the new OCR output so the user
+    doesn't lose work by accident."""
+    img = _tiny_png(tmp_path / "page-01.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        title="Book",
+        author="A",
+        pages=[
+            DraftPage(text="the user's manual transcription", image=img),
+        ],
+    )
+    seen: list[str] = []
+
+    def _confirm(prompt):
+        seen.append(prompt)
+        return False  # decline so draft stays as it was
+
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: _FakeLLM(reply="OCR guess"),
+        confirm=_confirm,
+    )
+
+    tool.handler({"page": 1})
+
+    prompt = seen[0]
+    assert "the user's manual transcription" in prompt
+    assert "OCR guess" in prompt
+    # Some word that signals this is a replacement, not a fresh fill.
+    assert (
+        "overwrite" in prompt.lower()
+        or "replace" in prompt.lower()
+        or "existing" in prompt.lower()
+    )
+
+
+def test_transcribe_page_empty_reply_does_not_overwrite_draft(tmp_path):
+    """PR #46 review sub-6 — Google's safety filter and OpenAI's
+    content-filter both return ``""``. ``str(reply).strip()`` landing
+    in ``page.text`` would silently empty a page the user might have
+    typed manually, and the success-ish message would mask the
+    failure. Guard against empty replies before touching state."""
+    img = _tiny_png(tmp_path / "page-01.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        title="Book",
+        author="A",
+        pages=[DraftPage(text="already there", image=img)],
+    )
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: _FakeLLM(reply=""),
+        confirm=lambda _p: True,
+    )
+
+    result = tool.handler({"page": 1})
+
+    assert draft.pages[0].text == "already there"
+    assert "empty" in result.lower() or "safety" in result.lower() or "blocked" in result.lower()
+
+
+def test_transcribe_page_downscales_oversized_images_before_sending(tmp_path):
+    """PR #46 review sub-4 — full-resolution Samsung Notes pages
+    routinely sit around 4–8 MB raw (~5–11 MB base64) and blow past
+    Anthropic's 5 MB per-image limit. The tool must downscale before
+    base64-encoding so the request actually reaches the model. We
+    don't want Pillow in the test fixtures, so assert the encoded
+    payload stays within a clear bound: if the source is larger
+    than the expected max (1568x1568 per Anthropic's recommendation),
+    the base64 that reaches the provider must be smaller than the
+    source."""
+    from PIL import Image
+
+    big = tmp_path / "big-page.png"
+    # 3000x4000 solid black — renders to ~several MB encoded, well
+    # beyond the Anthropic limit.
+    Image.new("RGB", (3000, 4000), color=(0, 0, 0)).save(big, format="PNG")
+    big_bytes = big.stat().st_size
+
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        title="Book",
+        author="A",
+        pages=[DraftPage(text="", image=big)],
+    )
+    llm = _FakeLLM(reply="owls")
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: llm,
+        confirm=lambda _p: True,
+    )
+
+    tool.handler({"page": 1})
+
+    content = llm.calls[0][0]["content"]
+    image_block = next(b for b in content if b.get("type") == "image")
+    import base64 as b64
+    payload = b64.b64decode(image_block["source"]["data"])
+    # Payload must be materially smaller than the raw source — if
+    # downscaling didn't happen, this test would pass anyway since
+    # PNG re-compression can reduce size, so pin a concrete upper
+    # bound tied to Anthropic's limit.
+    assert len(payload) < big_bytes
+    # Anthropic's documented upper bound is 5 MB per image; pin well
+    # under so our downscale has real headroom.
+    assert len(payload) < 4 * 1024 * 1024
+
+
+def test_read_draft_description_points_agent_at_transcribe_page_tool(tmp_path):
+    """PR #46 review sub-3 — the NOTE in the runtime output was
+    updated to mention ``transcribe_page``, but the ``description``
+    field (what the LLM reads first to decide which tool to reach
+    for) still said "ask the user to transcribe." Close the loop."""
+    tool = read_draft_tool(get_draft=lambda: None)
+
+    desc = tool.description.lower()
+    assert "transcribe_page" in desc
 
 
 # --- choose_layout -------------------------------------------------------

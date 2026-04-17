@@ -74,3 +74,36 @@ def test_generate_cover_illustration_omitted_when_openai_key_missing(tmp_path):
     repl = _repl(tmp_path, provider_name="openai", api_key=None)
 
     assert "generate_cover_illustration" not in _tool_names(repl)
+
+
+def test_transcribe_page_registered_only_on_anthropic(tmp_path):
+    """PR #46 review #1 — only ``AnthropicProvider.chat`` currently
+    forwards image content blocks intact to the SDK. The other
+    providers' ``_messages_to_*`` translators silently drop unknown
+    block types, so on OpenAI / Gemini / Ollama the vision model
+    sees only the text prompt and hallucinates a transcription that
+    then gets written into ``draft.pages[n-1].text``. Until the
+    non-Anthropic translators grow image-block support in a dedicated
+    PR, gate this tool to Anthropic — mirrors the OpenAI-only gate
+    on ``generate_cover_illustration``."""
+    repl = _repl(tmp_path, provider_name="anthropic", api_key="sk-ant-test")
+    assert "transcribe_page" in _tool_names(repl)
+
+
+def test_transcribe_page_omitted_on_non_anthropic_providers(tmp_path):
+    """Same rationale as above — OpenAI / Gemini / Ollama agents must
+    not see this tool until their ``_messages_to_*`` translators
+    handle image blocks, otherwise a clean-looking success writes
+    fabricated child text into the draft."""
+    for name, key in (
+        ("openai", "sk-test"),
+        ("google", "AIzaSy-test"),
+        ("ollama", None),
+    ):
+        repl = _repl(tmp_path, provider_name=name, api_key=key)
+        assert "transcribe_page" not in _tool_names(repl), (
+            f"transcribe_page must not be registered on {name} — "
+            "image blocks aren't translated to that provider's wire "
+            "format yet, so the LLM would invent text without seeing "
+            "the page image."
+        )
