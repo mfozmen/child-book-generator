@@ -34,9 +34,9 @@ Apply in order. First match wins.
 3. **Very long title** (> 32 visible characters at preferred size — see "title fit note" below) combined with a busy drawing → **`title-band-top`**. The coloured band lifts the title off the chaos below, more assertive than `framed` which can look too sparse with a long title over a busy image. If the title is short (< 15 chars), fall through — the band would overwhelm a short punchy title.
 4. **Long title (> 32 chars) + quiet drawing** → **`framed`**, not `portrait-frame`. The portrait-frame's inset border narrows the available width further, so a long title would shrink even smaller inside it. `framed` gives the title the full page width minus margins.
 5. **Quiet or small-figure illustration** with a short title (lots of negative space in the drawing, a centred single figure, portrait-ish aspect `ar < 0.75`) → **`portrait-frame`**. The decorative border stages the subject; full-bleed on a small figure would leave the page looking mostly empty. If the illustration is busy, skip this — the frame competes with the detail.
-5. **Dramatic illustration that fills the page naturally** (landscape-ish, `ar ≥ 1.1`, or portrait-ish with high busyness) → **`full-bleed`**. The drawing *is* the cover; typography rides over it.
-6. **Medium text length, medium illustration** → **`framed`**. Balanced breathing room for both the drawing and the title.
-7. **Default** → **`full-bleed`**. If you can't distinguish clearly, the most visually assertive picture-book cover is the safe choice.
+6. **Dramatic illustration that fills the page naturally** (landscape-ish, `ar ≥ 1.1`, or portrait-ish with high busyness) → **`full-bleed`**. The drawing *is* the cover; typography rides over it.
+7. **Medium text length, medium illustration** → **`framed`**. Balanced breathing room for both the drawing and the title.
+8. **Default** → **`full-bleed`**. If you can't distinguish clearly, the most visually assertive picture-book cover is the safe choice.
 
 ### Title fit note
 

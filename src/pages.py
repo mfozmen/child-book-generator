@@ -236,8 +236,11 @@ def _draw_cover_portrait_frame(c: Canvas, book: Book) -> None:
         aw = pdfmetrics.stringWidth(book.author, FONT_REGULAR, COVER_AUTHOR_SIZE)
         c.drawString((PAGE_W - aw) / 2, BOTTOM_MARGIN, book.author)
 
-    # Subtitle between title and frame (if present).
-    subtitle_bottom = title_y
+    # Subtitle between title and frame (if present). When absent, we
+    # still leave a descender's worth of breathing room below the title
+    # baseline so the frame's top edge doesn't collide with tails on
+    # 'g'/'y'/'p' — matches the pattern used by full-bleed and framed.
+    subtitle_bottom = title_y - title_size * 0.35
     if book.cover.subtitle:
         c.setFont(FONT_REGULAR, COVER_AUTHOR_SIZE)
         sw = pdfmetrics.stringWidth(
@@ -294,20 +297,17 @@ def _draw_cover_title_band_top(c: Canvas, book: Book) -> None:
     title_y = PAGE_H - band_h / 2 - title_size * 0.35
     c.drawString((PAGE_W - title_w) / 2, title_y, book.title)
 
-    # Subtitle below the title inside the band (if it fits — a long
-    # title that shrinks can push the subtitle below the band's bottom
-    # edge, where it'd render over the drawing without the coloured
-    # background. Skip the subtitle rather than producing illegible
-    # text).
-    band_bottom = PAGE_H - band_h
+    # Subtitle below the title inside the band. ``_fit_title_size``
+    # only shrinks, so ``title_size`` never grows past the 34pt
+    # preferred size — the subtitle baseline comfortably sits inside
+    # the band for every title length we can render.
     if book.cover.subtitle:
-        candidate_y = title_y - title_size * 0.35 - COVER_AUTHOR_SIZE
-        if candidate_y >= band_bottom + 2 * mm:
-            c.setFont(FONT_REGULAR, COVER_AUTHOR_SIZE)
-            sw = pdfmetrics.stringWidth(
-                book.cover.subtitle, FONT_REGULAR, COVER_AUTHOR_SIZE,
-            )
-            c.drawString((PAGE_W - sw) / 2, candidate_y, book.cover.subtitle)
+        subtitle_y = title_y - title_size * 0.35 - COVER_AUTHOR_SIZE
+        c.setFont(FONT_REGULAR, COVER_AUTHOR_SIZE)
+        sw = pdfmetrics.stringWidth(
+            book.cover.subtitle, FONT_REGULAR, COVER_AUTHOR_SIZE,
+        )
+        c.drawString((PAGE_W - sw) / 2, subtitle_y, book.cover.subtitle)
 
     # Drawing fills the space between the band and the author strip.
     if book.cover.image:

@@ -17,8 +17,8 @@ BACK_SIZE = 12
 # Cover-specific knobs — bigger type than the body for shelf-appeal.
 COVER_TITLE_SIZE = 34
 COVER_AUTHOR_SIZE = 14
-# Height of the translucent band over the full-bleed drawing, and the
-# header band on the framed variant.
+# Height of the translucent band over the full-bleed drawing, and of
+# the coloured header band on the title-band-top variant.
 COVER_BAND_H = 42 * mm
 COVER_BAND_ALPHA = 0.72
 # Poster is the type-only template. Title wants to shout, so give it
