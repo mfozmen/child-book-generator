@@ -1,6 +1,1277 @@
 # CHANGELOG
 
 
+## v1.1.0 (2026-04-17)
+
+### Bug Fixes
+
+- **builder**: Stop inserting surprise blank pages in rendered books
+  ([#28](https://github.com/mfozmen/littlepress-ai/pull/28),
+  [`4ae2dfc`](https://github.com/mfozmen/littlepress-ai/commit/4ae2dfcd8ade9b520757d3b5f000f87a8c3d25da))
+
+The A5 PDF used to carry two blank pages the user never asked for:
+
+1. A blank right after the cover — the "inside-front cover left blank" bookbinding convention. In a
+  short children's book this reads as "why is there an empty page?" (the maintainer flagged it on
+  the first end-to-end test). 2. A conditional blank before the back cover when the overall page
+  count was odd — there to keep booklet pagination even.
+
+Neither earns its keep. imposition.impose_a5_to_a4 pads to multiples of 4 on its own when the user
+  actually asks for a booklet, so the conditional pad was redundant for booklet output and wrong for
+  plain A5 where nobody needs it. The inside-front blank is a bookbinding convention that doesn't
+  match the "short family book" product.
+
+New contract, pinned by four regression tests in test_builder.py: ``cover + N story pages + back
+  cover`` — nothing else. 1-page book → 3 PDF pages. 5-page book → 7 PDF pages. 8-page book → 10.
+
+Also drop the now-unused draw_blank helper from src/pages.py — no production or test path references
+  it anymore.
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **repl**: Accept /exit in the provider picker
+  ([#23](https://github.com/mfozmen/littlepress-ai/pull/23),
+  [`2478190`](https://github.com/mfozmen/littlepress-ai/commit/24781907d09377cc3be64d567423357d52ebe393))
+
+* fix(repl): accept /exit in the provider picker
+
+Reported: typing /exit at the first-launch picker printed "Please
+
+enter a number 1-4" instead of leaving the session. The picker's input reader only knew about
+  numbers; slash commands were treated as "not a number" and re-prompted.
+
+/exit now aborts the picker (same as EOF / Ctrl-D). Other slash commands (/help, /model, etc.) are
+  meaningless before a provider is activated, so steer the user toward a number or /exit instead of
+  mislabelling them as non-numeric input.
+
+Two regression tests: /exit alone exits zero with no "enter a number" nag; a different slash command
+  prints a hint that mentions /exit before the user finally picks a provider.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* docs: plan Claude-Code-style / menu and a logical slash command order
+
+Record the two deferred UX items discussed with the maintainer:
+
+1. A \`/\` auto-completion menu like Claude Code / Cursor, surfacing each slash command with a
+  one-line description. Implementation lane: swap builtins.input for prompt_toolkit.PromptSession
+  with a custom Completer.
+
+2. Reorder the slash commands to match the typical workflow — ingest → inspect → metadata → render →
+  session/auth — rather than the current registration order. Concrete order committed to PLAN.md so
+  the next PR has a target to match.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **repl**: Kick the agent off after a mid-session /load
+  ([#27](https://github.com/mfozmen/littlepress-ai/pull/27),
+  [`d543b83`](https://github.com/mfozmen/littlepress-ai/commit/d543b837a43ad27d14a83966bacfd779cd079ec0))
+
+Reported by the maintainer: dragging a PDF onto a live session loaded the draft but the agent stayed
+  silent afterwards — the user saw "Loaded 8 pages" and then nothing.
+
+The CLI-arg bootstrap already calls agent.say(greeting) when it's launched with a PDF. That never
+  fired for drag-drop or /load because those happen inside the main read loop, after run()'s "did we
+  start with a draft?" check has already passed.
+
+After a successful load, if a real (non-Null) provider is active, _cmd_load now calls
+  agent.say(_AGENT_GREETING_HINT) — same prompt that kicks read_draft + a friendly "Hi, I see N
+  pages..." opener. Offline provider stays silent as before.
+
+Also updated the three pre-existing drag-drop tests: their "agent wasn't invoked at all" invariant
+  is now "the raw path didn't leak to the agent as chat" — the load itself still triggers a greeting
+  turn, which is the whole point of this fix.
+
+297 tests green; src/repl.py remains at 99% coverage.
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **repl**: Retry with same key on transient errors instead of re-reading
+  ([#22](https://github.com/mfozmen/littlepress-ai/pull/22),
+  [`86939ac`](https://github.com/mfozmen/littlepress-ai/commit/86939acfe12276581bd8762d81397a4bc6ba5b1e))
+
+Reported after the credit-balance error retry: pressing Enter at the "Press Enter to retry" prompt
+  crashed the REPL with a TypeError from the Anthropic SDK ("Could not resolve authentication
+  method"). The loop was re-reading the secret every iteration, so Enter returned "", and an empty
+  api_key string was handed to anthropic.Anthropic() which refuses empty auth before even forming
+  the HTTP request.
+
+Split the logic:
+
+- Outer loop (_read_and_validate_key) reads a NEW secret only when the key itself is rejected
+  (KeyValidationError). - Inner loop (_retry_validation) handles the same-key retry used by
+  TransientValidationError — the user hits Enter and we ping again with the *same* api_key. Ctrl-D
+  at that prompt aborts cleanly.
+
+Two new tests pin the behaviour: the same key is validated twice on Enter-retry, and Ctrl-D aborts
+  without ever sending an empty string to the validator.
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **repl**: Strip surrounding quotes from /load paths
+  ([#24](https://github.com/mfozmen/littlepress-ai/pull/24),
+  [`a3e0434`](https://github.com/mfozmen/littlepress-ai/commit/a3e043467e3a07df7352ced3c05aba23e5f409dc))
+
+* fix(repl): strip surrounding quotes from /load paths
+
+Reported: \`/load \"C:\Users\fahri\Downloads\YAVRU DINOZOR 1.pdf\"\`
+
+returned \"File not found\" because the REPL is not a shell — the quote characters came through
+  literally and Path() looked for a file whose name started with a double-quote.
+
+Strip a single matching pair of surrounding \" or ' before calling Path(). Two regression tests: a
+  path wrapped in double quotes and one wrapped in single quotes both resolve to a loaded draft
+  instead of a not-found error.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* docs: plan drag-and-drop PDF auto-load
+
+Record the next UX ask from the maintainer: when the user drags a PDF onto the terminal window, the
+  shell types out the file path. Detect that case (non-slash line that resolves to a real .pdf) and
+  route it through _cmd_load automatically so the user doesn't have to type /load first. Reuses
+  _unquote from PR #24.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Chores
+
+- Drop the legacy 'python build.py' entry point
+  ([#38](https://github.com/mfozmen/littlepress-ai/pull/38),
+  [`2b01a6a`](https://github.com/mfozmen/littlepress-ai/commit/2b01a6a22fe11c2a9f789db38bf34d913af7caac))
+
+* chore: drop the legacy ``python build.py`` entry point
+
+The ``python build.py book.json`` path predates the agent flow. Every current user reaches for
+  ``littlepress draft.pdf`` — nobody hand-authors a book.json any more — and the legacy CLI was only
+  held in place by its own test and its own example fixtures.
+
+Deleted:
+
+- ``build.py`` (the standalone CLI entry) and ``tests/test_build.py`` (smoke test that drove it). -
+  ``examples/book.json`` + placeholder PNGs. Only ``test_build.py`` referenced them. - README's
+  "Usage — direct renderer (still works)" section and the ``book.json`` schema block. The shape is
+  internal now; users hit it through the agent, never typed by hand. - CLAUDE.md references to
+  ``build.py`` and the old Commands block (now shows ``littlepress`` as the primary entry).
+  Project-layout list refreshed with the shape the code has actually grown into (cover templates,
+  collect_input_pdf, next_version_number, etc.).
+
+Kept:
+
+- ``src/schema.py::load_book`` as a library API. Unused inside the project after this PR, but a
+  thin, well-tested JSON → ``Book`` reader is the right shape for an external caller that wants to
+  parse a ``book.json`` — cheap to keep, easy to delete later if that never materialises.
+
+All 413 tests still pass; no production-code behaviour moved.
+
+BREAKING CHANGE: ``python build.py book.json`` no longer exists. The only supported entry point is
+  the ``littlepress`` command, which drives the interactive agent flow. Any automation relying on
+  the legacy path needs to be rewritten to feed a PDF through the agent.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* ci: drop build.py from sonar.sources
+
+The SonarCloud scan on PR #38 failed with "The folder 'build.py' does not exist" because the legacy
+  entry point got deleted but sonar-project.properties still listed it under sonar.sources. Narrow
+  the paths to ``src`` only — that's the whole production tree now.
+
+* build: drop ``examples`` from hatch sdist include list
+
+Companion to the ``examples/`` directory deletion in this same PR. Hatchling is tolerant of missing
+  include paths, so this wasn't a runtime blocker — just stale config now that the directory is
+  gone.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **release**: 1.0.2 [skip ci]
+  ([`3cb7491`](https://github.com/mfozmen/littlepress-ai/commit/3cb7491a4a93c354a2dcbbf63f5a12d308e20b59))
+
+- **release**: 1.0.2 [skip ci]
+  ([`0876c0e`](https://github.com/mfozmen/littlepress-ai/commit/0876c0e2b01ca2931a4c5ede2738baa6fb81fe05))
+
+- **release**: 1.0.2 [skip ci]
+  ([`95e2a6c`](https://github.com/mfozmen/littlepress-ai/commit/95e2a6c8c37e9d9f02ae5a52dc0d2a8d47121767))
+
+- **release**: 1.1.0 [skip ci]
+  ([`7e00bf5`](https://github.com/mfozmen/littlepress-ai/commit/7e00bf5c553083d628ca7d4924ef1dd8f3caa512))
+
+- **release**: 1.1.0 [skip ci]
+  ([`0af9b30`](https://github.com/mfozmen/littlepress-ai/commit/0af9b3031066e4e84eca80847c586c328b749f6a))
+
+- **release**: 1.1.0 [skip ci]
+  ([`8fbde37`](https://github.com/mfozmen/littlepress-ai/commit/8fbde37198f247b8b868de2411eac004b75280c4))
+
+- **release**: 1.1.0 [skip ci]
+  ([`96cbe1a`](https://github.com/mfozmen/littlepress-ai/commit/96cbe1a35118f805af32357e6a2007ebf8aaa5ba))
+
+- **release**: 1.1.0 [skip ci]
+  ([`7fd4e3c`](https://github.com/mfozmen/littlepress-ai/commit/7fd4e3cab8f27ced0587d7495b935327c9f9fe13))
+
+- **release**: 1.1.0 [skip ci]
+  ([`3e223c7`](https://github.com/mfozmen/littlepress-ai/commit/3e223c746dc0d5923aa9cd149edb8b87b492dd65))
+
+- **release**: 1.1.0 [skip ci]
+  ([`748e0b5`](https://github.com/mfozmen/littlepress-ai/commit/748e0b54b4a6e0d5314d78a6e5c4d618b36d45d9))
+
+- **release**: 1.1.0 [skip ci]
+  ([`9cc8709`](https://github.com/mfozmen/littlepress-ai/commit/9cc87096b4861db28f97bfd89b646f346d2d53da))
+
+- **release**: 1.1.0 [skip ci]
+  ([`45ca1d1`](https://github.com/mfozmen/littlepress-ai/commit/45ca1d1d9e8fdbf156d00b90d2bfa12bb95e3571))
+
+- **release**: 1.1.0 [skip ci]
+  ([`410704f`](https://github.com/mfozmen/littlepress-ai/commit/410704f6d07f31dc7c471a71677b08d657dc2844))
+
+- **release**: 1.1.0 [skip ci]
+  ([`e53cab0`](https://github.com/mfozmen/littlepress-ai/commit/e53cab0e77c4de6ff3733279309939bf6144a7b0))
+
+- **release**: 1.1.0 [skip ci]
+  ([`999d89c`](https://github.com/mfozmen/littlepress-ai/commit/999d89ce1ab9db043a1322190cb08fbcb8a06358))
+
+- **release**: 1.1.0 [skip ci]
+  ([`b991923`](https://github.com/mfozmen/littlepress-ai/commit/b991923bcf065147a1d0e0cc3bee04b5b1fc69b9))
+
+- **release**: 1.1.0 [skip ci]
+  ([`270c679`](https://github.com/mfozmen/littlepress-ai/commit/270c6794527e8d284ae8c1d339e614f43090bb54))
+
+- **release**: 1.1.0 [skip ci]
+  ([`801b8d1`](https://github.com/mfozmen/littlepress-ai/commit/801b8d1866937ceaa049d0663feb028d0e4f0b06))
+
+- **release**: 1.1.0 [skip ci]
+  ([`0b4b9ae`](https://github.com/mfozmen/littlepress-ai/commit/0b4b9aeb8d2ff8108e99beea1d883dfc8aed3732))
+
+- **release**: 1.1.0 [skip ci]
+  ([`5facc08`](https://github.com/mfozmen/littlepress-ai/commit/5facc08c8bc2fe5b08a366347b3ca5cd5a367131))
+
+- **release**: 2.0.0 [skip ci]
+  ([`f7b7f08`](https://github.com/mfozmen/littlepress-ai/commit/f7b7f08a85e31394ace090997ba6b363503e6062))
+
+- **release**: 2.0.0 [skip ci]
+  ([`774f67e`](https://github.com/mfozmen/littlepress-ai/commit/774f67e3436ca8ef2277ed88ac564bfafbcb86c1))
+
+- **release**: 2.0.0 [skip ci]
+  ([`7d659cb`](https://github.com/mfozmen/littlepress-ai/commit/7d659cb8c7ce1d6fd71ec9a75749c93f1b7d9d92))
+
+- **release**: 2.0.0 [skip ci]
+  ([`5ba289c`](https://github.com/mfozmen/littlepress-ai/commit/5ba289c5e7126cedabc2a368d104ef2d225e7644))
+
+### Continuous Integration
+
+- Retry release push so a racing merge doesn't skip a version bump
+  ([#21](https://github.com/mfozmen/littlepress-ai/pull/21),
+  [`b453168`](https://github.com/mfozmen/littlepress-ai/commit/b453168bb43a8fff6200017b692dd9ea52919200))
+
+* ci: retry release push so a racing merge doesn't skip a version bump
+
+The Release workflow's PSR push failed with a non-fast-forward rejection when a second commit landed
+  on main while PSR was bumping the version. Both the rename merge (feat!:) and the PLAN.md
+  follow-up arrived within seconds; the first run couldn't push because the second had already
+  updated main, and the second run analysed only docs: so no bump fired. Net effect: the feat!:
+  rename never got a v1.0.0 tag.
+
+Split the release step into two: PSR bumps and tags locally with push=false; a shell step pulls
+  --rebase and pushes with up to five retries. Next push picks up the accumulated feat!: and cuts
+  the major release it deserved.
+
+Also add the "next up" section of docs/PLAN.md for the deferred multi-provider chat()
+  implementations (Gemini / OpenAI / Ollama real chat + turn) — one PR per provider when we get to
+  them.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* ci: move release tag to HEAD after each rebase so push doesn't orphan it
+
+Addresses review feedback on #21.
+
+PSR creates the release tag on its local commit C. When the retry loop pulls --rebase and the remote
+  had commits to rebase onto, C becomes C' with a new SHA — but the tag still points at C. git push
+  --follow-tags only pushes annotated tags reachable from the pushed ref, so the orphaned tag stays
+  on the runner and never reaches the remote. Main would advance with the version bump + CHANGELOG
+  but the release tag would be gone.
+
+Capture the tag name up front (git tag --points-at HEAD) and re-point it with git tag -f "$TAG" HEAD
+  after each pull --rebase. --follow-tags then has a reachable target and the tag ships with the
+  commit.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **release**: Manual workflow_dispatch, reset version after broken auto-bump cycles
+  ([#42](https://github.com/mfozmen/littlepress-ai/pull/42),
+  [`4c4b90e`](https://github.com/mfozmen/littlepress-ai/commit/4c4b90e3db066d52d97526acccfe3952f64dd7cc))
+
+* ci(release): switch to manual workflow_dispatch with force input
+
+The push-on-main + ``push: false`` PSR configuration was broken in two ways:
+
+1. ``push: false`` doesn't just skip the git push — it also tells PSR not to create the VCS release.
+  Every run reported "No vcs release will be created because pushing changes is disabled", so tags
+  and GitHub Releases never appeared even though the bump commit landed on main. The last real
+  release on GitHub stayed at v1.0.1.
+
+2. The manual push step had a rebase-retry loop for a race the ``concurrency: release-main +
+  cancel-in-progress: false`` group already prevents. Release runs are serialised on main, so a
+  second push can never interleave with an active release run.
+
+Collapse the workflow to a single PSR step with ``push: true`` — PSR writes the bump commit, creates
+  the tag, pushes both, and cuts the GitHub Release in one pass. Trigger is now
+  ``workflow_dispatch``-only: releases happen when a human decides they should happen, not on every
+  main-branch push. The ``force`` input (patch/minor/major/prerelease/empty) lets the maintainer
+  override PSR's own calculation — needed at least once, to cut v1.1.0 past the stale ``BREAKING
+  CHANGE:`` footer left over from the legacy build.py removal.
+
+Trigger from the gh CLI: ``gh workflow run release.yml -f force=minor``. Or from the Actions UI (Run
+  workflow dropdown).
+
+* chore: reset version and CHANGELOG after botched auto-bump cycles
+
+PSR auto-bumped pyproject.toml to 2.0.0 on the first main-branch push after PR #38 landed a
+  ``BREAKING CHANGE:`` footer, but because ``push: false`` prevented the VCS release from being cut,
+  the corresponding tag and GitHub Release never appeared — the last release on GitHub is still
+  v1.0.1. Every subsequent ``feat:`` merge repeated the same dead bump (2.0.0 → 2.0.0, no VCS
+  release) and nothing advanced past v1.0.1 externally.
+
+Rather than tag and release v2.0.0 retroactively, reset pyproject to the last real release (1.0.1)
+  and drop the auto-generated v2.0.0 section from CHANGELOG.md (1202 lines of notes for a release
+  that never actually shipped). The next manual dispatch of the Release workflow with
+  ``force=minor`` will cut v1.1.0, bundling everything that's landed since v1.0.1 into a single
+  minor bump — appropriate for a tool with a single current user, where the breaking-change call on
+  build.py removal wasn't load-bearing.
+
+After v1.1.0, PSR's last-tag reference point is fresh and the old BREAKING CHANGE footer no longer
+  controls future bumps — normal feat/fix/perf commits drive patch/minor releases from there.
+
+* ci: address PR review for release workflow reset
+
+Two sub-threshold findings from the PR review:
+
+1. Default ``force: \"\"`` on the dispatch was a footgun for the very first run — ``git log
+  v1.0.1..HEAD`` still contains PR #38's ``BREAKING CHANGE:`` footer, and PSR with no force would
+  walk right past it and compute v2.0.0 again, re-creating the problem this PR is meant to fix.
+  Default is now ``minor`` so a naive dispatch-with-defaults produces v1.1.0 instead. The empty
+  option is dropped from the choices — the dispatcher has to pick a level intentionally.
+
+2. ``upload_to_pypi`` and ``upload_to_release`` are PSR v7/v8 keys that v9 silently ignores at this
+  location (the rename moved them under ``[tool.semantic_release.publish]`` as
+  ``upload_to_vcs_release``). Harmless today — the behaviour we want (GitHub Release yes, PyPI no,
+  no build) is already the v9 default — but stale config that looks load-bearing invites confusion.
+  Dropped the dead keys plus the empty ``build_command`` and replaced the old comment with one that
+  names what's actually going on.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+### Documentation
+
+- Add layout-variety nudge to the plan
+  ([`91738f8`](https://github.com/mfozmen/littlepress-ai/commit/91738f8eb7275b6f20aea57b07331a0f506399ea))
+
+Yavru Dinozor test had a tidy but over-regular rhythm. The skill already says "no same layout 3 in a
+  row, cap image-full at 30%", but the agent never sees that — .claude/skills/ is Claude Code
+  context, not LLM system prompt. Fix idea noted in the plan: bake the rhythm rules into
+  choose_layout's tool description and pass neighbour context in the tool input.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Add overwrite + input-folder items to plan
+  ([`088d4b7`](https://github.com/mfozmen/littlepress-ai/commit/088d4b70791608d9ee858ea878eda1d7218209ff))
+
+End-to-end feedback turned up two housekeeping gaps:
+
+1. Every render silently overwrites the previous PDF (same slug, same path). Rendering twice loses
+  the first copy with no warning — plan calls for versioned filenames alongside a stable "latest".
+  2. Draft PDFs live wherever the user dropped them; memory keys off that absolute path. Moving or
+  deleting the source breaks the saved session. Plan is to copy the PDF into .book-gen/input/ on
+  first load and retarget source_pdf there.
+
+Both land at the top of "Next up" because they affect data safety.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Capture four issues from the first end-to-end test
+  ([`1fc14da`](https://github.com/mfozmen/littlepress-ai/commit/1fc14daf2230a77195a244aa6613cc181ba0d051))
+
+The Yavru Dinozor test surfaced a handful of concrete gaps in the post-render UX and the cover page.
+  Record them in Next up so the next PR has a clear target:
+
+- Cover layout is cramped — the half-page split between title band and drawing makes both feel
+  squeezed. Need a full-bleed / framed template pair. - Agent asks the user to design the layout
+  rhythm; it should propose a rhythm itself and just ask to approve. - After render_book the user
+  had to hunt for the output files — the agent should print the absolute paths and open the A5 in
+  the system viewer. - AI cover generation as a new tool (ImageProvider + generate_
+  cover_illustration), opt-in and priced.
+
+Per-page illustration generation moves up into the deferred section (follow-up to cover generation).
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Drop the surprise blank pages from the plan
+  ([`96a7719`](https://github.com/mfozmen/littlepress-ai/commit/96a7719855df053cce03f54f2e1ae91cd88895bd))
+
+Maintainer spotted a blank page in the first end-to-end output. Two culprits in src/builder.py: a
+  blank after the cover ("inside-front cover left blank" — a real-bookbinding convention) and a
+  blank before the back cover when the page count is odd. For a short children's book these both
+  read as bugs — imposition.impose_a5_to_a4 already pads to multiples of 4 when a booklet is
+  requested, so the pre-back-cover pad is redundant.
+
+Listed in Next up at priority #1 — quickest win with user-visible impact.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Plan removing the legacy ``python build.py`` entry point
+  ([`2e2aba2`](https://github.com/mfozmen/littlepress-ai/commit/2e2aba28d741dd810b57b4f2470b98251cd6818a))
+
+User question on PR #37: "who will use this?" about the README's "Usage — direct renderer (still
+  works)" section. Good catch — nobody does. The flow predates the agent pivot; every current user
+  reaches for ``littlepress draft.pdf``. ``build.py``, the README block, and ``tests/test_build.py``
+  are all dead weight.
+
+Added as a cleanup item to Next up so it can ship as its own focused PR (deletes a file, a README
+  section, and probably ``examples/book.json`` + placeholder PNGs).
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Trim shipped "don't overwrite previous renders" from plan
+  ([`2066444`](https://github.com/mfozmen/littlepress-ai/commit/20664445c7e818d796eecab596dab399c8cab55a))
+
+Versioned renders (<slug>.vN.pdf snapshots alongside the stable <slug>.pdf) shipped in #30. Plan had
+  the item at the top of Next up; trim it so the first entry points at the next unfinished piece
+  ("Collect user PDFs in .book-gen/input/").
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- Mirror input PDFs so memory survives file moves
+  ([#31](https://github.com/mfozmen/littlepress-ai/pull/31),
+  [`b58dac3`](https://github.com/mfozmen/littlepress-ai/commit/b58dac3fe51c7489209de43fc39d4aa549ee1535))
+
+* feat: mirror input PDFs into .book-gen/input/ so memory survives file moves
+
+Today the draft PDF's ``source_pdf`` and persisted memory both key off whatever absolute path the
+  user dropped the PDF at — Downloads, Desktop, a colleague's shared folder. Deleting or moving that
+  file means the next run can't match what's saved; the session is gone.
+
+collect_input_pdf() in src/draft.py copies the PDF into
+  <session-root>/.book-gen/input/<stem>-<sha256[:8]>.pdf and returns that in-repo path. Both /load
+  and the CLI bootstrap route through the helper before ingesting the PDF, so Draft.source_pdf and
+  memory both key off a path we control. The user's Downloads folder can be cleaned without breaking
+  the session.
+
+Naming uses a content hash (first 8 hex of sha256) so: - Identical bytes always resolve to the same
+  in-repo path. Reruns are idempotent; memory matches. - Different bytes with the same basename (two
+  drafts both called draft.pdf) get distinct in-repo paths. Their memories stay separate instead of
+  silently cross-wiring.
+
+The helper also no-ops when the caller points at a path already under .book-gen/input/ — /load
+  .book-gen/input/draft-<hash>.pdf doesn't recurse or copy onto itself.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix: address PR review for collect_input_pdf
+
+- Migrate legacy memory on first relaunch. Users with a saved session from before this feature have
+  source_pdf = the original arg path; the CLI's memory lookup now uses the hashed in-repo path,
+  which wouldn't match. Silent discard of the saved state. On a first-lookup miss we fall back to
+  the pre-collection path and, if that hits, re-save with the new in-repo path so subsequent
+  launches skip the fallback.
+
+- Extend the hash from 8 to 16 hex chars. 32-bit namespace crosses 50% collision probability at ~77k
+  distinct PDFs — fine for a single user today, but the hedge to 64 bits is effectively free and
+  makes the scheme robust if .book-gen/input/ ever gets shared across projects or the tool grows
+  into batch workflows.
+
+- Clarify collect_input_pdf's idempotency contract in the docstring. The same-hash-same-path
+  invariant depends on the directory being owned by Littlepress — a user hand-editing a file in
+  there breaks the assumption. Say so explicitly instead of hiding it behind "same hash ⇒ same
+  bytes".
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Poster cover template + select-cover-template skill
+  ([#35](https://github.com/mfozmen/littlepress-ai/pull/35),
+  [`38b10ef`](https://github.com/mfozmen/littlepress-ai/commit/38b10effbb0d13f0c6e2bd781386d2f6a43a4a02))
+
+* feat: poster cover template + select-cover-template skill
+
+Adds the third cover template the plan called for:
+
+- ``poster`` is type-only — huge centred title, author along the bottom, no drawing. Intended for
+  books whose child-author didn't make a cover illustration, where full-bleed and framed both
+  produce awkward empty illustration holes. - set_cover learns that poster doesn't need a page
+  drawing: its ``page`` argument becomes optional when ``style='poster'``. Every other style still
+  requires a page with an image. - VALID_COVER_STYLES + the tool schema enum expand accordingly; the
+  renderer dispatcher branches to _draw_cover_poster. - Shrink-to-fit already shipped for the two
+  existing templates is reused for poster so long English titles stay on the page.
+
+And the decision mechanism the plan asked for, mirroring the select-page-layout skill:
+
+- .claude/skills/select-cover-template/SKILL.md encodes the rules for picking between the three
+  templates — no drawing → poster, long title + busy drawing → framed, dramatic illustration →
+  full-bleed, quiet / small-figure → framed, default → full-bleed. CLAUDE.md references it so the
+  agent consults the skill before calling set_cover.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix: address PR review for poster template + skill
+
+Five findings, all valid:
+
+1. Skill / code drift on the title floor. The skill documented a 16-pt minimum; the code capped at
+  18-pt. Neither was right — see #3. Replaced with COVER_TITLE_MIN_READABLE = 14 in src/config.py,
+  referenced by the skill as an *advisory* threshold (below this, the skill nudges you to a
+  different template).
+
+2. set_cover with style='poster' + bogus page silently accepted out-of-range pages. Moved the page
+  validation before the style branch so an invalid page is rejected regardless of whether poster
+  will use it. Poster still ignores a valid page, but now says so in the reply.
+
+3. COVER_POSTER_TITLE_SIZE = 64 hit _fit_title_size's 18-pt floor for long titles — at which point
+  the 18-pt text was still wider than the page. Root cause: the floor was a hard cap that could
+  still clip. Dropped the floor entirely; _fit_title_size now shrinks proportionally so fit is
+  guaranteed by math. Lowered the preferred poster size from 64 to 52 so the shrink-ratio isn't
+  absurd. Added a regression test that captures the actual drawString font size and asserts the
+  rendered width stays inside the page.
+
+4. draw_cover's 'else: full-bleed' fallback contradicted its own docstring. Replaced with a raise on
+  unknown styles so a direct Book-with-typo bypasses surface instead of rendering as the wrong
+  cover.
+
+5. Skill red-flag about not picking poster for unpolished drawings had no matching decision rule.
+  Promoted it to an explicit rule: "A cover drawing exists → never pick poster."
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **agent**: Ai cover generation via OpenAI gpt-image-1
+  ([#41](https://github.com/mfozmen/littlepress-ai/pull/41),
+  [`526d95d`](https://github.com/mfozmen/littlepress-ai/commit/526d95da861704249ec3d992cdee6fc301ecfaf0))
+
+* feat(agent): AI cover generation via OpenAI gpt-image-1
+
+Optional ``generate_cover_illustration`` tool for when the child didn't draw a cover (or wants a
+  different one). The tool is registered only when the active provider is OpenAI and a key is
+  available — on other providers the agent doesn't see it, so there's no 401-on-first-use surprise.
+
+New files:
+
+- ``src/providers/image.py`` — ``ImageProvider`` protocol and ``OpenAIImageProvider`` (model
+  ``gpt-image-1``). Lazy SDK import so Ollama-only users don't need ``openai`` installed. All
+  failures (auth, rate, policy filter, empty response, missing SDK) surface as a single
+  ``ImageGenerationError`` the tool layer reports cleanly.
+
+- ``src/agent_tools.py::generate_cover_illustration_tool`` — takes a prompt + quality tier +
+  optional cover style. Shows the prompt and an estimated cost (low ≈ $0.02, medium ≈ $0.07, high ≈
+  $0.19 per portrait 1024x1536) in a y/n confirmation before any API call; on decline, nothing is
+  spent and cover state is untouched. On approval the PNG lands under
+  ``<session_root>/.book-gen/images/cover-<hash>.png`` and the draft's ``cover_image`` points at it.
+
+- ``tests/test_image_provider.py`` — 8 tests covering happy path, arg forwarding, parent-dir
+  creation, auth/API error wrapping, empty- response handling, missing-SDK handling, and protocol
+  membership.
+
+- ``tests/test_repl_tools.py`` — 3 integration tests for the REPL's conditional tool registration
+  (OpenAI-with-key yes, other providers no, OpenAI-without-key no).
+
+- 11 new unit tests in ``tests/test_agent_tools.py`` for the tool itself: draft requirement, prompt
+  / price confirmation, decline path,
+
+provider call, ``.book-gen/images/`` output location, style application, invalid style / quality
+  rejection, provider-error surfacing, empty-prompt rejection, schema shape.
+
+README, CLAUDE.md, and docs/PLAN.md updated to describe the new tool and move the "AI cover
+  generation" item from Next-up to Shipped.
+
+* fix(providers): address PR review for image provider and tool surface
+
+Four findings from the PR #41 review:
+
+1. Tool description lacked a preserve-child-voice invariant. CLAUDE.md names src/agent_tools.py as
+  the place the rule is enforced; the description now explicitly forbids paraphrasing the child's
+  page text into the image prompt ("PRESERVE-CHILD-VOICE: describe the cover scene in your own words
+  […] do NOT quote or paraphrase the child's page text"). Also pinned by a new test
+  (test_generate_cover_illustration_description_guards_child_voice).
+
+2. Non-atomic PNG write contradicted the docstring's "atomically" promise. Added
+  ``_atomic_write_bytes`` helper that writes to a sibling ``.tmp`` file and ``os.replace``s into the
+  final name, matching the pattern used by memory.py / draft.py::atomic_copy. Also wrapped
+  ``base64.b64decode`` so malformed base64 (binascii.Error) surfaces as ImageGenerationError rather
+  than escaping raw to the agent loop.
+
+3. OpenAI client had no timeout — the SDK default (~600 s) would hang the REPL on a network drop.
+  Added an explicit 120 s timeout at client construction (long enough for quality="high" renders
+  that legitimately take 30-90 s, short enough that a dead connection reaches the user promptly).
+
+4. Error classification used defensive getattr fallbacks that were dead code (the openai SDK is a
+  pinned dep), and lacked a connection/timeout branch. Switched to direct imports of
+  AuthenticationError / PermissionDeniedError / APIError / APIConnectionError / APITimeoutError
+  (matching validator.py::_check_openai), and split the network branch above APIError so a
+  connectivity failure reports "could not be reached" instead of looking like a policy rejection.
+
+New tests (4): - timeout kwarg passed to OpenAI client constructor - APIConnectionError wraps into a
+  network-specific ImageGenerationError - malformed base64 wraps into ImageGenerationError -
+  mid-write os.replace failure leaves no truncated file at final path
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+- **agent**: Auto-open the rendered A5 and surface absolute paths
+  ([#29](https://github.com/mfozmen/littlepress-ai/pull/29),
+  [`d3767c3`](https://github.com/mfozmen/littlepress-ai/commit/d3767c3c37ad9f3d436369db908cbb8de45e1e10))
+
+* feat(agent): auto-open the rendered A5 and surface absolute paths
+
+Post-test feedback: after render_book the user had to hunt through the filesystem for the output.
+  Rendered book opens itself now.
+
+- render_book_tool hands the finished A5 PDF to the platform's default PDF viewer via a new
+  open_in_default_viewer helper (os.startfile on Windows, `open` on macOS, `xdg-open` elsewhere).
+  Fire-and-forget; a viewer failure is silently swallowed because the file is on disk and the agent
+  reply already includes the path. - The A4 booklet is a print artefact — the tool does NOT open it.
+  Only the A5 reading copy pops up. - out_path is now resolved to an absolute path before the reply,
+  so the agent always tells the user the full location, not a cwd-relative one. - Injectable
+  open_file parameter on render_book_tool so tests can assert on calls without spawning real
+  viewers, and so a future "no auto-open" mode is one-line away. - tests/conftest.py auto-mocks
+  open_in_default_viewer for the whole suite — a full pytest run used to spawn a PDF viewer per
+  integration render.
+
+Five new tests pin: absolute paths in message, A5 opens, booklet does not, viewer failure is
+  non-fatal, opener is not called when build_pdf errors out. 306 tests green; src/agent_tools.py at
+  97% (the only gap is the platform-dispatch helper itself, trivial fire-and-forget dispatch).
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix(agent-tools): address PR review for auto-open
+
+- Detach the xdg-open/open child with start_new_session=True so it doesn't become a zombie waiting
+  on the Python process to reap it. - Only claim "opened in your viewer" when the opener actually
+  succeeded; otherwise tell the user to open the file manually so the message never lies about what
+  happened. - README Status line now mentions the auto-open behaviour (and that the booklet
+  intentionally doesn't pop up — it's a print artefact). - Cover the platform dispatch in
+  open_in_default_viewer directly, working around the conftest auto-mock via a module-load-time
+  import binding. Gets src/agent_tools.py back to 100% coverage.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **agent**: Layout rhythm awareness in choose_layout / propose_layouts
+  ([#34](https://github.com/mfozmen/littlepress-ai/pull/34),
+  [`f160ed2`](https://github.com/mfozmen/littlepress-ai/commit/f160ed2b88f5f0a1b54b6a0ee2661e4f1417c320))
+
+* feat(agent): bake rhythm rules into layout tools + echo neighbours
+
+The first end-to-end test (Yavru Dinozor) produced a tidy but over-regular rhythm — full / top /
+  bottom / full / top / bottom — that looked varied in a table but monotonous on paper. The rules
+  that'd prevent this live in .claude/skills/select-page-layout, but the LLM never sees the skill at
+  decision time.
+
+Fix: lift the rhythm rules into both layout tools' descriptions
+
+(no three-in-a-row, cap image-full at ~30 %, alternate top/bottom). Every time the agent calls
+  choose_layout or propose_layouts, the rules are in context.
+
+Plus a feedback loop: choose_layout's reply now lists the two pages before and after the one that
+  just changed. The agent doesn't need a read_draft round-trip to see whether it's about to repeat
+  itself — the adjacent layouts arrive with the confirmation.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* test(agent): tighten rhythm-awareness tests from PR #34 review
+
+Three test-coverage gaps the review flagged:
+
+1. The neighbour-summary test had pages 1, 3, 5 all seeded with image-top, so ``"image-top" in
+  result`` passed whether page 3 got mutated or not. Seed every page with a distinct layout and
+  assert the ``p<n>=layout`` signature for each position, including the post-mutation value for the
+  page that just changed.
+
+2. The page-number assertion was ``"2" in result and "4" in result`` — any response containing those
+  digits passed, even a format refactor that dropped the ``p<n>=`` prefix. Replaced with an
+  assertion on the exact ``p2=…`` / ``p4=…`` tokens plus the ``(this page)`` marker.
+
+3. No boundary coverage for _neighbour_summary. Added three unit tests via choose_layout: first-page
+  (window clamps, no p0/p-1), last-page (no p4 on a 3-page book), single-page (just the page itself,
+  no ghost neighbours).
+
+Production code unchanged — these are tests-only tightenings plus new boundary tests.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **agent**: Propose_layouts tool for whole-book rhythm approval
+  ([#33](https://github.com/mfozmen/littlepress-ai/pull/33),
+  [`b0eee37`](https://github.com/mfozmen/littlepress-ai/commit/b0eee3780099b089ed1d35f26491536b701f4b4e))
+
+Per-page choose_layout is awkward for the "settle on a rhythm" phase: the agent has to ask the user
+  to approve N individual decisions when what they really want to see is the full rhythm on one page
+  and say yes or no to the whole thing.
+
+propose_layouts takes every page in one call, validates the batch as a unit (out-of-range,
+  duplicates, invalid layout name, image-layout on an imageless page — all rejected before prompting
+  so we never half-apply), renders a readable summary, and flips the whole book on a single y/n. If
+  the user declines, nothing changes and the agent can adjust or fall back to choose_layout for
+  surgical tweaks.
+
+Tool registered in Repl._build_agent alongside the per-page tool; both stay available so the agent
+  can pick the right one per phase.
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **pages**: Portrait-frame and title-band-top cover templates
+  ([#40](https://github.com/mfozmen/littlepress-ai/pull/40),
+  [`a7d5a4e`](https://github.com/mfozmen/littlepress-ai/commit/a7d5a4e67438a27c2c992e8c56f060e5df66bb9b))
+
+* feat(pages): portrait-frame and title-band-top cover templates
+
+Two new cover templates, completing the five-template set the plan called for (spine-wrap is
+  deferred — multi-page cover support):
+
+- ``portrait-frame``: the drawing sits inside a visible rounded-rect border (like a framed picture
+  on a wall), title centred above the frame, author below it. Good for quiet single-figure
+  illustrations that benefit from a stage — the border prevents the drawing from looking lonely on a
+  full page.
+
+- ``title-band-top``: a warm-toned coloured band at the top holds the title; the drawing fills the
+  remaining space below; author at the bottom. More assertive than framed — the colour band lifts
+  the title off the page, especially useful when a long title sits over a busy illustration that
+  would swallow plain type.
+
+Both templates use _fit_title_size for shrink-to-fit. The select-cover-template skill gains two new
+  decision rules: quiet/small-figure → portrait-frame, long-title + busy drawing → title-band-top.
+
+Also: .review_tmp/ added to .gitignore (stale files from code-review
+
+agent).
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix(pages): address PR review for portrait-frame and title-band-top
+
+Four findings:
+
+1. portrait-frame was missing subtitle rendering — every other image-carrying template renders it.
+  Added subtitle between the title and the frame, with the frame_top computed from the subtitle
+  baseline when present. New test pins it.
+
+2. title-band-top's subtitle could overflow below the coloured band when the title shrinks (long
+  title → smaller title_size → subtitle baseline drops past band bottom). Added a clamp: if the
+  candidate subtitle y-coordinate would exit the band, the subtitle is silently skipped rather than
+  rendered over the drawing without the coloured background.
+
+3. Skill frontmatter still said "(full-bleed, framed, poster)" and the "Goal state" section listed
+  portrait-frame / title-band-top as future work. Updated the description to name all five templates
+  and trimmed the goal section to only spine-wrap.
+
+4. Decision-tree gap for long title (>32 chars) + quiet drawing. portrait-frame's narrower width
+  (inset border) would shrink the title further; added rule 4: long title + quiet drawing → framed
+  (not portrait-frame). portrait-frame demoted to rule 5 with an explicit "short title" qualifier.
+
+* refactor(pages): drop dead subtitle_bottom store in title-band-top
+
+Sonar flagged `subtitle_bottom` in `_draw_cover_title_band_top` as an unused local (rule
+  python:S1854). It was copied from `portrait-frame` where the variable feeds `frame_top`; in
+  `title-band-top` the image rect is driven by `band_bottom` instead, so the assignment is dead.
+  Pass `candidate_y` directly to `drawString` and remove the shadow var.
+
+Also adds `test_cover_title_band_top_renders_subtitle` pinning the subtitle contract for this
+  template — the existing suite exercised the title and author but not the subtitle branch.
+
+* fix(pages): address second-round PR review for new cover templates
+
+Six findings from PR #40's second review pass:
+
+1. Skill decision tree had two rules numbered `5` after the previous fix inserted rule 4 without
+  cascading the renumber. Downshifted the last three to 6 / 7 / 8 so "first match wins" ordering is
+  unambiguous.
+
+2. `_draw_cover_portrait_frame` lost its descender clearance on the no-subtitle path. The earlier
+  fix collapsed `frame_top` to `title_y - 4*mm` when no subtitle, losing the `title_size * 0.35`
+  breathing room that full-bleed / framed both preserve. Seed `subtitle_bottom` with `title_y -
+  title_size * 0.35` so the frame stays clear of 'g'/'y'/'p' descenders regardless of subtitle.
+
+3. `VALID_COVER_STYLES` block comment listed only three templates; added bullets for
+  `portrait-frame` and `title-band-top`.
+
+4. CLAUDE.md listed only three templates in two places (architecture bullet and skill description);
+  brought both in line with the five we ship.
+
+5. `COVER_BAND_H` comment claimed it was used by `framed`; actually `title-band-top` is the second
+  consumer, and `framed` doesn't use it at all. Updated the comment to reflect reality.
+
+6. `_draw_cover_title_band_top` subtitle clamp was dead code with inverted physics in its rationale:
+  shrinking the title size makes `candidate_y` larger (subtitle moves up), not smaller. The guard
+  would only trip above ~57pt, but `_fit_title_size` caps at 34pt and only shrinks. Removed the
+  guard and rewrote the comment to state what the geometry actually guarantees.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **pages**: Two cover templates (full-bleed and framed)
+  ([#32](https://github.com/mfozmen/littlepress-ai/pull/32),
+  [`37aa749`](https://github.com/mfozmen/littlepress-ai/commit/37aa749a4be4fcd2ac9935b6e79b0dab8a55f6a9))
+
+* feat(pages): two cover templates (full-bleed and framed)
+
+The previous draw_cover crammed title + author + image into an upper/lower split — the drawing felt
+  squeezed and the text looked like an afterthought. Replace it with two deliberate templates the
+  agent picks between:
+
+- full-bleed (default): the drawing covers the full page; a translucent band at the bottom carries
+  the title with the author centred inside it. Best for dramatic illustrations where the artwork is
+  the point. - framed: a title band at the top, a letterboxed drawing below, the author in a thin
+  strip along the bottom. Calmer; better when the illustration needs breathing room around it.
+
+Cover carries a new ``style`` field (Cover, Draft, book.json, memory). Defaults to "full-bleed"
+  everywhere so existing book.json files and saved sessions load unchanged. schema.py validates the
+  style on load; agent_tools.set_cover gains an optional ``style`` arg (enum of valid styles in the
+  tool schema, rejected at the tool boundary).
+
+Cover-specific config moved to src/config.py (COVER_TITLE_SIZE, COVER_AUTHOR_SIZE, COVER_BAND_H,
+  COVER_BAND_ALPHA) so visual knobs aren't buried inside pages.py.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix(pages): address PR review for cover templates
+
+- Full-bleed subtitle cleared title descenders. The old formula subtracted COVER_AUTHOR_SIZE + 2mm
+  below the title baseline, which left about 3pt between descenders on 'g'/'y'/'p' at 34pt and the
+  subtitle's cap height. Bumped the gap to title_size * 0.35, which gives ~12pt / 4mm — enough
+  breathing room for descending glyphs. Same formula now in both cover templates.
+
+- Shrink-to-fit long titles. COVER_TITLE_SIZE = 34 made a 25-char English title ("The Brave Little
+  Dinosaur") overshoot A5 width (~420pt). Added _fit_title_size() that scales the font down
+  proportionally when stringWidth exceeds the available width, with an 18pt floor so extreme cases
+  clip rather than shrink to unreadable. Both cover templates call it.
+
+- Validate cover_style at the Draft → Book boundary. Draft.cover_style is a bare str; a typo set by
+  anything other than the set_cover tool (memory restore with a legacy value, manual editing, a
+  future slash command) would silently render as full-bleed. to_book now raises on unknown styles so
+  the REPL path has the same guarantee schema.load_book gives the standalone builder.
+
+- Updated draw_cover docstring to match: by the time we dispatch, the style has been validated by
+  either load_book or to_book, so the else-branch isn't a silent fallback for garbage input.
+
+* docs: plan more cover templates + select-cover-template skill
+
+The two templates shipping in PR #32 (full-bleed, framed) cover the two conventions children's books
+  use most, but more are worth adding: poster (type-only, for when the child didn't draw a cover),
+  portrait-frame (illustration inside a decorative border), title-band-top (colour panel behind
+  title), spine-wrap (for the A4 booklet).
+
+More importantly — *which* template fits *which* book is a judgment call, not a menu for the user to
+  click through. Mirror the select-page-layout pattern: a .claude/skills/select-cover-template/
+  skill encodes the decision rules (title length, tone, image aspect and busyness, whether there's
+  even a cover drawing), and the agent consults it before calling set_cover. Renderer stays stupid;
+  the reasoning lives in one auditable place.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **providers**: Gemini (Google Gen AI) chat + tool use
+  ([#36](https://github.com/mfozmen/littlepress-ai/pull/36),
+  [`eb6dca1`](https://github.com/mfozmen/littlepress-ai/commit/eb6dca1c18d24f113d706ed5c4655b8a50c53c1c))
+
+* feat(providers): Gemini (Google Gen AI) chat + tool use
+
+Second fully-wired provider after Anthropic. Matters because Gemini's free tier (1.5k req/day,
+  tool-use capable) lets users run Littlepress without a credit card — removing the biggest adoption
+  barrier new users hit today.
+
+- GoogleProvider class in src/providers/llm.py with chat() and turn(), lazy-importing google-genai
+  so users on another provider don't need the SDK installed. - Message translation at the boundary:
+  the agent is written against Anthropic's content-block format, so we translate both directions.
+  Assistant tool_use blocks become function_call Parts (role=model); user tool_result blocks become
+  function_response Parts (role=tool), with the function name looked up from the preceding tool_use.
+  Gemini doesn't always return an id on function_call, so we synthesise one so the agent can
+  correlate tool_use with its tool_result. - _check_google validator pings generate_content with the
+  spec's validation model (gemini-2.5-flash), classifying by the SDK's error message / status code:
+  API-key-not-valid or 401/403 → KeyValidationError; everything else (quota, billing, 5xx) →
+  TransientValidationError. Matches the Anthropic contract: resume keeps the saved key on transient,
+  drops it on auth. - google-genai bundled as a default dependency — the whole point is letting new
+  users start without hunting down extras. - find("google") + create_provider now return
+  GoogleProvider when an API key is provided.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix(providers): address PR review for Gemini provider
+
+Six valid findings — five in the provider, one in the validator:
+
+1. Timeout wasn't actually forwarded. The Gen AI SDK default is ~600 s which would freeze the REPL
+  on a flaky network (PR #12 is the Anthropic equivalent). Both chat() and turn() now build their
+  Client via a shared _client() helper that passes http_options=HttpOptions(timeout=60_000). Two
+  regression tests pin the contract (one per entry point).
+
+2. Parallel same-name tool calls lost correlation. The synthesised tool_use id was recorded in
+  Anthropic format but dropped at translation time. Now the id is forwarded via FunctionResponse.id,
+  so two simultaneous read_draft calls return two distinguishable results. Added a
+  parallel-same-name test.
+
+3. chat() crashed on SAFETY-blocked prompts. response.text is a property that *raises* ValueError
+  when there are no text parts, not just returns a falsy value — `or ""` never fired. Compose the
+  reply from candidates[0].content.parts directly via a new _collect_text_from_candidates helper.
+  Added a SAFETY test.
+
+4. finish_reason was ignored. SAFETY / RECITATION / MAX_TOKENS all looked like a clean end_turn, so
+  the user saw silence with no hint why. _gemini_response_to_blocks now surfaces a synthetic text
+  block when finish_reason is non-STOP and there's no real output — stop_reason stays "end_turn"
+  since the agent has no other signal to plumb through.
+
+5. Tool input_schema is forwarded raw to FunctionDeclaration. The current tools only use
+  Gemini-compatible JSON Schema features; the provider docstring now documents the supported subset
+  so a future oneOf / anyOf / $ref user knows to convert up front instead of hitting a call-time
+  failure.
+
+6. Validator auth classification was brittle. An English-only "API key" substring check would miss a
+  localised reword, and a status-alone check would miss Google's 400-with-"invalid key" surface. Now
+  combines isinstance(genai.errors.ClientError) with a 400/401/403 status check, falling back to
+  message substrings for SDKs that don't expose the class. New test covers the 400 + ClientError
+  path.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **providers**: Gpt (OpenAI) chat + tool use
+  ([#37](https://github.com/mfozmen/littlepress-ai/pull/37),
+  [`46e33ff`](https://github.com/mfozmen/littlepress-ai/commit/46e33ff4e5c5c9404003c5c2459d619908c7acf7))
+
+* feat(providers): GPT (OpenAI) chat + tool use
+
+Third fully-wired provider, mirroring the Gemini PR's shape:
+
+- OpenAIProvider class in src/providers/llm.py with chat() and turn(), lazy-importing the openai SDK
+  so users on another provider don't need it installed. - Message translation at the boundary — the
+  agent stays Anthropic- shaped; the provider converts in both directions. Assistant tool_use blocks
+  become role=assistant messages with a tool_calls array (arguments serialised as a JSON string, per
+  the API); user tool_result blocks split into one role=tool message per result carrying the
+  matching tool_call_id. - Non-stop/non-tool_calls finish reasons (length, content_filter) surface
+  as a synthetic text block so the REPL isn't silent on a blocked or truncated turn. - Shared
+  _client() builder keeps chat() and turn() aligned on the 60-second timeout hedge — same regression
+  guard as the Anthropic and Google paths. - _check_openai validator uses the SDK's class hierarchy
+  (AuthenticationError / PermissionDeniedError → KeyValidationError, APIError catch-all →
+  TransientValidationError). Matches the three-way contract the REPL's resume path depends on. -
+  openai bundled as a default dep — many users already have a GPT key and expect it to work without
+  hunting down an optional extra. - find("openai") + create_provider now return OpenAIProvider when
+  a key is provided; validation_model is "gpt-4o-mini", the cheapest tool-use-capable model.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* build: bump openai and google-genai floors to match code requirements
+
+Review flagged that the declared lower bounds in PR #37 / PR #36 didn't match what the code actually
+  needs:
+
+- ``openai>=1.0.0``: ``PermissionDeniedError`` (caught in the auth branch of ``_check_openai``) was
+  only added in 1.2.x. The ``APIError`` inheritance chain the transient-branch catch-all relies on
+  stabilised even later in 1.x. Bump to 1.50 so the exception classes and hierarchy the validator
+  depends on are guaranteed present.
+
+- ``google-genai>=0.2.0``: ``FunctionResponse.id`` (used to correlate parallel same-name tool calls)
+  and the stabilised ``HttpOptions`` / ``GenerateContentConfig`` shapes are 1.x-era. Bump to 1.0 so
+  an install that happens to resolve to an old 0.x release doesn't import and then explode at
+  runtime.
+
+Fresh installs today resolve to modern releases so this is mostly a belt-and-suspenders fix, but
+  pinning matches the code's actual expectations — future dependency-resolver changes won't silently
+  pull in incompatible versions.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **providers**: Ollama local chat + tool use
+  ([#39](https://github.com/mfozmen/littlepress-ai/pull/39),
+  [`86748bb`](https://github.com/mfozmen/littlepress-ai/commit/86748bb9c940f2f3783080c3fc4424718dc584d2))
+
+* feat(providers): Ollama local chat + tool use
+
+Fourth and final fully-wired provider, completing the LLM provider work from the plan.
+
+- OllamaProvider in src/providers/llm.py with chat() and turn(), lazy-importing the ollama client so
+  users on a cloud provider don't need it installed. - Messages translate at the boundary —
+  OpenAI-compatible shape with two Ollama twists: assistant tool_calls carry ``{function: {name,
+  arguments: dict}}`` (no outer id — Ollama doesn't issue call ids), and tool results go as ``{role:
+  tool, content, tool_name}``. Tool-use ids are synthesised internally so the agent can still
+  correlate tool_use with its tool_result in the next turn. - Host (``http://localhost:11434``
+  default) and model are configurable on the provider — covers users running Ollama in a container
+  or on a remote LAN host. - Timeout widened to 180 s (vs 60 s for cloud) because local first- load
+  inference can legitimately be slow; still finite so a stuck daemon doesn't freeze the REPL.
+
+- _check_ollama validator pings the local daemon via ``client.list()``. Unreachable service →
+  TransientValidationError with a "make sure Ollama is running" message (not KeyValidationError —
+  there's no key to revoke; not ProviderUnavailable — the user can start the daemon and retry). SDK
+  missing → ProviderUnavailable as with the other providers.
+
+- validate_key no longer short-circuits on ``requires_api_key=False``. Any provider with a
+  registered checker runs it — that's how Ollama's reachability ping gets invoked through the
+  picker. Providers with no checker (``none``) still no-op.
+
+- REPL's _prompt_for_provider now runs validate_key for key-less providers too. An unreachable
+  daemon shows the validator's message and aborts the picker instead of activating a dead provider.
+
+- ollama bundled as a default dep for parity with the other providers; floor at 0.4.0 so the modern
+  client.list() / chat() shapes are guaranteed.
+
+All 428 tests passing; 95% on src/providers/llm.py, 99% on src/providers/validator.py.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix(providers): address PR review for Ollama provider
+
+Three valid findings:
+
+1. Resume path bypassed the reachability ping. _resume_or_pick short-circuited on ``not
+  requires_api_key`` without checking whether the daemon was up — the exact UX gap the PR claimed to
+  prevent. Added _validate_silently(spec, "") on the keyless branch, falling back to the picker on
+  failure (matching the keyed-provider's resume path parity). Two new integration tests cover the
+  resume happy-path and the dead-daemon fallback.
+
+2. _check_ollama's error message hard-coded localhost:11434 even though the SDK honours OLLAMA_HOST.
+  Interpolated from the env var (with the same default) so the message stays correct when users
+  eventually configure a remote host.
+
+3. _import_ollama's ``if ollama is None`` guard was unreachable: Python's import statement either
+  succeeds (binding a module object, never None) or raises ImportError. Removed the dead branch. The
+  same pattern in the other providers predates this PR; not touched here.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **render**: Keep numbered snapshots so renders don't clobber
+  ([#30](https://github.com/mfozmen/littlepress-ai/pull/30),
+  [`318bf3f`](https://github.com/mfozmen/littlepress-ai/commit/318bf3f585706f1ed6e7021b5a75fba35fdc61a7))
+
+* feat(render): keep numbered snapshots so renders don't clobber
+
+Both the agent's render_book tool and the REPL /render command used to write <slug>.pdf
+  unconditionally — rendering the same draft twice silently destroyed the earlier PDF. Now every
+  default-path render lands a versioned <slug>-vN.pdf alongside the stable <slug>.pdf, so:
+
+- The stable name still points at the latest render (auto-open and "the book" references stay
+  unchanged). - Previous renders are preserved; the user can compare drafts or roll back by copying
+  a snapshot over the stable name. - The booklet is versioned the same way —
+  <slug>-vN_A4_booklet.pdf alongside the stable <slug>_A4_booklet.pdf. - /render <explicit-path> is
+  still the escape hatch; no versioning when the user named a destination themselves.
+
+next_version_number() lives in src/draft.py next to slugify so both entry points share the
+  version-space logic (A5 and booklet share the same counter).
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix(render): address review for versioned renders
+
+- Atomic stable mirror: the render writes to a <dst>.pdf.tmp sibling and os.replace() it into
+  position, so a crash mid-copy leaves either the previous stable file or the new one — never a
+  half-written PDF that the auto-opener would hand to the user's viewer. New atomic_copy() helper in
+  src/draft.py.
+
+- Windows viewer-lock handling: if the stable <slug>.pdf is held open in Acrobat, os.replace raises
+  PermissionError. The versioned snapshot still writes (new filename, no lock), so the render hasn't
+  failed — we now catch OSError on the mirror step, log a yellow hint telling the user to close the
+  viewer, and carry on instead of claiming "Render failed:" catastrophically.
+
+- Namespace-safe version separator: change -vN to .vN. slugify emits a-z0-9_- but never '.', so
+  <slug>.vN.pdf can only be produced by the versioner — a book titled "Book-V1" (slug "book-v1",
+  stable book-v1.pdf) no longer poisons the version counter of an unrelated "book" slug. Tightened
+  the regex in next_version_number.
+
+- Refactor /render to cut cognitive complexity. _cmd_render used to carry the whole path-resolution
+  + build + copy + impose pipeline in one function (Sonar flagged 17/15). Split into _require_title,
+  _mirror_or_warn, _render_to_file, _impose_to_file, _resolve_versioned_paths, _run_custom_render,
+  _run_versioned_render. Main function now does only dispatch.
+
+- Soften the next_version_number docstring: the A5+booklet version space is shared within a single
+  render call, but a bare /render followed by /render --impose leaves booklet gaps. Don't claim a
+  pairing invariant that the code doesn't enforce.
+
+- Drop the misleading "claim the slot before building" concurrency comment — next_version_number
+  only reads the directory, it doesn't reserve anything. The REPL is single-threaded; nothing races.
+
+- docs/PLAN.md gains a deferred "cap / prune old snapshots" item (infinite accumulation was a
+  conscious choice but should be revisited from real usage).
+
+- README mentions snapshots accumulate and the new .vN format.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **repl**: Auto-load PDF when its path is dragged onto the terminal
+  ([#25](https://github.com/mfozmen/littlepress-ai/pull/25),
+  [`1dc05f0`](https://github.com/mfozmen/littlepress-ai/commit/1dc05f0a3957bd0225d58ba054ae7609e5c37cb2))
+
+* feat(repl): auto-load PDF when its path is dragged onto the terminal
+
+Terminals paste a file's full path when the user drags it onto the window — quoted on Windows
+  (PowerShell), escaped on Unix. Detecting that case and routing it through /load saves the user
+  from typing "/load " in front every time.
+
+Non-slash input now takes a three-way split: 1. Starts with "/" → slash dispatch (unchanged). 2.
+  Resolves to an existing .pdf file → treat as /load <path>. 3. Anything else → agent chat
+  (unchanged).
+
+The path classifier is deliberately conservative (.pdf extension AND file exists) so chat mentions
+  like "can you open draft.pdf?" still reach the agent instead of being silently swallowed. Reuses
+  the _unquote helper from PR #24 so quoted and tilde-expanded paths work.
+
+Seven tests pin happy-path (plain path, quoted path, uppercase .PDF, ~-expansion), guard negatives
+  (non-PDF file, chat with a .pdf mention but no such file), and verify /load still works.
+
+README gets a short drag-and-drop blurb; PLAN.md's entry ships.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* test: close remaining meaningful coverage gaps
+
+Four targeted regression tests for branches that were flagged but weren't worth a dedicated scenario
+  before:
+
+- _looks_like_pdf_path OSError path — malformed paths (Windows device names, encoding issues) must
+  classify as "not a PDF" instead of crashing the dispatcher. - agent.Agent._drive with a mixed
+  text+tool_use response — Claude routinely emits "let me check…" alongside the tool call; both the
+  text print and the tool_use execution must happen. - _show_key_guidance when webbrowser.open
+  raises — locked-down envs (no browser, permission error). URL still surfaces; no "opened the page"
+  claim. - _validate_silently with no validator injected — silent resume of a saved key accepts it
+  without calling anything. - keyring_store legacy-service get_password failure — load_key swallows
+  and continues instead of crashing the REPL.
+
+Total coverage 99% (up from 99% — same percentage, but 10 missed lines down to 2). The two lines
+  left (Agent.messages property getter and cli.py's if __name__ == "__main__" guard) are trivial and
+  not worth test-for-test's-sake scenarios.
+
+* fix(repl): check PDF classifier before slash dispatch
+
+Addresses review feedback on #25. Real bug on Linux / macOS: dragged paths are absolute
+  ("/home/user/draft.pdf", "/Users/...") and start with "/". The original dispatch order checked
+  ``line.startswith('/')`` first, so those paths were parsed as unknown slash commands and drag-drop
+  silently died.
+
+The Windows tests didn't catch this because tmp_path there starts with a drive letter (C:\Users\...)
+  — not a slash.
+
+Hoist the PDF classifier check above the slash check. The classifier is conservative (.pdf extension
+  AND file exists), so real commands like /help / /exit / /render can't match.
+
+New regression test (platform-independent, via monkeypatch) simulates the Linux-style absolute-path
+  drag and asserts /load is invoked instead of /dispatch_slash.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- **repl**: Claude-code-style / menu with a logical command order
+  ([#26](https://github.com/mfozmen/littlepress-ai/pull/26),
+  [`7fb61a4`](https://github.com/mfozmen/littlepress-ai/commit/7fb61a406c113787b382b980745521171c6b1544))
+
+* feat(repl): Claude-Code-style / menu with a logical command order
+
+Ships the "Next up" item from PLAN.md.
+
+- New SlashCommand frozen dataclass (name, description, handler). The full catalog lives in
+  SLASH_COMMANDS at the bottom of src/repl.py; registration order there drives both /help output and
+  the new / menu. Order follows the workflow — load → pages → title → author → render → model →
+  logout → help → exit — rather than the incidental alphabetical / insertion order of before. -
+  /help now prints each command with its one-line description aligned in a column. -
+  src/cli.SlashCompleter plugs into prompt_toolkit. Typing `/` alone suggests every command with its
+  description as display_meta; typing `/lo` narrows to /load + /logout; case- insensitive prefix
+  match; non-slash input doesn't interrupt chat with a popup. - The CLI swaps builtins.input for a
+  PromptSession wired with the completer, but only when stdin is a TTY — non-TTY (pytest, piped
+  stdin, CI) falls back to input() so automation and tests keep working.
+
+prompt_toolkit >= 3.0 added to the default dependency list; tests still inject their own read_line
+  so they don't need a console.
+
+README slash-command table mentions the new / menu and follows the workflow order; PLAN.md entry
+  shipped.
+
+Nine new tests pin the catalog order, descriptions, frozen dataclass invariant, /help output, and
+  the completer's four behaviours (bare slash, prefix filter, case-insensitive, non-slash skipped).
+  292 tests total; 99% coverage.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix: close six findings on the / menu PR
+
+Addresses review feedback on #26.
+
+1. Repl.commands property return type updated to dict[str, SlashCommand] (was SlashHandler — stale
+  after the restructure). 2. Ctrl-C at the main prompt no longer dumps a traceback — matches the
+  Claude-Code / shell feel: Ctrl-C clears the line and reprompts, Ctrl-D / /exit actually leaves.
+  Picker, key prompt, retry prompt, and y/n confirm also treat KeyboardInterrupt as "cancel, go
+  back". 3. SlashCompleter suppresses the menu when the buffer looks path-ish (contains /, \, or .)
+  so drag-and-drop paste doesn't flash a /help popup mid-drag. Regression test checks several drag
+  snapshots. 4. New regression test pins the non-TTY fallback: PromptSession must NOT be constructed
+  when stdin.isatty() is False. 5. SlashCompleter reads document.current_line_before_cursor instead
+  of text_before_cursor so a future multiline=True switch doesn't break prefix matching. 6. Comment
+  on the isatty() gate rewritten — PromptSession.prompt(), not the constructor, is what needs a real
+  console.
+
+295 tests green; coverage 99%.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v1.0.1 (2026-04-15)
 
 ### Bug Fixes
