@@ -179,9 +179,12 @@ def read_draft_tool(get_draft: Callable[[], Draft | None]) -> Tool:
                 f"NOTE: page(s) {which} are image-only — the PDF has no "
                 "text layer there, likely a Samsung Notes / phone-scan "
                 "export where the text is rendered inside the image. "
-                "OCR is not available yet; ask the user to transcribe "
-                "each page's text verbatim. Do not invent, paraphrase, "
-                "or 'guess' the child's words — preserve-child-voice."
+                "Use the ``transcribe_page`` tool to OCR each flagged "
+                "page via the active LLM's vision capability (Claude 3+, "
+                "GPT-4o, Gemini 1.5+), or ask the user to transcribe "
+                "manually. Always confirm the transcription with the "
+                "user before moving on. Do not invent, paraphrase, or "
+                "'guess' the child's words — preserve-child-voice."
             )
         return "\n".join(lines)
 
@@ -193,10 +196,12 @@ def read_draft_tool(get_draft: Callable[[], Draft | None]) -> Tool:
             "drawing, its layout, and the child's exact text. Pages whose "
             "text layer is empty but whose image carries text visually "
             "(Samsung Notes / phone-scan exports) are flagged "
-            "``[image-only]`` with a summary NOTE — when that fires, ask "
-            "the user to transcribe each flagged page; never invent or "
-            "paraphrase the child's words. Call this at the start of a "
-            "session to see what you're working with."
+            "``[image-only]`` with a summary NOTE — when that fires, call "
+            "the ``transcribe_page`` tool on each flagged page to OCR via "
+            "the active LLM's vision (Anthropic only for now); if that "
+            "tool isn't registered, ask the user to transcribe manually. "
+            "Never invent or paraphrase the child's words. Call this at "
+            "the start of a session to see what you're working with."
         ),
         input_schema={"type": "object", "properties": {}, "required": []},
         handler=handler,
@@ -370,6 +375,219 @@ def set_cover_tool(get_draft: Callable[[], Draft | None]) -> Tool:
             "required": [],
         },
         handler=handler,
+    )
+
+
+def transcribe_page_tool(
+    get_draft: Callable[[], Draft | None],
+    get_llm: Callable[[], object],
+    confirm: Callable[[str], bool],
+) -> Tool:
+    """Tool: use the active LLM's vision capability to transcribe a
+    page's image text verbatim into ``draft.pages[n-1].text``.
+
+    Escape hatch for image-only PDFs (Samsung Notes exports, phone
+    scans) where the embedded text is pixels rather than ``/Font``
+    glyphs and ``pypdf.extract_text`` legitimately returns empty.
+
+    Preserve-child-voice is enforced on three axes:
+
+    1. **Provider gate (at REPL).** Only registered when the active
+       provider is Anthropic, because only ``AnthropicProvider.chat``
+       currently forwards image content blocks intact. Other
+       providers' ``_messages_to_*`` translators silently drop image
+       blocks, leading to hallucinated transcriptions.
+    2. **User confirmation.** The OCR reply is shown to the user
+       *before* landing in ``page.text`` — same y/n pattern as
+       ``propose_typo_fix``. An existing transcription is surfaced
+       in the prompt so the user sees what's being overwritten.
+    3. **Verbatim prompt.** The vision prompt tells the model to
+       output the text exactly as written — no typo fixes, no
+       "polish," no paraphrase.
+    """
+
+    def handler(input_: dict) -> str:
+        draft = get_draft()
+        if draft is None:
+            return _MSG_NO_DRAFT
+        page_n = int(input_["page"])
+        if page_n < 1 or page_n > len(draft.pages):
+            return (
+                f"Page {page_n} is out of range — the draft has "
+                f"{len(draft.pages)} pages."
+            )
+        page = draft.pages[page_n - 1]
+        if page.image is None:
+            return (
+                f"Page {page_n} has no image to transcribe — nothing to "
+                "OCR."
+            )
+
+        image_block = _build_image_block(Path(page.image))
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    image_block,
+                    {"type": "text", "text": _TRANSCRIBE_PROMPT},
+                ],
+            }
+        ]
+
+        llm = get_llm()
+        try:
+            reply = llm.chat(messages)
+        except ImportError as e:
+            # SDK missing — a different failure class than "provider
+            # doesn't support vision", hence a separate branch.
+            return (
+                f"Transcription failed on page {page_n}: SDK not "
+                f"installed ({str(e)[:200]}). Ask the user to "
+                "transcribe manually."
+            )
+        except Exception as e:  # noqa: BLE001 — every SDK raises a different hierarchy
+            return (
+                f"Transcription failed on page {page_n}: "
+                f"{str(e)[:200]}. This often means the active LLM "
+                "doesn't support vision, or the network is down. "
+                "Ask the user to transcribe manually, or switch to "
+                "a multimodal provider via /model."
+            )
+
+        cleaned = str(reply).strip()
+        if not cleaned:
+            # Google safety filter and OpenAI content_filter both
+            # surface as an empty reply rather than an exception. We
+            # mustn't write the empty string — it would blank a page
+            # the user may have typed manually (and the "success"
+            # message would mask the failure).
+            return (
+                f"Transcription failed on page {page_n}: provider "
+                "returned empty text (often a safety filter or a "
+                "vision-unsupported model). Draft left unchanged; "
+                "ask the user to transcribe manually."
+            )
+
+        prompt_msg = _build_transcribe_confirm_prompt(page_n, page.text, cleaned)
+        if not confirm(prompt_msg):
+            return (
+                f"User declined the OCR transcription for page {page_n}. "
+                "Draft unchanged. Ask them to transcribe manually, or "
+                "call transcribe_page again after adjusting."
+            )
+
+        page.text = cleaned
+        preview = cleaned[:80].replace("\n", " ")
+        return (
+            f"Page {page_n} transcribed and applied ({len(cleaned)} "
+            f"chars). Preview: {preview!r}."
+        )
+
+    return Tool(
+        name="transcribe_page",
+        description=(
+            "Transcribe a single page's text from its image using the "
+            "active LLM's vision capability. Use this when a page is "
+            "flagged ``[image-only]`` by read_draft — the embedded "
+            "text layer is empty but the image clearly shows words. "
+            "Preserve-child-voice: the vision prompt tells the model "
+            "to copy the text verbatim (no typo fixes, no paraphrase) "
+            "AND the user must approve the OCR reply via a y/n prompt "
+            "before it lands in the draft — same gate pattern as "
+            "propose_typo_fix. Registered only on Anthropic today "
+            "(the other providers don't forward image content blocks "
+            "yet); on non-Anthropic sessions the tool isn't available "
+            "and the user should transcribe manually."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "page": {"type": "integer", "minimum": 1},
+            },
+            "required": ["page"],
+        },
+        handler=handler,
+    )
+
+
+# Anthropic recommends images no larger than 1568px on the long edge
+# for vision — 5 MB per-image limit enforced server-side. Samsung Notes
+# exports routinely ship ~3000x4000 pages, which would base64-encode
+# beyond that limit and be rejected. Downscale to preserve readability
+# while fitting the quota comfortably.
+_TRANSCRIBE_MAX_IMAGE_EDGE = 1568
+
+_TRANSCRIBE_PROMPT = (
+    "Transcribe the text visible in this image EXACTLY as written. A "
+    "child wrote or typed this; preserve every spelling mistake, line "
+    "break, punctuation choice, and capitalisation verbatim. Do NOT "
+    "fix, polish, or improve the wording in any way — "
+    "preserve-child-voice. Output ONLY the transcribed text, with no "
+    "preamble, quotes, or commentary."
+)
+
+
+def _build_image_block(image_path: Path) -> dict:
+    """Return an Anthropic-format image content block, downscaling
+    when the source is larger than Anthropic's recommended edge so
+    the request fits under the 5 MB per-image cap. PNG re-encode is
+    lossless — no OCR-quality hit from the round-trip."""
+    import base64
+    import io
+    import mimetypes
+
+    media_type, _ = mimetypes.guess_type(image_path.name)
+    if media_type is None:
+        media_type = "image/png"
+
+    from PIL import Image
+
+    with Image.open(image_path) as img:
+        w, h = img.size
+        if max(w, h) > _TRANSCRIBE_MAX_IMAGE_EDGE:
+            img.thumbnail(
+                (_TRANSCRIBE_MAX_IMAGE_EDGE, _TRANSCRIBE_MAX_IMAGE_EDGE),
+                Image.LANCZOS,
+            )
+            buf = io.BytesIO()
+            # Re-encode as PNG regardless of source format. Keeps the
+            # media_type honest and sidesteps JPEG lossy artefacts
+            # when the original was PNG.
+            img.save(buf, format="PNG")
+            media_type = "image/png"
+            raw = buf.getvalue()
+        else:
+            raw = image_path.read_bytes()
+
+    return {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": media_type,
+            "data": base64.b64encode(raw).decode("ascii"),
+        },
+    }
+
+
+def _build_transcribe_confirm_prompt(
+    page_n: int, existing_text: str, new_text: str
+) -> str:
+    """Compose the y/n prompt shown to the user. When the page is
+    empty we render a simple "apply this transcription?" message;
+    when it already carries text (user typed it manually earlier)
+    the prompt shows both so the user can see what's being
+    overwritten."""
+    if existing_text.strip():
+        return (
+            f"Replace the existing text on page {page_n}?\n"
+            f"  Existing (user-typed):\n    {existing_text!r}\n"
+            f"  New (OCR):\n    {new_text!r}\n"
+            "Approve the overwrite?"
+        )
+    return (
+        f"Apply this OCR transcription to page {page_n}?\n"
+        f"  {new_text!r}\n"
+        "Approve?"
     )
 
 
