@@ -133,6 +133,12 @@ def read_draft_tool(get_draft: Callable[[], Draft | None]) -> Tool:
     Read-only. Returns the child's text verbatim so the agent can see
     exactly what was written, including typos and invented words — the
     agent decides what to flag for the user.
+
+    Pages whose image carries the child's text visually but whose PDF
+    text layer is empty (Samsung Notes exports, phone scans, etc.) are
+    pre-flagged with ``[image-only]`` and a single summary NOTE at the
+    end that tells the agent to ask the user to transcribe rather than
+    invent — preserve-child-voice enforced at the surface.
     """
 
     def handler(_input: dict) -> str:
@@ -154,21 +160,19 @@ def read_draft_tool(get_draft: Callable[[], Draft | None]) -> Tool:
             # Samsung-Notes exports (and other image-text PDFs) have
             # pages with a drawing but no ``/Font`` resource — the
             # child's text lives visually inside the image and pypdf
-            # returns empty. Flag these explicitly so the agent asks
-            # the user to transcribe rather than guessing "picture-
-            # only book" or (worse) inventing text. Pages with no
-            # image at all are already covered by "no drawing".
+            # returns empty. Flag these with a compact ``[image-only]``
+            # tag; the English-sentence explanation (preserve-child-
+            # voice, transcribe, don't invent) lives in the single
+            # summary NOTE below so the signal isn't diluted by N
+            # copies of the same line. Pages without an image are
+            # already covered by "no drawing".
             image_only = page.image is not None and not text
+            tag = " [image-only]" if image_only else ""
             if image_only:
                 image_only_pages.append(i)
-                note = " — image-only, no extractable text"
-                lines.append(
-                    f"  Page {i} ({marker}, layout={page.layout}): {text}{note}"
-                )
-            else:
-                lines.append(
-                    f"  Page {i} ({marker}, layout={page.layout}): {text}"
-                )
+            lines.append(
+                f"  Page {i} ({marker}, layout={page.layout}):{tag} {text}"
+            )
         if image_only_pages:
             which = ", ".join(str(n) for n in image_only_pages)
             lines.append(
@@ -186,8 +190,13 @@ def read_draft_tool(get_draft: Callable[[], Draft | None]) -> Tool:
         description=(
             "Read the currently-loaded PDF draft. Returns the title, author, "
             "cover status, page count, and for each page whether it has a "
-            "drawing, its layout, and the child's exact text. Call this at "
-            "the start of a session to see what you're working with."
+            "drawing, its layout, and the child's exact text. Pages whose "
+            "text layer is empty but whose image carries text visually "
+            "(Samsung Notes / phone-scan exports) are flagged "
+            "``[image-only]`` with a summary NOTE — when that fires, ask "
+            "the user to transcribe each flagged page; never invent or "
+            "paraphrase the child's words. Call this at the start of a "
+            "session to see what you're working with."
         ),
         input_schema={"type": "object", "properties": {}, "required": []},
         handler=handler,
@@ -382,7 +391,11 @@ def set_cover_tool(get_draft: Callable[[], Draft | None]) -> Tool:
             "If the user wants an AI-generated cover instead of reusing "
             "a page's drawing, the ``generate_cover_illustration`` tool "
             "is available on the OpenAI provider — tell users on other "
-            "providers they can switch via /model to access it."
+            "providers they can switch via /model to access it. "
+            "PRESERVE-CHILD-VOICE applies to the AI cover prompt too: "
+            "describe the cover scene in your own words from the story's "
+            "themes; do not quote or paraphrase the child's page text "
+            "into the prompt."
         ),
         input_schema={
             "type": "object",

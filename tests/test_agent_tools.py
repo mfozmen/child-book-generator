@@ -226,6 +226,48 @@ def test_read_draft_note_only_fires_once_not_per_page():
     assert result.count("do not invent") + result.count("don't invent") == 1
 
 
+def test_read_draft_description_advertises_image_only_flag():
+    """The ``description=`` field is what every LLM sees. Before this
+    PR it only promised "text, drawing, layout"; now that ``read_draft``
+    also flags image-only pages and emits a preserve-child-voice NOTE,
+    the description must say so — otherwise the LLM doesn't know to
+    trust the marker and may talk over it."""
+    tool = read_draft_tool(get_draft=lambda: None)
+    desc = tool.description.lower()
+
+    assert "image-only" in desc or "no extractable text" in desc
+
+
+def test_read_draft_per_page_marker_is_compact_not_a_full_sentence():
+    """The NOTE at the end carries the full "preserve-child-voice,
+    don't invent" explanation exactly once per draft — see
+    ``test_read_draft_note_only_fires_once_not_per_page``. The
+    per-page line must then be a compact marker (``[image-only]`` or
+    similar) rather than repeating an English sentence N times; N
+    copies of the same sentence would dilute the very signal the
+    single-NOTE rule is protecting."""
+    draft = Draft(
+        source_pdf=Path("x.pdf"),
+        title="Book",
+        author="A",
+        pages=[
+            DraftPage(text="", image=Path(f"p{i}.png")) for i in range(1, 9)
+        ],
+    )
+    tool = read_draft_tool(get_draft=lambda: draft)
+
+    result = tool.handler({})
+
+    # The long phrase must not repeat on every page — at most once
+    # (in the summary NOTE, to name the structural condition once).
+    assert result.count("no extractable text") <= 1
+    # A compact tag like [image-only] or (image-only) must decorate
+    # each flagged page, so the LLM can grep the line and see the
+    # marker without reading the NOTE every iteration.
+    per_page_markers = result.count("[image-only]") + result.count("(image-only)")
+    assert per_page_markers >= 8
+
+
 def test_read_draft_preserves_child_voice_warning_mentions_transcription():
     """The NOTE must spell out the path forward — "ask the user to
     transcribe" — so the LLM does not invent a fallback like
@@ -621,6 +663,24 @@ def test_set_cover_description_hints_at_ai_cover_option():
     # And the switch-provider hint so Claude / Gemini / Ollama users
     # can reach the generator.
     assert "openai" in desc or "/model" in desc
+
+
+def test_set_cover_description_echoes_preserve_child_voice_guard():
+    """The AI-cover guard added in PR #41 lives in
+    ``generate_cover_illustration``'s description. That tool is only
+    registered on OpenAI, so Claude / Gemini / Ollama agents never see
+    it. ``set_cover`` is the only place those agents read about AI
+    cover generation, so the preserve-child-voice invariant must be
+    echoed here — otherwise a Claude agent pointed at ``/model`` would
+    show up in the OpenAI session proposing an AI-cover prompt that
+    paraphrases the child's page text, defeating the guard."""
+    tool = set_cover_tool(get_draft=lambda: None)
+    desc = tool.description.lower()
+
+    # A representative phrase from the child-voice guard. Wording can
+    # evolve; we check for the key ideas.
+    assert "own words" in desc or "not paraphrase" in desc or "do not paraphrase" in desc
+    assert "child" in desc
 
 
 def test_set_cover_schema_advertises_style_enum():
