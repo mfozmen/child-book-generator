@@ -346,9 +346,10 @@ def set_cover_tool(get_draft: Callable[[], Draft | None]) -> Tool:
             "``style`` optionally picks the cover template: 'full-bleed' "
             "(drawing covers the page, title on a translucent band), "
             "'framed' (title at the top, letterboxed drawing below), "
-            "or 'poster' (type-only cover, no drawing — for books whose "
-            "child-author didn't make a cover illustration). Defaults "
-            "to 'full-bleed' when omitted."
+            "'portrait-frame' (drawing inside a decorative border, "
+            "title above), 'title-band-top' (coloured band with title "
+            "at the top, drawing below), or 'poster' (type-only cover, "
+            "no drawing). Defaults to 'full-bleed' when omitted."
         ),
         input_schema={
             "type": "object",

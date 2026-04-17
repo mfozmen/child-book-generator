@@ -216,6 +216,116 @@ def _draw_cover_poster(c: Canvas, book: Book) -> None:
         c.drawString((PAGE_W - aw) / 2, BOTTOM_MARGIN, book.author)
 
 
+def _draw_cover_portrait_frame(c: Canvas, book: Book) -> None:
+    """Illustration inside a visible border — like a framed picture
+    on a wall. Title centred above the frame, author below it. The
+    border is a simple rounded rectangle drawn in a muted grey so it
+    doesn't compete with the child's artwork."""
+    # Title above the frame.
+    title_size = _fit_title_size(
+        book.title, FONT_BOLD, COVER_TITLE_SIZE, PAGE_W - 2 * MARGIN,
+    )
+    c.setFont(FONT_BOLD, title_size)
+    title_w = pdfmetrics.stringWidth(book.title, FONT_BOLD, title_size)
+    title_y = PAGE_H - TOP_MARGIN - title_size
+    c.drawString((PAGE_W - title_w) / 2, title_y, book.title)
+
+    # Author strip at the bottom.
+    if book.author:
+        c.setFont(FONT_REGULAR, COVER_AUTHOR_SIZE)
+        aw = pdfmetrics.stringWidth(book.author, FONT_REGULAR, COVER_AUTHOR_SIZE)
+        c.drawString((PAGE_W - aw) / 2, BOTTOM_MARGIN, book.author)
+
+    # Subtitle between title and frame (if present). When absent, we
+    # still leave a descender's worth of breathing room below the title
+    # baseline so the frame's top edge doesn't collide with tails on
+    # 'g'/'y'/'p' — matches the pattern used by full-bleed and framed.
+    subtitle_bottom = title_y - title_size * 0.35
+    if book.cover.subtitle:
+        c.setFont(FONT_REGULAR, COVER_AUTHOR_SIZE)
+        sw = pdfmetrics.stringWidth(
+            book.cover.subtitle, FONT_REGULAR, COVER_AUTHOR_SIZE,
+        )
+        subtitle_bottom = title_y - title_size * 0.35 - COVER_AUTHOR_SIZE
+        c.drawString((PAGE_W - sw) / 2, subtitle_bottom, book.cover.subtitle)
+
+    # Frame area — between subtitle (or title) and author, inset by MARGIN.
+    frame_top = subtitle_bottom - 4 * mm
+    frame_bottom = BOTTOM_MARGIN + COVER_AUTHOR_SIZE + 6 * mm
+    frame_left = MARGIN + 2 * mm
+    frame_right = PAGE_W - MARGIN - 2 * mm
+    frame_w = frame_right - frame_left
+    frame_h = frame_top - frame_bottom
+
+    # Decorative border — rounded rect in a muted grey.
+    c.setStrokeColorRGB(0.55, 0.55, 0.55)
+    c.setLineWidth(1.5)
+    c.roundRect(frame_left, frame_bottom, frame_w, frame_h, radius=4 * mm, stroke=1, fill=0)
+
+    # Drawing inside the frame, inset a bit more so it doesn't touch
+    # the border line.
+    inset = 3 * mm
+    if book.cover.image:
+        _draw_image_fit(
+            c, book.source_dir / book.cover.image,
+            frame_left + inset, frame_bottom + inset,
+            frame_w - 2 * inset, frame_h - 2 * inset,
+        )
+
+    # Reset stroke for downstream.
+    c.setStrokeColorRGB(0, 0, 0)
+    c.setLineWidth(1)
+
+
+def _draw_cover_title_band_top(c: Canvas, book: Book) -> None:
+    """Coloured band at the top with the title; drawing fills the
+    remaining space below; author in a thin strip along the bottom.
+    The band gives the title visual weight against a busy drawing
+    underneath — a more assertive sibling of ``framed``."""
+    # Coloured band — a warm off-white so it doesn't look sterile.
+    band_h = COVER_BAND_H
+    c.setFillColorRGB(0.95, 0.93, 0.88)
+    c.rect(0, PAGE_H - band_h, PAGE_W, band_h, stroke=0, fill=1)
+    c.setFillColorRGB(0, 0, 0)
+
+    # Title centred in the band.
+    title_size = _fit_title_size(
+        book.title, FONT_BOLD, COVER_TITLE_SIZE, PAGE_W - 2 * MARGIN,
+    )
+    c.setFont(FONT_BOLD, title_size)
+    title_w = pdfmetrics.stringWidth(book.title, FONT_BOLD, title_size)
+    title_y = PAGE_H - band_h / 2 - title_size * 0.35
+    c.drawString((PAGE_W - title_w) / 2, title_y, book.title)
+
+    # Subtitle below the title inside the band. ``_fit_title_size``
+    # only shrinks, so ``title_size`` never grows past the 34pt
+    # preferred size — the subtitle baseline comfortably sits inside
+    # the band for every title length we can render.
+    if book.cover.subtitle:
+        subtitle_y = title_y - title_size * 0.35 - COVER_AUTHOR_SIZE
+        c.setFont(FONT_REGULAR, COVER_AUTHOR_SIZE)
+        sw = pdfmetrics.stringWidth(
+            book.cover.subtitle, FONT_REGULAR, COVER_AUTHOR_SIZE,
+        )
+        c.drawString((PAGE_W - sw) / 2, subtitle_y, book.cover.subtitle)
+
+    # Drawing fills the space between the band and the author strip.
+    if book.cover.image:
+        image_top = PAGE_H - band_h
+        image_bottom = BOTTOM_MARGIN + COVER_AUTHOR_SIZE + 6 * mm
+        _draw_image_fit(
+            c, book.source_dir / book.cover.image,
+            0, image_bottom,
+            PAGE_W, image_top - image_bottom,
+        )
+
+    # Author at the very bottom.
+    if book.author:
+        c.setFont(FONT_REGULAR, COVER_AUTHOR_SIZE)
+        aw = pdfmetrics.stringWidth(book.author, FONT_REGULAR, COVER_AUTHOR_SIZE)
+        c.drawString((PAGE_W - aw) / 2, BOTTOM_MARGIN, book.author)
+
+
 def draw_cover(c: Canvas, book: Book) -> None:
     """Dispatch to the renderer for ``book.cover.style``.
 
@@ -233,6 +343,10 @@ def draw_cover(c: Canvas, book: Book) -> None:
         _draw_cover_framed(c, book)
     elif style == "poster":
         _draw_cover_poster(c, book)
+    elif style == "portrait-frame":
+        _draw_cover_portrait_frame(c, book)
+    elif style == "title-band-top":
+        _draw_cover_title_band_top(c, book)
     else:
         raise ValueError(
             f"Unknown cover style '{style}'. Valid styles: "

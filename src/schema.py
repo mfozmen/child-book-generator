@@ -7,9 +7,15 @@ VALID_LAYOUTS = {"image-top", "image-full", "text-only", "image-bottom"}
 # - ``full-bleed``: drawing across the whole page with the title on
 #   a translucent band. Default — the most visually assertive option.
 # - ``framed``: letterboxed drawing under a title band at the top.
+# - ``portrait-frame``: drawing inside a rounded-rect border (like a
+#   framed picture on a wall), title above and author below.
+# - ``title-band-top``: coloured band at the top holds the title; the
+#   drawing fills the remaining space below.
 # - ``poster``: type-only; no drawing. Fallback for books whose
 #   child-author didn't make a cover illustration.
-VALID_COVER_STYLES = {"full-bleed", "framed", "poster"}
+VALID_COVER_STYLES = {
+    "full-bleed", "framed", "poster", "portrait-frame", "title-band-top",
+}
 
 
 @dataclass

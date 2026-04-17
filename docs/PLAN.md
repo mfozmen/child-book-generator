@@ -33,7 +33,7 @@ All five PRs from the original plan merged:
 
 Items below came out of the first real end-to-end test (Yavru Dinozor). Listed roughly in "most visible to the user" order.
 
-- **Even more cover templates.** `poster` shipped alongside `full-bleed` and `framed`, and the `select-cover-template` skill lives under `.claude/skills/`. Still worth adding: `portrait-frame` (illustration inside a decorative border), `title-band-top` (variant of framed with a colour panel behind the title), `spine-wrap` (drawing spans front + spine + back, for the A4 imposed booklet — this one needs multi-page cover rendering support that doesn't exist yet). Each future template adds an entry to `VALID_COVER_STYLES`, a `_draw_cover_<name>` function in `pages.py`, a docstring line on the `set_cover` tool, and a rule in the skill.
+- **Spine-wrap cover template.** Five templates ship now (`full-bleed`, `framed`, `portrait-frame`, `title-band-top`, `poster`). The one remaining idea is `spine-wrap` — drawing spans front + spine + back for the A4 imposed booklet. This needs multi-page cover rendering support that the current `draw_cover` (single page) doesn't have; defer until a real user asks for it.
 - **AI cover generation as an optional tool.** Tool: `generate_cover_illustration(prompt, style)` that calls a real image provider (OpenAI `gpt-image-1` / Stability / Replicate — pick one to start), saves to `.book-gen/images/cover-*.png`, and hands the result to `set_cover`. Agent offers this when the user doesn't want to reuse a page's drawing. Requires a new `ImageProvider` protocol + a provider adapter + a pricing-aware prompt to the user (cost per image).
 
 ## Explicitly deferred (don't build unless asked)

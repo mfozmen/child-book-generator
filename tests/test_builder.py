@@ -437,6 +437,97 @@ def test_cover_framed_renders_subtitle_under_title(tmp_path):
     assert "a night adventure" in cover_text
 
 
+def test_cover_portrait_frame_renders_title_author_and_drawing(tmp_path):
+    """``portrait-frame``: the drawing sits inside a visible border
+    (like a framed picture on a wall), title above, author below."""
+    out = tmp_path / "book.pdf"
+    build_pdf(_book_with_cover(tmp_path, "portrait-frame"), out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    assert "The Brave Owl" in cover_text
+    assert "Yusuf" in cover_text
+
+
+def test_cover_portrait_frame_renders_subtitle(tmp_path):
+    """``portrait-frame`` must render the subtitle between the title
+    and the frame — it was originally omitted, contradicting the skill's
+    "subtitle supported on every template" contract."""
+    img = _cover_image(tmp_path)
+    book = Book(
+        title="Owls",
+        author="Yusuf",
+        cover=Cover(image=img.name, subtitle="a night adventure", style="portrait-frame"),
+        back_cover=BackCover(),
+        pages=[Page(text="x", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+    out = tmp_path / "book.pdf"
+    build_pdf(book, out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    assert "a night adventure" in cover_text
+
+
+def test_cover_title_band_top_renders_title_author_and_drawing(tmp_path):
+    """``title-band-top``: a coloured band at the top holds the title;
+    the drawing fills the space below; author at the bottom."""
+    out = tmp_path / "book.pdf"
+    build_pdf(_book_with_cover(tmp_path, "title-band-top"), out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    assert "The Brave Owl" in cover_text
+    assert "Yusuf" in cover_text
+
+
+def test_cover_title_band_top_renders_subtitle(tmp_path):
+    """``title-band-top``: a short-titled cover must render the subtitle
+    inside the coloured band, right below the title. Pins the subtitle
+    contract for this template — the band is wide enough that a short
+    title + short subtitle must always fit."""
+    img = _cover_image(tmp_path)
+    book = Book(
+        title="Owls",
+        author="Yusuf",
+        cover=Cover(image=img.name, subtitle="a night adventure", style="title-band-top"),
+        back_cover=BackCover(),
+        pages=[Page(text="x", image=None, layout="text-only")],
+        source_dir=tmp_path,
+    )
+    out = tmp_path / "book.pdf"
+    build_pdf(book, out)
+
+    reader = PdfReader(str(out))
+    cover_text = reader.pages[0].extract_text() or ""
+    assert "a night adventure" in cover_text
+
+
+def test_draw_cover_dispatches_portrait_frame_and_title_band_top(
+    tmp_path, monkeypatch
+):
+    """Confirm the dispatcher branches to the right implementation for
+    each of the two new templates — not silently falling through to
+    full-bleed."""
+    from src import pages
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        pages, "_draw_cover_portrait_frame",
+        lambda _c, _b: calls.append("portrait-frame"),
+    )
+    monkeypatch.setattr(
+        pages, "_draw_cover_title_band_top",
+        lambda _c, _b: calls.append("title-band-top"),
+    )
+
+    build_pdf(_book_with_cover(tmp_path, "portrait-frame"), tmp_path / "a.pdf")
+    build_pdf(_book_with_cover(tmp_path, "title-band-top"), tmp_path / "b.pdf")
+
+    assert calls == ["portrait-frame", "title-band-top"]
+
+
 def test_cover_style_default_is_full_bleed_when_unspecified(tmp_path):
     """Books constructed without a style (the default from ``Cover``)
     must still render — falls back to full-bleed."""

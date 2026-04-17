@@ -38,3 +38,4 @@ Thumbs.db
 
 # Per-project REPL session state (provider choice, future: edit log, etc.)
 .book-gen/
+.review_tmp/

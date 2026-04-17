@@ -461,7 +461,9 @@ def test_set_cover_schema_advertises_style_enum():
 
     style_schema = tool.input_schema["properties"].get("style")
     assert style_schema is not None
-    assert set(style_schema["enum"]) == {"full-bleed", "framed", "poster"}
+    assert set(style_schema["enum"]) == {
+        "full-bleed", "framed", "poster", "portrait-frame", "title-band-top",
+    }
     # Style stays OPTIONAL — old callers that only send page continue
     # working.
     assert "style" not in tool.input_schema.get("required", [])
