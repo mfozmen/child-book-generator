@@ -23,6 +23,7 @@ from src import session as session_mod
 from src.agent import Agent
 from src.agent_tools import (
     choose_layout_tool,
+    generate_cover_illustration_tool,
     propose_layouts_tool,
     propose_typo_fix_tool,
     read_draft_tool,
@@ -31,6 +32,7 @@ from src.agent_tools import (
     set_metadata_tool,
 )
 from src.draft import Draft
+from src.providers.image import OpenAIImageProvider
 from src.providers.llm import (
     PICKER_SPECS,
     SPECS,
@@ -255,6 +257,19 @@ class Repl:
                 get_draft=get_draft, get_session_root=get_session_root
             ),
         ]
+        # AI cover generation is OpenAI-only for now — don't advertise
+        # a tool that would 401 on first use. When the user is on
+        # another provider (or hasn't entered a key yet) the agent
+        # simply doesn't see this option and falls back to set_cover.
+        if self._provider is not None and self._provider.name == "openai" and self._api_key:
+            tools.append(
+                generate_cover_illustration_tool(
+                    get_draft=get_draft,
+                    get_session_root=get_session_root,
+                    image_provider=OpenAIImageProvider(api_key=self._api_key),
+                    confirm=self._confirm,
+                )
+            )
         return Agent(llm=self._llm, tools=tools, console=self._console)
 
     def _confirm(self, prompt: str) -> bool:

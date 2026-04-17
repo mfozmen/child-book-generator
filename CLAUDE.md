@@ -22,8 +22,9 @@ Primary flow is `littlepress draft.pdf` → interactive agent → printable PDF.
 - `src/cli.py` — `littlepress` console entry point (also aliased as `littlepress-ai` matching the PyPI name). Pre-loads a PDF when given, restores memory if one matches.
 - `src/repl.py` — read loop, slash-command dispatch, provider picker, confirmation prompt. Owns the in-memory `Draft`.
 - `src/agent.py` — tool-use loop that drives the active LLM.
-- `src/agent_tools.py` — tools registered with the agent: `read_draft`, `propose_typo_fix`, `set_metadata`, `set_cover`, `choose_layout`, `propose_layouts`, `render_book`. **This is where preserve-child-voice is enforced** — no tool rewrites page text freely.
+- `src/agent_tools.py` — tools registered with the agent: `read_draft`, `propose_typo_fix`, `set_metadata`, `set_cover`, `choose_layout`, `propose_layouts`, `render_book`, `generate_cover_illustration` (OpenAI-only). **This is where preserve-child-voice is enforced** — no tool rewrites page text freely.
 - `src/providers/llm.py` — `LLMProvider` protocol + `NullProvider`, `AnthropicProvider`, `GoogleProvider`, `OpenAIProvider`, `OllamaProvider`. `chat()` for one-shot text, `turn()` for the tool-use loop.
+- `src/providers/image.py` — `ImageProvider` protocol + `OpenAIImageProvider` (model `gpt-image-1`) for the optional AI cover generation tool.
 - `src/providers/validator.py` — provider key-validation pings (Anthropic, Google, OpenAI auth pings; Ollama reachability ping).
 - `src/draft.py` — `Draft` / `DraftPage`: lenient in-memory working shape. `from_pdf` ingests; `to_book` projects to the strict `Book` the renderer wants. `slugify` is the single source of truth for output filenames, shared by the agent's `render_book` tool and the REPL's `/render`. `collect_input_pdf` mirrors the user's PDF into `.book-gen/input/` so memory survives file moves. `next_version_number` + `atomic_copy` support the versioned render flow.
 - `src/memory.py` — per-project persistence at `.book-gen/draft.json`. Atomic write, fsync, schema-versioned.

@@ -7,6 +7,7 @@ import pytest
 from src import agent_tools
 from src.agent_tools import (
     choose_layout_tool,
+    generate_cover_illustration_tool,
     open_in_default_viewer,
     propose_layouts_tool,
     propose_typo_fix_tool,
@@ -16,6 +17,7 @@ from src.agent_tools import (
     set_metadata_tool,
 )
 from src.draft import Draft, DraftPage
+from src.providers.image import ImageGenerationError
 
 # The conftest ``_no_real_pdf_viewer`` fixture replaces
 # ``agent_tools.open_in_default_viewer`` with a no-op for every test, to
@@ -521,6 +523,291 @@ def test_set_cover_allows_poster_without_a_page_image():
     # Poster doesn't need the page's image — just records the style.
     assert draft.cover_style == "poster"
     assert "poster" in result.lower()
+
+
+# --- generate_cover_illustration -----------------------------------------
+
+
+class _FakeImageProvider:
+    """Captures the args it was called with and writes stub bytes to the
+    requested output path. Covers the full surface area the tool uses —
+    no network, no SDK, no file format validation."""
+
+    def __init__(self, *, raises: Exception | None = None) -> None:
+        self.raises = raises
+        self.calls: list[dict] = []
+
+    def generate(
+        self,
+        prompt: str,
+        output_path: Path,
+        size: str = "1024x1536",
+        quality: str = "medium",
+    ) -> Path:
+        self.calls.append(
+            {
+                "prompt": prompt,
+                "output_path": output_path,
+                "size": size,
+                "quality": quality,
+            }
+        )
+        if self.raises is not None:
+            raise self.raises
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"fake-png")
+        return output_path
+
+
+def _cover_draft_with_image(tmp_path: Path) -> Draft:
+    """Draft with a single drawn page — baseline for tool tests that
+    don't care which page is picked."""
+    return Draft(
+        source_pdf=tmp_path / "x.pdf",
+        title="Book",
+        pages=[DraftPage(text="p1", image=Path("images/p1.png"))],
+    )
+
+
+def test_generate_cover_illustration_requires_draft(tmp_path):
+    tool = generate_cover_illustration_tool(
+        get_draft=lambda: None,
+        get_session_root=lambda: tmp_path,
+        image_provider=_FakeImageProvider(),
+        confirm=lambda _: True,
+    )
+
+    result = tool.handler({"prompt": "a watercolour owl", "quality": "medium"})
+
+    assert "no draft" in result.lower()
+
+
+def test_generate_cover_illustration_asks_for_confirmation_with_price(
+    tmp_path,
+):
+    """User must see an estimated cost before we spend money. Pricing-
+    aware prompt is the contract with PLAN.md's "AI cover generation as
+    an optional tool" item."""
+    seen_prompts: list[str] = []
+
+    def _confirm(prompt: str) -> bool:
+        seen_prompts.append(prompt)
+        return False
+
+    draft = _cover_draft_with_image(tmp_path)
+    provider = _FakeImageProvider()
+    tool = generate_cover_illustration_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+        image_provider=provider,
+        confirm=_confirm,
+    )
+
+    tool.handler({"prompt": "a dinosaur chick", "quality": "high"})
+
+    assert seen_prompts, "confirm() must be called before generating"
+    assert "$" in seen_prompts[0]
+    assert "high" in seen_prompts[0].lower()
+    # The prompt itself must surface — user approves both the cost and
+    # the wording that will be sent to the image API.
+    assert "dinosaur chick" in seen_prompts[0]
+
+
+def test_generate_cover_illustration_declined_does_not_call_provider(tmp_path):
+    """If the user says no, nothing is spent — no HTTP call, no bytes
+    written, no cover state changed."""
+    draft = _cover_draft_with_image(tmp_path)
+    provider = _FakeImageProvider()
+    tool = generate_cover_illustration_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+        image_provider=provider,
+        confirm=lambda _: False,
+    )
+
+    result = tool.handler({"prompt": "x", "quality": "medium"})
+
+    assert provider.calls == []
+    assert draft.cover_image is None
+    assert "declined" in result.lower() or "cancel" in result.lower()
+
+
+def test_generate_cover_illustration_approved_calls_provider_and_sets_cover(
+    tmp_path,
+):
+    draft = _cover_draft_with_image(tmp_path)
+    provider = _FakeImageProvider()
+    tool = generate_cover_illustration_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+        image_provider=provider,
+        confirm=lambda _: True,
+    )
+
+    result = tool.handler(
+        {"prompt": "a watercolour owl at dusk", "quality": "medium"}
+    )
+
+    # Provider was actually called — one HTTP round-trip per approved
+    # generation (no silent retries, no double charge).
+    assert len(provider.calls) == 1
+    call = provider.calls[0]
+    assert call["prompt"] == "a watercolour owl at dusk"
+    assert call["quality"] == "medium"
+    # A5 cover is ≈ 2:3 portrait — ``1024x1536`` is the closest OpenAI
+    # supports. Hard-coded so the tool doesn't accidentally ship square
+    # or landscape covers that would letterbox ugly.
+    assert call["size"] == "1024x1536"
+
+    # The generated file lives under .book-gen/images/ — and the draft
+    # now points at it. No extra tool call needed to "commit" the cover.
+    assert draft.cover_image is not None
+    cover_path = Path(draft.cover_image)
+    assert cover_path.name.startswith("cover-")
+    assert cover_path.suffix == ".png"
+    assert cover_path.is_absolute() or str(cover_path).startswith("images/")
+    # Result mentions the path so the user can find the file.
+    assert "cover" in result.lower()
+
+
+def test_generate_cover_illustration_writes_png_under_book_gen_images(
+    tmp_path,
+):
+    """Output lands inside ``<session_root>/.book-gen/images/`` so the
+    existing ``draft.to_book`` projection (which resolves images
+    relative to that directory) picks it up without a special case."""
+    draft = _cover_draft_with_image(tmp_path)
+    provider = _FakeImageProvider()
+    tool = generate_cover_illustration_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+        image_provider=provider,
+        confirm=lambda _: True,
+    )
+
+    tool.handler({"prompt": "x", "quality": "low"})
+
+    call = provider.calls[0]
+    images_dir = tmp_path / ".book-gen" / "images"
+    assert call["output_path"].parent == images_dir
+    assert call["output_path"].exists()
+
+
+def test_generate_cover_illustration_applies_style_when_given(tmp_path):
+    draft = _cover_draft_with_image(tmp_path)
+    provider = _FakeImageProvider()
+    tool = generate_cover_illustration_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+        image_provider=provider,
+        confirm=lambda _: True,
+    )
+
+    tool.handler(
+        {"prompt": "x", "quality": "medium", "style": "portrait-frame"}
+    )
+
+    assert draft.cover_style == "portrait-frame"
+
+
+def test_generate_cover_illustration_rejects_invalid_style(tmp_path):
+    """Style validation lives at the tool boundary — no wasted API
+    call for a style the renderer can't draw."""
+    draft = _cover_draft_with_image(tmp_path)
+    provider = _FakeImageProvider()
+    tool = generate_cover_illustration_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+        image_provider=provider,
+        confirm=lambda _: True,
+    )
+
+    result = tool.handler(
+        {"prompt": "x", "quality": "medium", "style": "cinemascope"}
+    )
+
+    assert provider.calls == []
+    assert draft.cover_image is None
+    assert "cinemascope" in result.lower() or "invalid" in result.lower()
+
+
+def test_generate_cover_illustration_rejects_invalid_quality(tmp_path):
+    """``quality`` controls the price; a typo must not silently fall
+    back to the most expensive tier."""
+    draft = _cover_draft_with_image(tmp_path)
+    provider = _FakeImageProvider()
+    tool = generate_cover_illustration_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+        image_provider=provider,
+        confirm=lambda _: True,
+    )
+
+    result = tool.handler({"prompt": "x", "quality": "ultra"})
+
+    assert provider.calls == []
+    assert "ultra" in result.lower() or "invalid" in result.lower()
+
+
+def test_generate_cover_illustration_surfaces_provider_error(tmp_path):
+    """An ``ImageGenerationError`` from the provider (auth / rate /
+    policy filter) comes back as a tool result the agent can show the
+    user — not a raw traceback."""
+    draft = _cover_draft_with_image(tmp_path)
+    provider = _FakeImageProvider(
+        raises=ImageGenerationError("OpenAI rejected the request: bad key")
+    )
+    tool = generate_cover_illustration_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+        image_provider=provider,
+        confirm=lambda _: True,
+    )
+
+    result = tool.handler({"prompt": "x", "quality": "medium"})
+
+    # Cover state didn't get half-written.
+    assert draft.cover_image is None
+    assert "bad key" in result.lower() or "failed" in result.lower()
+
+
+def test_generate_cover_illustration_requires_non_empty_prompt(tmp_path):
+    """Empty-string prompt would either 400 at the API or generate
+    whatever — both are surprising. Catch it at the boundary."""
+    draft = _cover_draft_with_image(tmp_path)
+    provider = _FakeImageProvider()
+    tool = generate_cover_illustration_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+        image_provider=provider,
+        confirm=lambda _: True,
+    )
+
+    result = tool.handler({"prompt": "", "quality": "medium"})
+
+    assert provider.calls == []
+    assert "prompt" in result.lower()
+
+
+def test_generate_cover_illustration_schema_advertises_style_and_quality(
+    tmp_path,
+):
+    """Tool schema is what the LLM sees — styles and quality values
+    must be enumerated so the model doesn't hallucinate a name."""
+    tool = generate_cover_illustration_tool(
+        get_draft=lambda: None,
+        get_session_root=lambda: tmp_path,
+        image_provider=_FakeImageProvider(),
+        confirm=lambda _: True,
+    )
+
+    props = tool.input_schema["properties"]
+    assert "prompt" in props
+    assert set(props["quality"]["enum"]) == {"low", "medium", "high"}
+    assert set(props["style"]["enum"]) == {
+        "full-bleed", "framed", "poster", "portrait-frame", "title-band-top",
+    }
+    assert tool.input_schema["required"] == ["prompt"]
 
 
 # --- choose_layout -------------------------------------------------------

@@ -24,6 +24,7 @@ from src.agent import Tool
 from src.builder import build_pdf
 from src.draft import Draft, atomic_copy, next_version_number, slugify, to_book
 from src.imposition import impose_a5_to_a4
+from src.providers.image import ImageGenerationError, ImageProvider
 from src.schema import VALID_COVER_STYLES, VALID_LAYOUTS
 
 
@@ -364,6 +365,143 @@ def set_cover_tool(get_draft: Callable[[], Draft | None]) -> Tool:
         },
         handler=handler,
     )
+
+
+# OpenAI ``gpt-image-1`` pricing (portrait 1024x1536, USD, approximate).
+# Drives the confirmation prompt shown to the user; actual billing
+# happens on the user's OpenAI account. Check the current rates at
+# https://openai.com/api/pricing/ when a visible drift is reported.
+_IMAGE_COST_USD = {"low": 0.02, "medium": 0.07, "high": 0.19}
+# A5 covers are ≈ 2:3 portrait. 1024x1536 is the closest portrait size
+# gpt-image-1 supports, and it's what the renderer letterboxes cleanly
+# at A5 without wasted whitespace.
+_IMAGE_SIZE_PORTRAIT = "1024x1536"
+
+
+def generate_cover_illustration_tool(
+    get_draft: Callable[[], Draft | None],
+    get_session_root: Callable[[], Path],
+    image_provider: ImageProvider,
+    confirm: Callable[[str], bool],
+) -> Tool:
+    """Tool: generate a cover illustration from a text prompt and wire
+    it up as the book's cover image.
+
+    The user must approve both the prompt text and the estimated cost
+    before any API call is made — the tool surfaces the price tier in
+    the confirmation prompt so "high quality" isn't a silent 10x spend.
+
+    On approval, the provider writes a PNG under ``<session_root>/
+    .book-gen/images/cover-<hash>.png`` and the draft's ``cover_image``
+    points at it. An optional ``style`` arg lets the agent pick the
+    cover template in the same round (saves a separate ``set_cover``
+    call).
+    """
+
+    def handler(input_: dict) -> str:
+        draft = get_draft()
+        if draft is None:
+            return _MSG_NO_DRAFT
+
+        prompt = str(input_.get("prompt", "")).strip()
+        if not prompt:
+            return (
+                "Rejected: prompt is required. Ask the user to describe "
+                "the cover illustration they want."
+            )
+
+        quality = str(input_.get("quality", "medium"))
+        if quality not in _IMAGE_COST_USD:
+            return (
+                f"Invalid quality '{quality}'. "
+                f"Valid values: {sorted(_IMAGE_COST_USD)}."
+            )
+
+        style = input_.get("style")
+        if style is not None and style not in VALID_COVER_STYLES:
+            return (
+                f"Invalid style '{style}'. Valid styles: "
+                f"{sorted(VALID_COVER_STYLES)}."
+            )
+
+        cost = _IMAGE_COST_USD[quality]
+        confirm_msg = (
+            f"Generate a cover illustration with OpenAI gpt-image-1?\n"
+            f"  Prompt : {prompt}\n"
+            f"  Quality: {quality} (~${cost:.2f})\n"
+            "This will call the OpenAI image API and bill your account."
+        )
+        if not confirm(confirm_msg):
+            return (
+                "User declined the cover generation. Keep the existing "
+                "cover (or ask the user to propose a different prompt)."
+            )
+
+        output_path = _cover_image_output_path(get_session_root(), prompt)
+        try:
+            image_provider.generate(
+                prompt=prompt,
+                output_path=output_path,
+                size=_IMAGE_SIZE_PORTRAIT,
+                quality=quality,
+            )
+        except ImageGenerationError as e:
+            return f"Cover generation failed: {e}"
+
+        draft.cover_image = output_path
+        if style is not None:
+            draft.cover_style = style
+        suffix = f" Cover style set to '{style}'." if style is not None else ""
+        return (
+            f"Cover illustration generated at {output_path}. "
+            f"Draft cover_image updated.{suffix}"
+        )
+
+    return Tool(
+        name="generate_cover_illustration",
+        description=(
+            "Generate a cover illustration from a text prompt using "
+            "OpenAI's gpt-image-1 (requires an OpenAI API key). The user "
+            "is shown the prompt and the estimated cost and must confirm "
+            "before any API call happens. On approval the image is saved "
+            "into the project and set as the book's cover. Use this only "
+            "when the user explicitly wants an AI-generated cover — "
+            "prefer reusing a page's existing drawing via set_cover so "
+            "the child's artwork leads. 'quality' trades off cost vs "
+            "detail: low ≈ $0.02, medium ≈ $0.07, high ≈ $0.19. 'style' "
+            "is optional and picks the cover template; omit it to leave "
+            "the current choice alone."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string"},
+                "quality": {
+                    "type": "string",
+                    "enum": sorted(_IMAGE_COST_USD),
+                },
+                "style": {
+                    "type": "string",
+                    "enum": sorted(VALID_COVER_STYLES),
+                },
+            },
+            "required": ["prompt"],
+        },
+        handler=handler,
+    )
+
+
+def _cover_image_output_path(session_root: Path, prompt: str) -> Path:
+    """Build a unique ``.book-gen/images/cover-<hash>.png`` for this
+    generation. The hash includes the prompt plus a call counter so
+    regenerating with the same prompt doesn't overwrite the prior
+    attempt — the user may want to compare results."""
+    import hashlib
+    import time
+
+    token = f"{prompt}|{time.time_ns()}"
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:10]
+    return session_root / ".book-gen" / "images" / f"cover-{digest}.png"
 
 
 _RHYTHM_RULES_FOR_TOOL_DESC = (
