@@ -97,6 +97,156 @@ def test_read_draft_passes_child_text_through_unchanged():
     assert quirky in result
 
 
+def test_read_draft_flags_image_only_pages_so_agent_asks_not_fabricates():
+    """Samsung-Notes PDFs (and other image-text exports) have no ``/Font``
+    resource — ``pypdf`` correctly returns empty strings for ``page.text``.
+    A naive ``read_draft`` summary just showed ``"Page 1 (drawing, ...): "``
+    with a trailing empty field, which the LLM read as "this page has no
+    text, maybe a picture-only book?" and started asking the user whether
+    they wanted text at all.
+
+    The real situation is: the page's image almost certainly contains the
+    child's text visually, but the pipeline has no OCR yet so we can't
+    extract it. The agent must know that and ask the user to transcribe,
+    not guess the text is missing-by-design or (worse) invent a
+    replacement.
+
+    Pinning the contract so a future refactor can't drop the flag."""
+    draft = Draft(
+        source_pdf=Path("x.pdf"),
+        title="Book",
+        author="A",
+        pages=[
+            DraftPage(text="", image=Path("images/p1.png")),
+            DraftPage(text="", image=Path("images/p2.png")),
+        ],
+    )
+    tool = read_draft_tool(get_draft=lambda: draft)
+
+    result = tool.handler({}).lower()
+
+    # Page-level marker so the LLM can see this is a structural signal,
+    # not just a coincidentally-empty field.
+    assert "image-only" in result or "no extractable text" in result
+    # Explicit preserve-child-voice-flavoured instruction: don't invent.
+    # The exact wording can evolve; we check for a representative phrase.
+    assert (
+        "ask the user" in result
+        or "transcribe" in result
+        or "don't fabricate" in result
+        or "do not invent" in result
+    )
+
+
+def test_read_draft_does_not_flag_pages_that_carry_text():
+    """Flag must not fire for pages that actually have extracted text —
+    a false positive would train the LLM to ignore the real marker."""
+    draft = Draft(
+        source_pdf=Path("x.pdf"),
+        title="Book",
+        author="A",
+        pages=[
+            DraftPage(text="once upon a time", image=Path("images/p1.png")),
+        ],
+    )
+    tool = read_draft_tool(get_draft=lambda: draft)
+
+    result = tool.handler({}).lower()
+
+    assert "image-only" not in result
+    assert "no extractable text" not in result
+
+
+def test_read_draft_does_not_flag_text_only_pages_without_an_image():
+    """An imageless page is already labeled ``no drawing`` — a second
+    ``image-only`` flag on the same page would contradict that and
+    read as a parser bug to the LLM."""
+    draft = Draft(
+        source_pdf=Path("x.pdf"),
+        title="Book",
+        author="A",
+        pages=[
+            DraftPage(text="", image=None),
+        ],
+    )
+    tool = read_draft_tool(get_draft=lambda: draft)
+
+    result = tool.handler({}).lower()
+
+    assert "image-only" not in result
+
+
+def test_read_draft_lists_only_the_image_only_pages_in_the_summary_note():
+    """Mixed draft: some pages carry text, some are image-only. The
+    summary NOTE at the end must name exactly the image-only pages —
+    missing a page leaves the agent guessing, over-including confuses
+    the LLM about which pages need transcription."""
+    draft = Draft(
+        source_pdf=Path("x.pdf"),
+        title="Book",
+        author="A",
+        pages=[
+            DraftPage(text="page one text", image=Path("p1.png")),
+            DraftPage(text="", image=Path("p2.png")),    # image-only
+            DraftPage(text="page three text", image=Path("p3.png")),
+            DraftPage(text="", image=Path("p4.png")),    # image-only
+        ],
+    )
+    tool = read_draft_tool(get_draft=lambda: draft)
+
+    result = tool.handler({}).lower()
+
+    # The note names 2 and 4 but not 1 or 3.
+    assert "page(s) 2, 4" in result or "pages 2, 4" in result.replace("page(s)", "pages")
+    # And the pages-carrying-text still appear untouched.
+    assert "page one text" in result
+    assert "page three text" in result
+
+
+def test_read_draft_note_only_fires_once_not_per_page():
+    """The explanatory NOTE is a single reminder for the LLM, not a
+    per-page spam. Keep the per-page line terse and push the full
+    "don't fabricate / preserve-child-voice" wording to one summary
+    line — otherwise an 8-page draft would echo the instruction 8
+    times and dilute its signal."""
+    draft = Draft(
+        source_pdf=Path("x.pdf"),
+        title="Book",
+        author="A",
+        pages=[
+            DraftPage(text="", image=Path(f"p{i}.png"))
+            for i in range(1, 9)
+        ],
+    )
+    tool = read_draft_tool(get_draft=lambda: draft)
+
+    result = tool.handler({}).lower()
+
+    # "don't invent" wording appears exactly once in the whole result.
+    assert result.count("do not invent") + result.count("don't invent") == 1
+
+
+def test_read_draft_preserves_child_voice_warning_mentions_transcription():
+    """The NOTE must spell out the path forward — "ask the user to
+    transcribe" — so the LLM does not invent a fallback like
+    "generate text from the image" or "skip these pages". Part of the
+    agent-surface preserve-child-voice guarantee."""
+    draft = Draft(
+        source_pdf=Path("x.pdf"),
+        title="Book",
+        author="A",
+        pages=[DraftPage(text="", image=Path("p1.png"))],
+    )
+    tool = read_draft_tool(get_draft=lambda: draft)
+
+    result = tool.handler({}).lower()
+
+    assert "transcribe" in result
+    # And a preserve-child-voice reference so future agents (and
+    # future maintainers reading the code) see the link explicitly.
+    assert "preserve-child-voice" in result or "child" in result
+
+
 # --- propose_typo_fix -----------------------------------------------------
 
 
@@ -454,6 +604,23 @@ def test_set_cover_rejects_invalid_style():
     assert draft.cover_image is None
     assert draft.cover_style == "full-bleed"
     assert "cinemascope" in result.lower() or "invalid" in result.lower()
+
+
+def test_set_cover_description_hints_at_ai_cover_option():
+    """``generate_cover_illustration`` is only registered when the
+    active provider is OpenAI (PR #41). Users on Claude / Gemini /
+    Ollama never see it — so the cover-setting flow must mention AI
+    generation as an option in ``set_cover``'s description, which
+    every provider's LLM reads. Otherwise the agent quietly assumes
+    the only way to cover a book is to pick a page's drawing."""
+    tool = set_cover_tool(get_draft=lambda: None)
+    desc = tool.description.lower()
+
+    # Some reference to AI generation or the escape-hatch command.
+    assert "ai" in desc or "generate" in desc
+    # And the switch-provider hint so Claude / Gemini / Ollama users
+    # can reach the generator.
+    assert "openai" in desc or "/model" in desc
 
 
 def test_set_cover_schema_advertises_style_enum():

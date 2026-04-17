@@ -147,10 +147,38 @@ def read_draft_tool(get_draft: Callable[[], Draft | None]) -> Tool:
         lines.append(f"Author: {author}")
         lines.append(f"Cover drawing set: {cover}")
         lines.append(f"{len(draft.pages)} pages:")
+        image_only_pages: list[int] = []
         for i, page in enumerate(draft.pages, start=1):
             marker = "drawing" if page.image is not None else "no drawing"
             text = page.text.strip().replace("\n", " ")
-            lines.append(f"  Page {i} ({marker}, layout={page.layout}): {text}")
+            # Samsung-Notes exports (and other image-text PDFs) have
+            # pages with a drawing but no ``/Font`` resource — the
+            # child's text lives visually inside the image and pypdf
+            # returns empty. Flag these explicitly so the agent asks
+            # the user to transcribe rather than guessing "picture-
+            # only book" or (worse) inventing text. Pages with no
+            # image at all are already covered by "no drawing".
+            image_only = page.image is not None and not text
+            if image_only:
+                image_only_pages.append(i)
+                note = " — image-only, no extractable text"
+                lines.append(
+                    f"  Page {i} ({marker}, layout={page.layout}): {text}{note}"
+                )
+            else:
+                lines.append(
+                    f"  Page {i} ({marker}, layout={page.layout}): {text}"
+                )
+        if image_only_pages:
+            which = ", ".join(str(n) for n in image_only_pages)
+            lines.append(
+                f"NOTE: page(s) {which} are image-only — the PDF has no "
+                "text layer there, likely a Samsung Notes / phone-scan "
+                "export where the text is rendered inside the image. "
+                "OCR is not available yet; ask the user to transcribe "
+                "each page's text verbatim. Do not invent, paraphrase, "
+                "or 'guess' the child's words — preserve-child-voice."
+            )
         return "\n".join(lines)
 
     return Tool(
@@ -350,7 +378,11 @@ def set_cover_tool(get_draft: Callable[[], Draft | None]) -> Tool:
             "'portrait-frame' (drawing inside a decorative border, "
             "title above), 'title-band-top' (coloured band with title "
             "at the top, drawing below), or 'poster' (type-only cover, "
-            "no drawing). Defaults to 'full-bleed' when omitted."
+            "no drawing). Defaults to 'full-bleed' when omitted. "
+            "If the user wants an AI-generated cover instead of reusing "
+            "a page's drawing, the ``generate_cover_illustration`` tool "
+            "is available on the OpenAI provider — tell users on other "
+            "providers they can switch via /model to access it."
         ),
         input_schema={
             "type": "object",
