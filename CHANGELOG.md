@@ -1,6 +1,176 @@
 # CHANGELOG
 
 
+## v1.2.2 (2026-04-18)
+
+### Bug Fixes
+
+- **agent**: Drop source image after OCR + skip_page tool — end of the duplicate-text bug
+  ([#48](https://github.com/mfozmen/littlepress-ai/pull/48),
+  [`400af87`](https://github.com/mfozmen/littlepress-ai/commit/400af876da236bfb863b550e035007bdb5d18b10))
+
+* fix(agent): drop source image + skip_page tool — end of the duplicate-text bug
+
+Second-run Yavru Dinozor feedback split into six items in ``docs/PLAN.md``. This PR ships the two
+  that were actively making the rendered book wrong.
+
+### P1 — Duplicate text on Samsung-Notes pages
+
+When a PDF carries each page as a single PNG that contains *both* the child's text and the
+  illustration (phone-scan / Samsung Notes exports), running ``transcribe_page`` used to leave
+  ``page.image`` in place. The renderer then printed the OCR'd text *and* the image that already
+  contained the same text — so every page showed the story twice.
+
+On confirmed OCR, the tool now:
+
+- writes the cleaned reply into ``page.text``, as before, - **clears** ``page.image`` (the text is
+  already in ``page.text`` and keeping the image would double-print it), - sets ``page.layout =
+  "text-only"`` so the renderer uses the text-only path.
+
+The confirm prompt surfaces the trade-off explicitly:
+
+> Approving also removes the source image on this page and switches > its layout to text-only — this
+  avoids the renderer printing the > text twice (once inside the image, once as the page's text). An
+  > AI-generated replacement illustration is a future option > (``generate_page_illustration``).
+
+Illustration recovery is the ``generate_page_illustration`` item now listed under "Explicitly
+  deferred" in ``docs/PLAN.md`` — same surface as ``generate_cover_illustration`` but writes to a
+  page.
+
+### P2 — ``skip_page`` tool
+
+Samsung Notes trails 2-3 blank pages on most exports. PR #47's ``<BLANK>`` sentinel correctly flags
+  them, but they stayed in ``draft.pages`` and both ``propose_layouts`` and the renderer treated
+  them as real pages — printed blank spreads the child never meant to include.
+
+New ``skip_page(page: int)`` tool removes a page from ``draft.pages`` after a y/n confirmation.
+  Renumbers subsequent pages so later tool calls (``choose_layout``, ``set_cover``) keep referencing
+  pages the way the user counts them. The confirm prompt shows whether the page has a drawing and a
+  text preview so the removal is never surprise-y.
+
+Registered in ``src/repl.py`` on every provider (no provider gate — the tool is pure draft editing,
+  no external call).
+
+### Tests (9 new, 503 total, was 494)
+
+Transcribe (3): - ``test_transcribe_page_clears_image_and_sets_text_only_on_accept`` -
+  ``test_transcribe_page_confirm_prompt_warns_about_image_replacement`` -
+  ``test_transcribe_page_declined_keeps_image_and_layout_intact``
+
+Skip-page (6): - ``test_skip_page_requires_draft`` - ``test_skip_page_rejects_out_of_range`` -
+  ``test_skip_page_asks_for_confirmation_with_page_context`` -
+  ``test_skip_page_declined_leaves_draft_unchanged`` -
+  ``test_skip_page_confirmed_removes_page_and_renumbers`` (pins the shift-down behaviour so later
+  tool calls don't target the wrong page) - ``test_skip_page_schema_requires_page``
+
+### Live verification
+
+Re-ran the OCR demo against Yavru Dinozor. Before: 8 pages, five with duplicated text (image + OCR),
+  three blanks tagged ``image-only`` but still rendered. After: 5 clean ``text-only`` pages (1-5
+  transcribed verbatim), pages 6-8 removed from the draft before rendering. The PDF opens with a
+  clean five-page Turkish book.
+
+### PLAN.md
+
+Added the six Yavru-Dinozor-second-run items. P1+P2 shipped here; P3 (AI cover surfacing), P4
+  (series + volume number question), P5 (metadata review + back-cover prompt), and P6 (render-output
+  message) tracked for their own PRs. ``generate_page_illustration`` added to "Explicitly deferred"
+  as the restore path for illustrations dropped by P1.
+
+* fix(agent): address PR #48 review — preserve-child-voice guardrails
+
+Eleven findings from the PR review: four critical preserve-child-voice / docs issues and seven
+  sub-threshold polish items. Addressed in a single pass.
+
+### Critical
+
+1. **``transcribe_page`` was destroying drawings on mixed-content pages.** The original fix was
+  right for Samsung Notes exports (pure text screenshots) but the project also targets scanned
+  handwriting + drawings, where the same page image carries both text and a child's sketch. Added a
+  ``keep_image: bool`` tool input (default ``False``, preserving the Samsung-Notes default). When
+  the agent knows the image carries a drawing, it passes ``keep_image=true`` and the tool writes
+  ``page.text`` without touching ``page.image`` or ``page.layout``. The confirm prompt names the
+  destruction risk explicitly on the default path ("Any drawing on this page will also be lost") and
+  names the alternative ("call this tool with ``keep_image=true`` instead").
+
+2. **``docs/PLAN.md`` was not trimmed.** Moved P1 and P2 out of "Yavru Dinozor second-run feedback"
+  under "Next up", added Shipped-table rows for PR #47 (blank-sentinel filter) and this PR.
+
+3. **README missing the tool changes.** The ``transcribe_page`` bullet now names the image-clearing
+  + layout-reset side effect and the ``keep_image`` escape hatch; added a new bullet describing
+  ``skip_page`` for the blank-page cleanup flow.
+
+4. **Module top docstring claimed an invariant that's no longer true.** "No tool rewrites page text
+  freely" was literally false after PR #46 + #48. Rewrote to describe the actual contract: every
+  page-state mutation is gated behind a ``confirm`` callback; lists the five tools that carry the
+  gate today (``propose_typo_fix``, ``transcribe_page``, ``skip_page``, ``propose_layouts``,
+  ``generate_cover_illustration``).
+
+### Sub-threshold
+
+5. **``skip_page`` drawing warning was a status label, not a warning.** ``drawing: yes`` → when the
+  page has an image, the prompt now spells out that removal is permanent and the draft-level image
+  reference is lost.
+
+6. **``skip_page`` decline path invented tools.** The old suggestion named ``move_content`` and
+  "mark as back cover" — neither exists. Narrowed to paths that actually exist: keep as a blank
+  spread, or have the user type text in the conversation.
+
+7. **``read_draft`` description didn't name ``skip_page``.** Added: "When ``transcribe_page``
+  reports a page looks blank, confirm with the user and call ``skip_page`` to drop it."
+
+8. **``transcribe_page`` description didn't mention the image-drop side effect.** Added an explicit
+  SIDE EFFECT paragraph so the LLM knows not to reach for this tool on mixed-content pages without
+  ``keep_image=true``.
+
+9. **CLAUDE.md architecture bullet didn't list ``transcribe_page`` or ``skip_page``.** Extended the
+  bullet + updated the preserve-child-voice line to describe the real contract.
+
+10. **``skip_page`` confirm named a non-existent page on the last page.** "Page N+1 becomes page N"
+  is only true when there *is* a page N+1. Guarded with ``if page_n < len(draft.pages):`` so
+  last-page removal prints a neutral "Approve the removal?" line with no fictional renumber claim.
+
+11. **``skip_page`` crashed the agent turn on malformed input.** ``int(input_["page"])`` raised
+  ``KeyError`` / ``ValueError`` to the caller; every other tool in this file guards input. Now
+  returns tool-result strings for missing / non-integer ``page``.
+
+### Tests (8 new; 511 total, was 503)
+
+- ``test_transcribe_page_keep_image_flag_preserves_mixed_content_page`` — Finding #1. -
+  ``test_transcribe_page_confirm_prompt_warns_about_drawing_destruction`` — Finding #1 (warning
+  wording), strict assertion on "any drawing will / drawing will be lost" phrasing so a later change
+  can't regress the warning into a vague "future option" aside. -
+  ``test_transcribe_page_description_mentions_image_side_effect`` — Finding #8. -
+  ``test_skip_page_confirm_warns_explicitly_when_page_has_drawing`` — Finding #5. -
+  ``test_skip_page_decline_suggestion_does_not_invent_tools`` — Finding #6 (explicit
+  ``move_content`` / "mark as back cover" absence checks). -
+  ``test_skip_page_last_page_confirm_does_not_promise_renumber`` — Finding #10. -
+  ``test_skip_page_handles_missing_or_bad_input_gracefully`` — Finding #11 (missing key +
+  non-integer value). - ``test_read_draft_description_names_the_skip_page_tool`` — Finding #7.
+
+* refactor(agent_tools): extract skip_page prompt builders to tame complexity
+
+Sonar finding on PR #48: ``skip_page_tool::handler`` hit cognitive complexity 21 (limit 15) after
+  the review-fix round added input guards, a drawing-destruction warning, a last-page renumber
+  guard, and a narrower decline suggestion.
+
+Pure extract-function refactor, same pattern used on ``set_cover_tool::handler`` in PR #45. Split
+  into:
+
+- ``_parse_skip_page_input`` — grabs ``page`` from the input dict, handles the missing-key /
+  non-integer / out-of-range cases, returns ``(page_n, error)`` so the handler can branch once. -
+  ``_build_skip_page_prompt`` — composes the confirm prompt from three one-line helpers. -
+  ``_skip_preview_line`` / ``_skip_drawing_line`` / ``_skip_renumber_line`` — one decision each; the
+  destruction warning and last-page guard from the review round live here now.
+
+Handler is down to: draft guard → parse → build → confirm → mutate. No behaviour change, existing
+  tests pass. 511 green.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+
 ## v1.2.1 (2026-04-18)
 
 ### Bug Fixes
@@ -99,6 +269,11 @@ Re-ran the OCR demo against the Yavru Dinozor PDF: Claude complied with the sent
 ---------
 
 Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+### Chores
+
+- **release**: 1.2.1 [skip ci]
+  ([`22c8cae`](https://github.com/mfozmen/littlepress-ai/commit/22c8cae67aa1f0b1e082d1dd318256f1d121e02b))
 
 
 ## v1.2.0 (2026-04-17)
