@@ -467,6 +467,24 @@ def transcribe_page_tool(
                 "vision-unsupported model). Draft left unchanged; "
                 "ask the user to transcribe manually."
             )
+        if _looks_like_blank_page_meta(cleaned):
+            # Samsung Notes exports routinely trail blank pages, and
+            # Claude vision honestly acknowledges them — "the image
+            # appears to be completely blank, no visible text" — rather
+            # than fabricating a transcription. The tool must not treat
+            # that acknowledgement as a successful OCR: writing the
+            # English meta-response into the draft would render it
+            # verbatim as the child's "text" on that page. Leave
+            # page.text alone and tell the agent the page is probably
+            # blank.
+            return (
+                f"Page {page_n} looks blank to the vision model "
+                "(no transcribable text on the image). Draft left "
+                "unchanged — ask the user whether this page was meant "
+                "to be empty (e.g. a trailing blank from the export) "
+                "or whether they want to skip it / mark it as the "
+                "back cover."
+            )
 
         prompt_msg = _build_transcribe_confirm_prompt(page_n, page.text, cleaned)
         if not confirm(prompt_msg):
@@ -567,6 +585,33 @@ def _build_image_block(image_path: Path) -> dict:
             "data": base64.b64encode(raw).decode("ascii"),
         },
     }
+
+
+# Meta-response patterns an LLM produces when the page image is
+# genuinely blank, rather than an actual transcription. Match
+# substring-style so a wrapped/punctuated version ("I'm sorry, but
+# the image appears to be blank.") still trips the filter. Each
+# phrase is specific enough that a child's story text is unlikely
+# to reproduce it verbatim — the false-positive test pins this.
+_BLANK_META_PHRASES = (
+    "appears to be blank",
+    "appears to be completely blank",
+    "appears to be empty",
+    "is completely blank",
+    "no visible text",
+    "no text to transcribe",
+    "cannot transcribe",
+    "there is no text",
+)
+
+
+def _looks_like_blank_page_meta(reply: str) -> bool:
+    """Return True when the LLM reply is a meta-acknowledgement that
+    the page image carries no transcribable text. Used as a second
+    filter after the empty-reply check, because Claude vision (and
+    others) answer blank pages in prose rather than with ``""``."""
+    lowered = reply.lower()
+    return any(phrase in lowered for phrase in _BLANK_META_PHRASES)
 
 
 def _build_transcribe_confirm_prompt(

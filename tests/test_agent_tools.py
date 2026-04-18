@@ -1411,6 +1411,106 @@ def test_transcribe_page_downscales_oversized_images_before_sending(tmp_path):
     assert len(payload) < 4 * 1024 * 1024
 
 
+def test_transcribe_page_rejects_blank_image_meta_response(tmp_path):
+    """Live-test finding (Yavru Dinozor): when the PDF carries trailing
+    blank pages (common on Samsung Notes exports), Claude vision
+    honestly replies in English — *"The image appears to be completely
+    blank/white with no visible text to transcribe."* — rather than
+    pretending to transcribe non-existent text. The previous
+    implementation treated that reply as a successful transcription
+    and wrote the English acknowledgement into ``page.text``, which
+    would have been rendered verbatim into the A5 book.
+
+    The tool must detect these meta-responses and treat them the same
+    way as an empty reply: leave the draft alone and tell the agent
+    the page is probably blank."""
+    img = _tiny_png(tmp_path / "page-blank.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        title="Book",
+        author="A",
+        pages=[DraftPage(text="", image=img)],
+    )
+    llm = _FakeLLM(
+        reply=(
+            "The image appears to be completely blank/white with no "
+            "visible text to transcribe."
+        )
+    )
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: llm,
+        confirm=lambda _p: True,
+    )
+
+    result = tool.handler({"page": 1})
+
+    # Draft untouched — the "blank" acknowledgement didn't land in
+    # page.text and wouldn't end up printed on the page.
+    assert draft.pages[0].text == ""
+    # Result signals "this page looks blank", not a fake success.
+    lowered = result.lower()
+    assert "blank" in lowered or "empty" in lowered
+
+
+def test_transcribe_page_rejects_varied_blank_phrases(tmp_path):
+    """The blank-page filter has to match several phrasings Claude
+    produces for genuinely empty pages — not just the exact wording
+    from the Yavru Dinozor trace. Pin a handful of common shapes so
+    a later rewrite can't silently regress on one."""
+    phrases = [
+        "The image appears to be blank.",
+        "No visible text in the image.",
+        "I cannot transcribe any text — the page is empty.",
+        "There is no text to transcribe on this page.",
+    ]
+    for phrase in phrases:
+        img = _tiny_png(tmp_path / "p.png")
+        draft = Draft(
+            source_pdf=tmp_path / "x.pdf",
+            title="Book",
+            author="A",
+            pages=[DraftPage(text="", image=img)],
+        )
+        tool = transcribe_page_tool(
+            get_draft=lambda: draft,
+            get_llm=lambda: _FakeLLM(reply=phrase),
+            confirm=lambda _p: True,
+        )
+
+        result = tool.handler({"page": 1})
+
+        assert draft.pages[0].text == "", (
+            f"Blank-page filter should have rejected {phrase!r} but "
+            f"page.text became {draft.pages[0].text!r}."
+        )
+        assert "blank" in result.lower() or "empty" in result.lower()
+
+
+def test_transcribe_page_does_not_reject_normal_text_with_word_blank(tmp_path):
+    """Guard against false positives: a child's story that happens to
+    include the word "blank" (or "empty") must still transcribe
+    normally — only the whole-reply meta-acknowledgement pattern is
+    filtered, not every reply that contains the word."""
+    draft = _image_only_draft(tmp_path)
+    llm = _FakeLLM(
+        reply="The page was blank until the dragon drew a moon on it."
+    )
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: llm,
+        confirm=lambda _p: True,
+    )
+
+    tool.handler({"page": 1})
+
+    # Story text landed in page.text even though it contains "blank".
+    assert (
+        draft.pages[0].text
+        == "The page was blank until the dragon drew a moon on it."
+    )
+
+
 def test_read_draft_description_points_agent_at_transcribe_page_tool(tmp_path):
     """PR #46 review sub-3 — the NOTE in the runtime output was
     updated to mention ``transcribe_page``, but the ``description``
