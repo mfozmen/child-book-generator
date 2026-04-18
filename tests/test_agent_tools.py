@@ -15,6 +15,7 @@ from src.agent_tools import (
     render_book_tool,
     set_cover_tool,
     set_metadata_tool,
+    skip_page_tool,
     transcribe_page_tool,
 )
 from src.draft import Draft, DraftPage
@@ -1554,6 +1555,196 @@ def test_transcribe_page_sentinel_approach_is_language_agnostic(tmp_path):
     # the user rejected it — draft stays clean.
     assert seen_prompts, "confirm gate must run on non-sentinel replies"
     assert draft.pages[0].text == ""
+
+
+def test_transcribe_page_clears_image_and_sets_text_only_on_accept(tmp_path):
+    """P1 — Samsung Notes exports put the child's text and the
+    illustration into a single PNG. After ``transcribe_page``
+    accepts a real transcription, leaving ``page.image`` in place
+    makes the renderer print the text twice (once inside the image,
+    once as ``page.text``). On confirmed OCR, drop the source image
+    and set ``page.layout = "text-only"`` so the renderer only
+    prints the clean transcription. Illustrations can be restored
+    later via the deferred ``generate_page_illustration`` tool."""
+    img = _tiny_png(tmp_path / "p.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        title="Book",
+        author="A",
+        pages=[DraftPage(text="", image=img, layout="image-top")],
+    )
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: _FakeLLM(reply="Bir gün bir yumurta çatlamış."),
+        confirm=lambda _p: True,
+    )
+
+    tool.handler({"page": 1})
+
+    assert draft.pages[0].text == "Bir gün bir yumurta çatlamış."
+    assert draft.pages[0].image is None, (
+        "source image must be cleared after OCR acceptance — otherwise "
+        "the renderer prints the text both inside the image and as "
+        "page.text (the Yavru Dinozor duplicate-text bug)."
+    )
+    assert draft.pages[0].layout == "text-only"
+
+
+def test_transcribe_page_confirm_prompt_warns_about_image_replacement(
+    tmp_path,
+):
+    """The user must know, before saying y, that approving the OCR
+    also drops the source image — that's a trade-off, not a
+    housekeeping detail. Surface it in the confirm prompt."""
+    draft = _image_only_draft(tmp_path)
+    seen: list[str] = []
+
+    def _confirm(prompt):
+        seen.append(prompt)
+        return True
+
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: _FakeLLM(reply="owls"),
+        confirm=_confirm,
+    )
+
+    tool.handler({"page": 1})
+
+    prompt = seen[0].lower()
+    # Something that signals image will go away — we don't pin exact
+    # wording, just that the trade-off is communicated.
+    assert (
+        "image" in prompt
+        and ("remove" in prompt or "drop" in prompt or "clear" in prompt or "replace" in prompt)
+    )
+
+
+def test_transcribe_page_declined_keeps_image_and_layout_intact(tmp_path):
+    """If the user rejects the OCR reply, page state must stay
+    exactly as it was — image in place, layout unchanged."""
+    img = _tiny_png(tmp_path / "p.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        title="Book",
+        author="A",
+        pages=[DraftPage(text="", image=img, layout="image-top")],
+    )
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: _FakeLLM(reply="owls"),
+        confirm=lambda _p: False,
+    )
+
+    tool.handler({"page": 1})
+
+    assert draft.pages[0].text == ""
+    assert draft.pages[0].image == img
+    assert draft.pages[0].layout == "image-top"
+
+
+# --- skip_page ---------------------------------------------------------
+
+
+def test_skip_page_requires_draft(tmp_path):
+    tool = skip_page_tool(get_draft=lambda: None, confirm=lambda _p: True)
+
+    result = tool.handler({"page": 1})
+
+    assert "no draft" in result.lower()
+
+
+def test_skip_page_rejects_out_of_range(tmp_path):
+    draft = _image_only_draft(tmp_path)
+    tool = skip_page_tool(get_draft=lambda: draft, confirm=lambda _p: True)
+
+    result = tool.handler({"page": 99})
+
+    assert "99" in result or "out of" in result.lower()
+
+
+def test_skip_page_asks_for_confirmation_with_page_context(tmp_path):
+    """Skipping a page is destructive — the confirm prompt must name
+    the page and surface any text already there so the user can see
+    what's being dropped. Blank pages (the common case after
+    ``transcribe_page`` hits ``<BLANK>``) show their empty state so
+    the user understands the removal is low-stakes."""
+    img = _tiny_png(tmp_path / "p.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        title="Book",
+        author="A",
+        pages=[
+            DraftPage(text="page 1 text", image=Path("p1.png")),
+            DraftPage(text="", image=img),
+        ],
+    )
+    seen: list[str] = []
+
+    def _confirm(p):
+        seen.append(p)
+        return True
+
+    tool = skip_page_tool(get_draft=lambda: draft, confirm=_confirm)
+
+    tool.handler({"page": 2})
+
+    assert seen, "confirm gate must run before removing the page"
+    assert "page 2" in seen[0].lower() or "page=2" in seen[0].lower()
+
+
+def test_skip_page_declined_leaves_draft_unchanged(tmp_path):
+    img = _tiny_png(tmp_path / "p.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        title="Book",
+        author="A",
+        pages=[
+            DraftPage(text="one", image=Path("p1.png")),
+            DraftPage(text="two", image=img),
+            DraftPage(text="three", image=Path("p3.png")),
+        ],
+    )
+    tool = skip_page_tool(get_draft=lambda: draft, confirm=lambda _p: False)
+
+    tool.handler({"page": 2})
+
+    assert len(draft.pages) == 3
+    assert [pg.text for pg in draft.pages] == ["one", "two", "three"]
+
+
+def test_skip_page_confirmed_removes_page_and_renumbers(tmp_path):
+    """On approval, the named page is dropped from ``draft.pages``.
+    Remaining pages shift down so page numbers stay contiguous: a
+    subsequent ``choose_layout({"page": 2, ...})`` targets what used
+    to be page 3, matching how the renderer numbers pages."""
+    img = _tiny_png(tmp_path / "p.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        title="Book",
+        author="A",
+        pages=[
+            DraftPage(text="one", image=Path("p1.png")),
+            DraftPage(text="two", image=img),
+            DraftPage(text="three", image=Path("p3.png")),
+        ],
+    )
+    tool = skip_page_tool(get_draft=lambda: draft, confirm=lambda _p: True)
+
+    result = tool.handler({"page": 2})
+
+    assert len(draft.pages) == 2
+    assert [pg.text for pg in draft.pages] == ["one", "three"]
+    # Reply confirms the change and names the new page count so the
+    # agent can update its mental model without a second read_draft.
+    assert "2" in result  # new page count or "page 2 removed"
+
+
+def test_skip_page_schema_requires_page(tmp_path):
+    tool = skip_page_tool(get_draft=lambda: None, confirm=lambda _p: True)
+
+    assert tool.input_schema["required"] == ["page"]
+    assert "page" in tool.input_schema["properties"]
 
 
 def test_transcribe_page_does_not_reject_normal_text_with_word_blank(tmp_path):

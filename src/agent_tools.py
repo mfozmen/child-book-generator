@@ -378,6 +378,84 @@ def set_cover_tool(get_draft: Callable[[], Draft | None]) -> Tool:
     )
 
 
+def skip_page_tool(
+    get_draft: Callable[[], Draft | None],
+    confirm: Callable[[str], bool],
+) -> Tool:
+    """Tool: remove a page from ``draft.pages`` with user approval.
+
+    Samsung Notes exports commonly trail two or three blank pages.
+    ``transcribe_page`` flags them (``<BLANK>`` sentinel), but they
+    stay in the draft and the renderer treats them as real pages —
+    the printed book ends up with blank spreads the child never
+    meant to include. This tool drops the named page from the draft
+    after a y/n confirmation, shifting subsequent pages down so
+    numbering stays contiguous (matches how the renderer counts
+    pages, so ``choose_layout`` references don't suddenly target
+    the wrong page).
+    """
+
+    def handler(input_: dict) -> str:
+        draft = get_draft()
+        if draft is None:
+            return _MSG_NO_DRAFT
+        page_n = int(input_["page"])
+        if page_n < 1 or page_n > len(draft.pages):
+            return (
+                f"Page {page_n} is out of range — the draft has "
+                f"{len(draft.pages)} pages."
+            )
+        page = draft.pages[page_n - 1]
+        preview = (page.text or "").strip()[:80].replace("\n", " ")
+        if not preview:
+            preview_line = "(empty — no extractable text)"
+        else:
+            preview_line = f"text preview: {preview!r}"
+        has_image = "yes" if page.image is not None else "no"
+        prompt = (
+            f"Remove page {page_n} from the draft?\n"
+            f"  drawing: {has_image}\n"
+            f"  {preview_line}\n"
+            f"Remaining pages will renumber — page {page_n + 1} becomes "
+            f"page {page_n}.\n"
+            "Approve the removal?"
+        )
+        if not confirm(prompt):
+            return (
+                f"User declined. Page {page_n} stays in the draft. Ask "
+                "what they'd like to do instead (keep as blank? move "
+                "content here? mark as back cover?)."
+            )
+        draft.pages.pop(page_n - 1)
+        return (
+            f"Page {page_n} removed. Draft now has {len(draft.pages)} "
+            f"page(s). Subsequent pages renumbered."
+        )
+
+    return Tool(
+        name="skip_page",
+        description=(
+            "Remove a page from the draft entirely. Use this when a "
+            "page is confirmed empty (e.g. a trailing blank from a "
+            "phone-scan export, flagged by transcribe_page with the "
+            "``<BLANK>`` sentinel) and shouldn't appear in the "
+            "printed book. Destructive — the confirm gate takes a "
+            "y/n before anything changes. Remaining pages renumber "
+            "so subsequent tool calls keep referencing pages the way "
+            "the user counts them (page 3 after skipping page 2 "
+            "becomes page 2)."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "page": {"type": "integer", "minimum": 1},
+            },
+            "required": ["page"],
+        },
+        handler=handler,
+    )
+
+
 def transcribe_page_tool(
     get_draft: Callable[[], Draft | None],
     get_llm: Callable[[], object],
@@ -494,10 +572,20 @@ def transcribe_page_tool(
             )
 
         page.text = cleaned
+        # The source image for a Samsung-Notes-style PDF carries the
+        # child's text *inside* the PNG; leaving it in place makes the
+        # renderer print the text twice (once from the image, once as
+        # page.text). Drop it and switch to text-only layout. The
+        # confirm prompt above explicitly warns the user; a follow-up
+        # ``generate_page_illustration`` tool (PLAN) can restore a
+        # real illustration on the page.
+        page.image = None
+        page.layout = "text-only"
         preview = cleaned[:80].replace("\n", " ")
         return (
             f"Page {page_n} transcribed and applied ({len(cleaned)} "
-            f"chars). Preview: {preview!r}."
+            f"chars; source image cleared, layout switched to "
+            f"text-only). Preview: {preview!r}."
         )
 
     return Tool(
@@ -614,21 +702,31 @@ def _is_blank_sentinel_reply(reply: str) -> bool:
 def _build_transcribe_confirm_prompt(
     page_n: int, existing_text: str, new_text: str
 ) -> str:
-    """Compose the y/n prompt shown to the user. When the page is
-    empty we render a simple "apply this transcription?" message;
-    when it already carries text (user typed it manually earlier)
-    the prompt shows both so the user can see what's being
-    overwritten."""
+    """Compose the y/n prompt shown to the user. Every path names the
+    image-removal consequence explicitly — approving OCR also clears
+    the source image (to avoid the duplicate-text print bug) and
+    switches the page to ``text-only`` layout. When the page already
+    carries text (user typed it manually earlier), the prompt shows
+    both so the user can see what's being overwritten."""
+    footer = (
+        "Approving also removes the source image on this page and "
+        "switches its layout to text-only — this avoids the renderer "
+        "printing the text twice (once inside the image, once as the "
+        "page's text). An AI-generated replacement illustration is a "
+        "future option (``generate_page_illustration``)."
+    )
     if existing_text.strip():
         return (
             f"Replace the existing text on page {page_n}?\n"
             f"  Existing (user-typed):\n    {existing_text!r}\n"
             f"  New (OCR):\n    {new_text!r}\n"
+            f"{footer}\n"
             "Approve the overwrite?"
         )
     return (
         f"Apply this OCR transcription to page {page_n}?\n"
         f"  {new_text!r}\n"
+        f"{footer}\n"
         "Approve?"
     )
 
