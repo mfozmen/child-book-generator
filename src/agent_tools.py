@@ -1177,13 +1177,13 @@ def _render_message(
             f"{versioned.name} over {stable.name} to refresh)."
         )
     opened_tail = (
-        " and opened it in your viewer."
+        " Opened it in your viewer."
         if opened
-        else ". Open it manually — couldn't launch a PDF viewer here."
+        else " Open it manually — couldn't launch a PDF viewer here."
     )
     return (
         f"A5 book written to {stable} — this is the file to open and "
-        f"read{opened_tail} "
+        f"read.{opened_tail} "
         f"Also kept a snapshot at {versioned.name} (rollback only, "
         "safe to ignore unless you want to compare with a later render)."
     )
@@ -1217,7 +1217,8 @@ def _impose_and_mirror(
         "double-sided (flipped on short edge), fold in half, staple the "
         "spine. "
         f"Also kept a snapshot at {versioned_booklet.name} (rollback "
-        "only, safe to ignore)."
+        "only, safe to ignore unless you want to compare with a later "
+        "render)."
     )
 
 

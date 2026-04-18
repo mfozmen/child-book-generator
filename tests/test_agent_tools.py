@@ -2532,7 +2532,9 @@ def test_render_book_message_explains_the_role_of_each_output_file(tmp_path):
     Tightens the contract: each file's role must be named in the
     message so the user knows which one to open, which to print
     double-sided, and which two are rollback snapshots they can
-    safely ignore."""
+    safely ignore. Uses multi-word markers rather than loose
+    single-word matches (``open`` / ``ignore`` already appear in
+    unrelated sentences like ``"is it open in a PDF viewer?"``)."""
     draft = _two_page_draft(tmp_path)
     tool = render_book_tool(
         get_draft=lambda: draft,
@@ -2541,21 +2543,63 @@ def test_render_book_message_explains_the_role_of_each_output_file(tmp_path):
 
     result = tool.handler({"impose": True}).lower()
 
-    # Stable A5 — this is the one to open / read.
-    assert "open" in result or "read this" in result
-    # A4 booklet — print double-sided + fold + staple.
-    assert "print" in result
-    assert "double-sided" in result
+    # Stable A5 role — specific multi-word phrase, not a lone "open".
+    assert "to open and read" in result
+    # A4 booklet role — the full print workflow.
+    assert "print this one double-sided" in result
     assert "fold" in result
     assert "staple" in result
-    # Versioned snapshots — labelled as snapshots + as safe to ignore
-    # so the user doesn't hunt through them for the real output.
+    # Versioned snapshots — labelled as snapshots + rollback framing.
     assert "snapshot" in result
-    assert (
-        "safe to ignore" in result
-        or "rollback" in result
-        or "ignore" in result
+    assert "rollback only" in result
+    assert "safe to ignore" in result
+
+
+def test_render_book_message_names_a5_role_without_booklet_when_impose_false(
+    tmp_path,
+):
+    """Without ``impose=True`` only the A5 pair is produced — the
+    booklet / print / fold / staple copy must NOT leak into the
+    message. Pins the role-naming on the A5-only path and the
+    negative booklet check together."""
+    draft = _two_page_draft(tmp_path)
+    tool = render_book_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
     )
+
+    result = tool.handler({}).lower()
+
+    # A5 role still named.
+    assert "to open and read" in result
+    assert "snapshot" in result
+    assert "rollback only" in result
+    # Booklet workflow absent — user shouldn't see print instructions
+    # for a file that wasn't produced.
+    assert "print this one double-sided" not in result
+    assert "staple" not in result
+    assert "fold in half" not in result
+    assert "booklet" not in result
+
+
+def test_render_book_snapshot_framing_consistent_across_a5_and_booklet(
+    tmp_path,
+):
+    """Both the A5 snapshot line and the booklet snapshot line must
+    describe the same feature with the same hedge (``"compare with a
+    later render"``). Inconsistent framing in a single reply reads
+    like two different invariants."""
+    draft = _two_page_draft(tmp_path)
+    tool = render_book_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+    )
+
+    result = tool.handler({"impose": True}).lower()
+
+    # Two separate snapshots with the same framing. Count the hedge
+    # — must appear twice (once per snapshot line).
+    assert result.count("compare with a later render") == 2
 
 
 def test_render_book_returns_absolute_paths_in_message(tmp_path):
@@ -2632,7 +2676,7 @@ def test_render_book_viewer_failure_is_non_fatal(tmp_path):
 
     result = tool.handler({})
 
-    assert "A5 book written" in result or "Wrote A5 book" in result
+    assert "A5 book written" in result
     assert (tmp_path / ".book-gen" / "output" / "the_brave_owl.pdf").is_file()
     # The message must not falsely claim the file was opened — it wasn't.
     assert "opened it" not in result.lower()
