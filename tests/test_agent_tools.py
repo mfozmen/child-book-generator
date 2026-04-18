@@ -1237,6 +1237,28 @@ def test_transcribe_page_reply_is_stripped_before_storing(tmp_path):
     assert draft.pages[0].text == "line one\nline two"
 
 
+def test_transcribe_page_handles_missing_or_bad_input_gracefully(tmp_path):
+    """PR #53 review #1 — ``_parse_transcribe_input`` used to crash
+    the agent turn on missing or non-integer ``page`` because the
+    value went straight through ``int(input_["page"])``. Mirrors
+    the skip_page guard that PR #48 review #11 added — tool-result
+    strings instead of ``KeyError`` / ``ValueError`` escaping."""
+    draft = _image_only_draft(tmp_path)
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: _FakeLLM(),
+        confirm=lambda _p: True,
+    )
+
+    result_missing = tool.handler({})
+    assert "page" in result_missing.lower()
+
+    result_bad = tool.handler({"page": "2nd"})
+    assert (
+        "page" in result_bad.lower() or "integer" in result_bad.lower()
+    )
+
+
 def test_transcribe_page_schema_requires_only_page_number(tmp_path):
     """Schema must name ``page`` as the only required input — the
     LLM reads the schema to decide what to pass."""

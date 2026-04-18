@@ -163,47 +163,15 @@ def read_draft_tool(get_draft: Callable[[], Draft | None]) -> Tool:
         draft = get_draft()
         if draft is None:
             return _MSG_NO_DRAFT
-        lines: list[str] = []
-        title = draft.title.strip() or _MSG_UNSET
-        author = draft.author.strip() or _MSG_UNSET
-        cover = "yes" if draft.cover_image is not None else _MSG_UNSET
-        lines.append(f"Title: {title}")
-        lines.append(f"Author: {author}")
-        lines.append(f"Cover drawing set: {cover}")
-        lines.append(f"{len(draft.pages)} pages:")
-        image_only_pages: list[int] = []
-        for i, page in enumerate(draft.pages, start=1):
-            marker = "drawing" if page.image is not None else "no drawing"
-            text = page.text.strip().replace("\n", " ")
-            # Samsung-Notes exports (and other image-text PDFs) have
-            # pages with a drawing but no ``/Font`` resource — the
-            # child's text lives visually inside the image and pypdf
-            # returns empty. Flag these with a compact ``[image-only]``
-            # tag; the English-sentence explanation (preserve-child-
-            # voice, transcribe, don't invent) lives in the single
-            # summary NOTE below so the signal isn't diluted by N
-            # copies of the same line. Pages without an image are
-            # already covered by "no drawing".
-            image_only = page.image is not None and not text
-            tag = " [image-only]" if image_only else ""
-            if image_only:
-                image_only_pages.append(i)
-            lines.append(
-                f"  Page {i} ({marker}, layout={page.layout}):{tag} {text}"
-            )
+        # Compact ``[image-only]`` tags go inline on each flagged
+        # page; the full preserve-child-voice rationale (ask the
+        # user to transcribe, don't invent) lives exactly once in
+        # the summary NOTE built by ``_build_image_only_note``.
+        lines = _read_draft_header_lines(draft)
+        page_lines, image_only_pages = _read_draft_page_lines(draft)
+        lines.extend(page_lines)
         if image_only_pages:
-            which = ", ".join(str(n) for n in image_only_pages)
-            lines.append(
-                f"NOTE: page(s) {which} are image-only — the PDF has no "
-                "text layer there, likely a Samsung Notes / phone-scan "
-                "export where the text is rendered inside the image. "
-                "Use the ``transcribe_page`` tool to OCR each flagged "
-                "page via the active LLM's vision capability (Claude 3+, "
-                "GPT-4o, Gemini 1.5+), or ask the user to transcribe "
-                "manually. Always confirm the transcription with the "
-                "user before moving on. Do not invent, paraphrase, or "
-                "'guess' the child's words — preserve-child-voice."
-            )
+            lines.append(_build_image_only_note(image_only_pages))
         return "\n".join(lines)
 
     return Tool(
@@ -227,6 +195,61 @@ def read_draft_tool(get_draft: Callable[[], Draft | None]) -> Tool:
         ),
         input_schema={"type": "object", "properties": {}, "required": []},
         handler=handler,
+    )
+
+
+def _read_draft_header_lines(draft: Draft) -> list[str]:
+    """Compose the title / author / cover / page-count header block
+    that every ``read_draft`` reply opens with."""
+    title = draft.title.strip() or _MSG_UNSET
+    author = draft.author.strip() or _MSG_UNSET
+    cover = "yes" if draft.cover_image is not None else _MSG_UNSET
+    return [
+        f"Title: {title}",
+        f"Author: {author}",
+        f"Cover drawing set: {cover}",
+        f"{len(draft.pages)} pages:",
+    ]
+
+
+def _read_draft_page_lines(draft: Draft) -> tuple[list[str], list[int]]:
+    """Return ``(page_lines, image_only_pages)``: one line per page,
+    plus the 1-indexed pages flagged ``[image-only]`` (drawing but
+    empty text — Samsung Notes / phone-scan exports). The compact
+    tag is in the line itself; the full preserve-child-voice
+    explanation lives in the single summary NOTE built by
+    ``_build_image_only_note``. Pure function — caller appends the
+    returned lines to its running list."""
+    page_lines: list[str] = []
+    image_only_pages: list[int] = []
+    for i, page in enumerate(draft.pages, start=1):
+        marker = "drawing" if page.image is not None else "no drawing"
+        text = page.text.strip().replace("\n", " ")
+        image_only = page.image is not None and not text
+        tag = " [image-only]" if image_only else ""
+        if image_only:
+            image_only_pages.append(i)
+        page_lines.append(
+            f"  Page {i} ({marker}, layout={page.layout}):{tag} {text}"
+        )
+    return page_lines, image_only_pages
+
+
+def _build_image_only_note(image_only_pages: list[int]) -> str:
+    """Single summary NOTE telling the agent to OCR flagged pages
+    via ``transcribe_page`` (or ask the user to transcribe by hand)
+    — preserve-child-voice in one place, not per page."""
+    which = ", ".join(str(n) for n in image_only_pages)
+    return (
+        f"NOTE: page(s) {which} are image-only — the PDF has no "
+        "text layer there, likely a Samsung Notes / phone-scan "
+        "export where the text is rendered inside the image. "
+        "Use the ``transcribe_page`` tool to OCR each flagged "
+        "page via the active LLM's vision capability (Claude 3+, "
+        "GPT-4o, Gemini 1.5+), or ask the user to transcribe "
+        "manually. Always confirm the transcription with the "
+        "user before moving on. Do not invent, paraphrase, or "
+        "'guess' the child's words — preserve-child-voice."
     )
 
 
@@ -573,89 +596,17 @@ def transcribe_page_tool(
         draft = get_draft()
         if draft is None:
             return _MSG_NO_DRAFT
-        page_n = int(input_["page"])
-        if page_n < 1 or page_n > len(draft.pages):
-            return (
-                f"Page {page_n} is out of range — the draft has "
-                f"{len(draft.pages)} pages."
-            )
-        page = draft.pages[page_n - 1]
-        if page.image is None:
-            return (
-                f"Page {page_n} has no image to transcribe — nothing to "
-                "OCR."
-            )
-        # ``keep_image`` tells the tool this page's image carries
-        # content other than text (a child's drawing on the same
-        # page as their typed story, a diagram, etc.). Default False
-        # is the Samsung-Notes case: clear the image after OCR so
-        # the text doesn't print twice. When the agent knows the
-        # image has a drawing it shouldn't destroy, it passes
-        # ``keep_image=True`` and the image + layout are preserved.
-        keep_image = bool(input_.get("keep_image", False))
-
-        image_block = _build_image_block(Path(page.image))
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    image_block,
-                    {"type": "text", "text": _TRANSCRIBE_PROMPT},
-                ],
-            }
-        ]
-
-        llm = get_llm()
-        try:
-            reply = llm.chat(messages)
-        except ImportError as e:
-            # SDK missing — a different failure class than "provider
-            # doesn't support vision", hence a separate branch.
-            return (
-                f"Transcription failed on page {page_n}: SDK not "
-                f"installed ({str(e)[:200]}). Ask the user to "
-                "transcribe manually."
-            )
-        except Exception as e:  # noqa: BLE001 — every SDK raises a different hierarchy
-            return (
-                f"Transcription failed on page {page_n}: "
-                f"{str(e)[:200]}. This often means the active LLM "
-                "doesn't support vision, or the network is down. "
-                "Ask the user to transcribe manually, or switch to "
-                "a multimodal provider via /model."
-            )
-
-        cleaned = str(reply).strip()
-        if not cleaned:
-            # Google safety filter and OpenAI content_filter both
-            # surface as an empty reply rather than an exception. We
-            # mustn't write the empty string — it would blank a page
-            # the user may have typed manually (and the "success"
-            # message would mask the failure).
-            return (
-                f"Transcription failed on page {page_n}: provider "
-                "returned empty text (often a safety filter or a "
-                "vision-unsupported model). Draft left unchanged; "
-                "ask the user to transcribe manually."
-            )
-        if _is_blank_sentinel_reply(cleaned):
-            # Samsung Notes exports routinely trail blank pages, and
-            # the prompt asks the vision model to answer those with
-            # the ``<BLANK>`` sentinel rather than fabricating text.
-            # When the model complies, leave ``page.text`` alone and
-            # tell the agent the page is probably blank — same shape
-            # as the empty-reply branch but a distinct message so the
-            # agent knows the model *saw* the page and confirmed it
-            # was empty, rather than refusing to answer.
-            return (
-                f"Page {page_n} looks blank to the vision model "
-                "(no transcribable text on the image). Draft left "
-                "unchanged — ask the user whether this page was meant "
-                "to be empty (e.g. a trailing blank from the export) "
-                "or whether they want to skip it / mark it as the "
-                "back cover."
-            )
-
+        page_n, page, keep_image, error = _parse_transcribe_input(input_, draft)
+        if error is not None:
+            return error
+        cleaned, error = _call_vision_for_transcription(
+            get_llm(), Path(page.image), page_n
+        )
+        if error is not None:
+            return error
+        early = _interpret_vision_reply(cleaned, page_n)
+        if early is not None:
+            return early
         prompt_msg = _build_transcribe_confirm_prompt(
             page_n, page.text, cleaned, keep_image=keep_image
         )
@@ -665,27 +616,7 @@ def transcribe_page_tool(
                 "Draft unchanged. Ask them to transcribe manually, or "
                 "call transcribe_page again after adjusting."
             )
-
-        page.text = cleaned
-        preview = cleaned[:80].replace("\n", " ")
-        if keep_image:
-            # The agent flagged this page as mixed-content — a
-            # drawing lives on it that we must preserve. Write only
-            # the text and leave the image + layout alone.
-            return (
-                f"Page {page_n} transcribed and applied ({len(cleaned)} "
-                f"chars; source image kept — mixed-content page). "
-                f"Preview: {preview!r}."
-            )
-        # Default Samsung-Notes path: clear the image to avoid the
-        # renderer printing text twice.
-        page.image = None
-        page.layout = "text-only"
-        return (
-            f"Page {page_n} transcribed and applied ({len(cleaned)} "
-            f"chars; source image cleared, layout switched to "
-            f"text-only). Preview: {preview!r}."
-        )
+        return _apply_transcription(page, cleaned, keep_image, page_n)
 
     return Tool(
         name="transcribe_page",
@@ -728,6 +659,126 @@ def transcribe_page_tool(
             "required": ["page"],
         },
         handler=handler,
+    )
+
+
+def _parse_transcribe_input(
+    input_: dict, draft: Draft
+) -> tuple[int | None, object, bool, str | None]:
+    """Validate the 1-indexed page and the mixed-content flag. Returns
+    ``(page_n, page, keep_image, None)`` on success or ``(None, None,
+    False, error)`` when the input is unusable. ``keep_image`` lets
+    the agent signal "this image also carries a drawing — don't
+    auto-clear it on accept" (default False = Samsung-Notes case)."""
+    raw = input_.get("page")
+    if raw is None:
+        return None, None, False, (
+            "Rejected: 'page' is required — which page should be "
+            "transcribed?"
+        )
+    try:
+        page_n = int(raw)
+    except (TypeError, ValueError):
+        return None, None, False, (
+            f"Rejected: 'page' must be an integer; got {raw!r}. "
+            "Pass the 1-indexed page number."
+        )
+    if page_n < 1 or page_n > len(draft.pages):
+        return None, None, False, (
+            f"Page {page_n} is out of range — the draft has "
+            f"{len(draft.pages)} pages."
+        )
+    page = draft.pages[page_n - 1]
+    if page.image is None:
+        return None, None, False, (
+            f"Page {page_n} has no image to transcribe — nothing to "
+            "OCR."
+        )
+    keep_image = bool(input_.get("keep_image", False))
+    return page_n, page, keep_image, None
+
+
+def _call_vision_for_transcription(
+    llm: object, image_path: Path, page_n: int
+) -> tuple[str, str | None]:
+    """Send the page image to the active LLM and normalise errors
+    into ``(cleaned_reply, None)`` or ``("", error_message)``.
+    ``ImportError`` gets its own branch (SDK missing is distinct
+    from "provider doesn't support vision"); everything else is
+    truncated to 200 chars so an SDK that interpolates the base64
+    payload into its error message can't echo the image back."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                _build_image_block(image_path),
+                {"type": "text", "text": _TRANSCRIBE_PROMPT},
+            ],
+        }
+    ]
+    try:
+        reply = llm.chat(messages)
+    except ImportError as e:
+        return "", (
+            f"Transcription failed on page {page_n}: SDK not installed "
+            f"({str(e)[:200]}). Ask the user to transcribe manually."
+        )
+    except Exception as e:  # noqa: BLE001 — every SDK raises a different hierarchy
+        return "", (
+            f"Transcription failed on page {page_n}: {str(e)[:200]}. "
+            "This often means the active LLM doesn't support vision, "
+            "or the network is down. Ask the user to transcribe "
+            "manually, or switch to a multimodal provider via /model."
+        )
+    return str(reply).strip(), None
+
+
+def _interpret_vision_reply(cleaned: str, page_n: int) -> str | None:
+    """Early-return message for the two non-transcription replies:
+    an empty string (safety filter) and the ``<BLANK>`` sentinel
+    (truly blank page). Returns ``None`` when the reply is a real
+    transcription the handler should forward to the confirm gate."""
+    if not cleaned:
+        return (
+            f"Transcription failed on page {page_n}: provider "
+            "returned empty text (often a safety filter or a "
+            "vision-unsupported model). Draft left unchanged; "
+            "ask the user to transcribe manually."
+        )
+    if _is_blank_sentinel_reply(cleaned):
+        return (
+            f"Page {page_n} looks blank to the vision model "
+            "(no transcribable text on the image). Draft left "
+            "unchanged — ask the user whether this page was meant "
+            "to be empty (e.g. a trailing blank from the export) "
+            "or whether they want to skip it / mark it as the "
+            "back cover."
+        )
+    return None
+
+
+def _apply_transcription(
+    page, cleaned: str, keep_image: bool, page_n: int
+) -> str:
+    """Write the approved transcription into the draft. The default
+    Samsung-Notes path also clears ``page.image`` + switches to
+    ``text-only`` layout; the ``keep_image=True`` path leaves the
+    image alone so a drawing on a mixed-content page isn't
+    destroyed."""
+    page.text = cleaned
+    preview = cleaned[:80].replace("\n", " ")
+    if keep_image:
+        return (
+            f"Page {page_n} transcribed and applied ({len(cleaned)} "
+            f"chars; source image kept — mixed-content page). "
+            f"Preview: {preview!r}."
+        )
+    page.image = None
+    page.layout = "text-only"
+    return (
+        f"Page {page_n} transcribed and applied ({len(cleaned)} "
+        f"chars; source image cleared, layout switched to "
+        f"text-only). Preview: {preview!r}."
     )
 
 
@@ -946,41 +997,15 @@ def generate_cover_illustration_tool(
         draft = get_draft()
         if draft is None:
             return _MSG_NO_DRAFT
-
-        prompt = str(input_.get("prompt", "")).strip()
-        if not prompt:
-            return (
-                "Rejected: prompt is required. Ask the user to describe "
-                "the cover illustration they want."
-            )
-
-        quality = str(input_.get("quality", "medium"))
-        if quality not in _IMAGE_COST_USD:
-            return (
-                f"Invalid quality '{quality}'. "
-                f"Valid values: {sorted(_IMAGE_COST_USD)}."
-            )
-
-        style = input_.get("style")
-        if style is not None and style not in VALID_COVER_STYLES:
-            return (
-                f"Invalid style '{style}'. Valid styles: "
-                f"{sorted(VALID_COVER_STYLES)}."
-            )
-
-        cost = _IMAGE_COST_USD[quality]
-        confirm_msg = (
-            "Generate a cover illustration with OpenAI gpt-image-1?\n"
-            f"  Prompt : {prompt}\n"
-            f"  Quality: {quality} (~${cost:.2f})\n"
-            "This will call the OpenAI image API and bill your account."
-        )
+        prompt, quality, style, error = _parse_generate_cover_input(input_)
+        if error is not None:
+            return error
+        confirm_msg = _build_generate_cover_confirm_prompt(prompt, quality)
         if not confirm(confirm_msg):
             return (
                 "User declined the cover generation. Keep the existing "
                 "cover (or ask the user to propose a different prompt)."
             )
-
         output_path = _cover_image_output_path(get_session_root(), prompt)
         try:
             image_provider.generate(
@@ -991,15 +1016,7 @@ def generate_cover_illustration_tool(
             )
         except ImageGenerationError as e:
             return f"Cover generation failed: {e}"
-
-        draft.cover_image = output_path
-        if style is not None:
-            draft.cover_style = style
-        suffix = f" Cover style set to '{style}'." if style is not None else ""
-        return (
-            f"Cover illustration generated at {output_path}. "
-            f"Draft cover_image updated.{suffix}"
-        )
+        return _apply_generated_cover(draft, output_path, style)
 
     return Tool(
         name="generate_cover_illustration",
@@ -1037,6 +1054,59 @@ def generate_cover_illustration_tool(
             "required": ["prompt"],
         },
         handler=handler,
+    )
+
+
+def _parse_generate_cover_input(
+    input_: dict,
+) -> tuple[str, str, str | None, str | None]:
+    """Pull ``prompt`` / ``quality`` / ``style`` out of the input
+    dict and validate the three. Returns
+    ``(prompt, quality, style, None)`` on success or
+    ``("", "", None, error_message)`` on the first invalid field."""
+    prompt = str(input_.get("prompt", "")).strip()
+    if not prompt:
+        return "", "", None, (
+            "Rejected: prompt is required. Ask the user to describe "
+            "the cover illustration they want."
+        )
+    quality = str(input_.get("quality", "medium"))
+    if quality not in _IMAGE_COST_USD:
+        return "", "", None, (
+            f"Invalid quality '{quality}'. "
+            f"Valid values: {sorted(_IMAGE_COST_USD)}."
+        )
+    style = input_.get("style")
+    if style is not None and style not in VALID_COVER_STYLES:
+        return "", "", None, (
+            f"Invalid style '{style}'. Valid styles: "
+            f"{sorted(VALID_COVER_STYLES)}."
+        )
+    return prompt, quality, style, None
+
+
+def _build_generate_cover_confirm_prompt(prompt: str, quality: str) -> str:
+    cost = _IMAGE_COST_USD[quality]
+    return (
+        "Generate a cover illustration with OpenAI gpt-image-1?\n"
+        f"  Prompt : {prompt}\n"
+        f"  Quality: {quality} (~${cost:.2f})\n"
+        "This will call the OpenAI image API and bill your account."
+    )
+
+
+def _apply_generated_cover(
+    draft: Draft, output_path: Path, style: str | None
+) -> str:
+    """Wire the newly-generated image into the draft and optionally
+    set the cover style. Return the agent-facing success message."""
+    draft.cover_image = output_path
+    if style is not None:
+        draft.cover_style = style
+    suffix = f" Cover style set to '{style}'." if style is not None else ""
+    return (
+        f"Cover illustration generated at {output_path}. "
+        f"Draft cover_image updated.{suffix}"
     )
 
 
