@@ -1620,6 +1620,89 @@ def test_transcribe_page_confirm_prompt_warns_about_image_replacement(
     )
 
 
+def test_transcribe_page_keep_image_flag_preserves_mixed_content_page(tmp_path):
+    """PR #48 review #1 — the project targets "scanned handwriting
+    + drawings" too, not just Samsung Notes exports. When the page
+    image carries both text AND a separate drawing the child wants
+    to keep (e.g. the child's typed story next to their sketch of
+    the dragon), clearing the image destroys the drawing.
+
+    Add ``keep_image: bool = False`` to the tool input. Default is
+    False (Samsung-Notes case — the image is a text screenshot,
+    clearing is correct); when the agent learns the image also
+    carries a drawing, it passes ``keep_image=True`` and the tool
+    writes ``page.text`` without touching ``page.image`` or
+    ``page.layout``."""
+    img = _tiny_png(tmp_path / "p.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        title="Book",
+        author="A",
+        pages=[DraftPage(text="", image=img, layout="image-top")],
+    )
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: _FakeLLM(reply="once upon a time"),
+        confirm=lambda _p: True,
+    )
+
+    tool.handler({"page": 1, "keep_image": True})
+
+    assert draft.pages[0].text == "once upon a time"
+    assert draft.pages[0].image == img, (
+        "keep_image=True must preserve the source image so the child's "
+        "drawing on a mixed-content page isn't silently destroyed."
+    )
+    assert draft.pages[0].layout == "image-top"
+
+
+def test_transcribe_page_confirm_prompt_warns_about_drawing_destruction(
+    tmp_path,
+):
+    """PR #48 review #1 — the confirm prompt must name the risk in
+    preserve-child-voice terms. The previous wording talked about
+    the "duplicate-print" problem but not about the fact that a
+    drawing on the page would also be lost. Preserve-child-voice
+    extends to the child's artwork (CLAUDE.md), so the prompt
+    needs to say "any drawing on this page will also be removed"
+    or equivalent."""
+    draft = _image_only_draft(tmp_path)
+    seen: list[str] = []
+
+    def _confirm(prompt):
+        seen.append(prompt)
+        return True
+
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: _FakeLLM(reply="owls"),
+        confirm=_confirm,
+    )
+
+    tool.handler({"page": 1})
+
+    prompt = seen[0].lower()
+    # The destruction warning must be unambiguous — a drawing /
+    # illustration / artwork word paired with a loss verb in the
+    # same phrase. A bare "illustration" inside a "future option"
+    # aside doesn't count.
+    assert any(
+        marker in prompt
+        for marker in (
+            "any drawing",
+            "any illustration",
+            "the drawing",
+            "the illustration",
+            "drawing will",
+            "illustration will",
+            "drawing is lost",
+            "drawing will be lost",
+            "drawing on this page will",
+            "illustration on this page will",
+        )
+    )
+
+
 def test_transcribe_page_declined_keeps_image_and_layout_intact(tmp_path):
     """If the user rejects the OCR reply, page state must stay
     exactly as it was — image in place, layout unchanged."""
@@ -1745,6 +1828,135 @@ def test_skip_page_schema_requires_page(tmp_path):
 
     assert tool.input_schema["required"] == ["page"]
     assert "page" in tool.input_schema["properties"]
+
+
+def test_skip_page_confirm_warns_explicitly_when_page_has_drawing(tmp_path):
+    """PR #48 review #5 — ``drawing: yes`` is a status line, not a
+    warning. A user who thinks they're skipping a blank spread
+    could lose a real drawing. When the page has an image the
+    prompt must explicitly name the destruction."""
+    img = _tiny_png(tmp_path / "p.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        title="Book",
+        author="A",
+        pages=[DraftPage(text="", image=img)],
+    )
+    seen: list[str] = []
+
+    def _confirm(p):
+        seen.append(p)
+        return False
+
+    tool = skip_page_tool(get_draft=lambda: draft, confirm=_confirm)
+
+    tool.handler({"page": 1})
+
+    prompt = seen[0].lower()
+    # Some explicit destruction-warning wording; we don't pin exact
+    # copy so the message can evolve.
+    assert (
+        "permanent" in prompt
+        or "destroyed" in prompt
+        or "will be lost" in prompt
+        or "will also be removed" in prompt
+    )
+
+
+def test_skip_page_decline_suggestion_does_not_invent_tools(tmp_path):
+    """PR #48 review #6 — the decline path used to say "move content
+    here? mark as back cover?" but neither exists as a tool. A
+    literal-minded agent hallucinates tool calls. Suggestion must
+    only reference paths that actually exist."""
+    draft = _image_only_draft(tmp_path)
+    tool = skip_page_tool(get_draft=lambda: draft, confirm=lambda _p: False)
+
+    result = tool.handler({"page": 1})
+
+    lowered = result.lower()
+    # Must not invent tools that don't exist.
+    assert "move_content" not in lowered
+    assert "mark as back cover" not in lowered
+    # But the decline message should still be helpful — some signal
+    # that the user can keep it or add text.
+    assert "keep" in lowered or "text" in lowered or "type" in lowered
+
+
+def test_skip_page_last_page_confirm_does_not_promise_renumber(tmp_path):
+    """PR #48 review #10 — when the target is the last page there's
+    nothing to renumber, so the old "page N+1 becomes page N" line
+    names a page that doesn't exist. Drop the specific renumber
+    claim when ``page_n == len(draft.pages)``."""
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        title="Book",
+        author="A",
+        pages=[
+            DraftPage(text="a", image=Path("1.png")),
+            DraftPage(text="b", image=Path("2.png")),
+        ],
+    )
+    seen: list[str] = []
+
+    def _confirm(p):
+        seen.append(p)
+        return False
+
+    tool = skip_page_tool(get_draft=lambda: draft, confirm=_confirm)
+
+    tool.handler({"page": 2})  # last page
+
+    prompt = seen[0]
+    # The specific "page 3 becomes page 2" line must not be printed
+    # (page 3 doesn't exist here).
+    assert "page 3 becomes" not in prompt
+    assert "becomes page 2" not in prompt.replace("becomes page 1", "")
+
+
+def test_skip_page_handles_missing_or_bad_input_gracefully(tmp_path):
+    """PR #48 review #11 — other tools in this module guard input;
+    ``skip_page`` used raw ``int(input_["page"])`` which raises
+    ``KeyError`` or ``ValueError`` on a malformed call (weaker
+    model omits the key, or sends ``"2nd"``). Unhandled exceptions
+    cross the tool boundary and kill the agent turn. Return a
+    tool-result string instead so the agent can recover."""
+    draft = _image_only_draft(tmp_path)
+    tool = skip_page_tool(get_draft=lambda: draft, confirm=lambda _p: True)
+
+    # Missing key.
+    result_missing = tool.handler({})
+    assert "page" in result_missing.lower()
+
+    # Non-integer value.
+    result_bad = tool.handler({"page": "2nd"})
+    assert "page" in result_bad.lower() or "integer" in result_bad.lower()
+
+
+def test_read_draft_description_names_the_skip_page_tool(tmp_path):
+    """PR #48 review #7 — the canonical flow after a blank sentinel
+    is to call ``skip_page``. The description must name it so an
+    agent that only reads the description finds the right tool."""
+    tool = read_draft_tool(get_draft=lambda: None)
+
+    desc = tool.description.lower()
+    assert "skip_page" in desc
+
+
+def test_transcribe_page_description_mentions_image_side_effect(tmp_path):
+    """PR #48 review #8 — the LLM reads the description first. It
+    must know that approving OCR clears the source image and
+    forces ``text-only`` layout, so it doesn't call this tool on
+    mixed-content pages it wanted to preserve."""
+    tool = transcribe_page_tool(
+        get_draft=lambda: None,
+        get_llm=lambda: _FakeLLM(),
+        confirm=lambda _p: True,
+    )
+
+    desc = tool.description.lower()
+    assert "clear" in desc or "remov" in desc
+    assert "image" in desc
+    assert "text-only" in desc or "layout" in desc
 
 
 def test_transcribe_page_does_not_reject_normal_text_with_word_blank(tmp_path):
