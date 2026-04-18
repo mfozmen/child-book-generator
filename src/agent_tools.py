@@ -421,62 +421,10 @@ def skip_page_tool(
         draft = get_draft()
         if draft is None:
             return _MSG_NO_DRAFT
-        raw = input_.get("page")
-        if raw is None:
-            return (
-                "Rejected: 'page' is required — which page should be "
-                "removed?"
-            )
-        try:
-            page_n = int(raw)
-        except (TypeError, ValueError):
-            return (
-                f"Rejected: 'page' must be an integer; got {raw!r}. "
-                "Pass the 1-indexed page number."
-            )
-        if page_n < 1 or page_n > len(draft.pages):
-            return (
-                f"Page {page_n} is out of range — the draft has "
-                f"{len(draft.pages)} pages."
-            )
-        page = draft.pages[page_n - 1]
-        preview = (page.text or "").strip()[:80].replace("\n", " ")
-        if not preview:
-            preview_line = "(empty — no extractable text)"
-        else:
-            preview_line = f"text preview: {preview!r}"
-
-        # Drawing warning is deliberately explicit: the status flag
-        # alone was easy to mis-read. When the page has an image we
-        # spell out that removal is permanent and the image reference
-        # is lost from the draft (the user can reload the PDF to get
-        # it back, but not from inside the agent).
-        if page.image is not None:
-            drawing_line = (
-                "  drawing: YES — the drawing on this page will also "
-                "be lost; removal is permanent (reload the PDF to "
-                "restore the image reference)"
-            )
-        else:
-            drawing_line = "  drawing: none"
-
-        if page_n < len(draft.pages):
-            renumber_line = (
-                f"Remaining pages will renumber — page {page_n + 1} "
-                f"becomes page {page_n}.\n"
-            )
-        else:
-            # Last page — nothing to renumber; don't name a page that
-            # doesn't exist.
-            renumber_line = ""
-
-        prompt = (
-            f"Remove page {page_n} from the draft?\n"
-            f"{drawing_line}\n"
-            f"  {preview_line}\n"
-            f"{renumber_line}"
-            "Approve the removal?"
-        )
+        page_n, error = _parse_skip_page_input(input_, draft)
+        if error is not None:
+            return error
+        prompt = _build_skip_page_prompt(page_n, draft)
         if not confirm(prompt):
             # Only reference paths that actually exist: keep as a
             # blank page, or type text with ``set_metadata`` style
@@ -517,6 +465,79 @@ def skip_page_tool(
             "required": ["page"],
         },
         handler=handler,
+    )
+
+
+def _parse_skip_page_input(input_: dict, draft: Draft) -> tuple[int | None, str | None]:
+    """Pull the 1-indexed ``page`` out of ``input_`` and bounds-check
+    it against ``draft.pages``. Returns ``(page_n, None)`` on a clean
+    input or ``(None, error_msg)`` when the caller sent something
+    unusable — the tool returns the error as a regular result so the
+    agent can recover without a crashed turn."""
+    raw = input_.get("page")
+    if raw is None:
+        return None, (
+            "Rejected: 'page' is required — which page should be removed?"
+        )
+    try:
+        page_n = int(raw)
+    except (TypeError, ValueError):
+        return None, (
+            f"Rejected: 'page' must be an integer; got {raw!r}. "
+            "Pass the 1-indexed page number."
+        )
+    if page_n < 1 or page_n > len(draft.pages):
+        return None, (
+            f"Page {page_n} is out of range — the draft has "
+            f"{len(draft.pages)} pages."
+        )
+    return page_n, None
+
+
+def _build_skip_page_prompt(page_n: int, draft: Draft) -> str:
+    """Compose the destructive-action confirm prompt. Each line has
+    a single job: the drawing warning names the destruction risk
+    explicitly when the page has an image; the preview surfaces
+    whatever text is there; the renumber line only appears when
+    there actually are pages to renumber."""
+    page = draft.pages[page_n - 1]
+    return (
+        f"Remove page {page_n} from the draft?\n"
+        f"{_skip_drawing_line(page.image)}\n"
+        f"  {_skip_preview_line(page.text)}\n"
+        f"{_skip_renumber_line(page_n, len(draft.pages))}"
+        "Approve the removal?"
+    )
+
+
+def _skip_preview_line(text: str) -> str:
+    preview = (text or "").strip()[:80].replace("\n", " ")
+    if not preview:
+        return "(empty — no extractable text)"
+    return f"text preview: {preview!r}"
+
+
+def _skip_drawing_line(image) -> str:
+    """Drawing warning is deliberately loud when the page has an
+    image — the status-flag version of this line was easy to
+    mis-read (PR #48 review #5)."""
+    if image is None:
+        return "  drawing: none"
+    return (
+        "  drawing: YES — the drawing on this page will also be "
+        "lost; removal is permanent (reload the PDF to restore the "
+        "image reference)"
+    )
+
+
+def _skip_renumber_line(page_n: int, total: int) -> str:
+    """No renumber claim when the target is the last page — naming
+    a page that doesn't exist reads as a bug."""
+    if page_n >= total:
+        return ""
+    return (
+        f"Remaining pages will renumber — page {page_n + 1} "
+        f"becomes page {page_n}.\n"
     )
 
 
