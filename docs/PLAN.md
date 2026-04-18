@@ -23,6 +23,7 @@ All five PRs from the original plan merged:
 | TBD | `feat/offer-ai-cover-option` | P3 — tighten ``_AGENT_GREETING_HINT`` to always surface the three cover options (page drawing / AI generation / poster) at the cover step. ``generate_cover_illustration`` stays OpenAI-only; greeting flags the ``/model`` switch for non-OpenAI sessions. |
 | TBD | `feat/always-ask-series-question` | P4 — greeting now tells the agent to ALWAYS ask whether the book is part of a series (every book, regardless of title pattern) and, on a yes, follow up with the volume number. User records the answer in the title they set; no new data fields. |
 | TBD | `feat/metadata-review-and-back-cover` | P5 — greeting now asks for a short back-cover blurb (one or two sentences in the child's voice) and requires a metadata summary + user approval round before ``render_book`` runs. Restores the back-cover prompt that the agent had quietly dropped. |
+| TBD | `feat/clearer-render-output-message` | P6 — ``render_book``'s success message now names each of the four output files by role: A5 stable (open + read), A4 booklet (print double-sided, fold, staple), and the two ``.vN`` snapshots (rollback only, safe to ignore). Fixes the "why is this producing four PDFs?" read from the Yavru Dinozor run. |
 
 ## "Done when" checklist
 
@@ -40,14 +41,6 @@ All five PRs from the original plan merged:
 ## Next up
 
 Items below came out of the first real end-to-end test (Yavru Dinozor). Listed roughly in "most visible to the user" order.
-
-### Yavru Dinozor second-run feedback
-
-The first full end-to-end run surfaced several blocking gaps. Shipped in the order below; P1+P2 go together because they're both cleanup of what ``transcribe_page`` leaves behind.
-
-- **P6 — Render output is four PDFs, poorly explained.** Every render produces four files under ``.book-gen/output/``: ``<slug>.pdf``, ``<slug>.vN.pdf``, ``<slug>_A4_booklet.pdf``, ``<slug>.vN_A4_booklet.pdf``. That's stable + versioned × A5 + booklet, intentional per PR #30 — but the user sees four files for one render and reads it as a bug. Tighten ``render_book``'s success message to name each file with its role ("open this one", "print this one double-sided", "snapshots for rollback, safe to ignore"), and optionally write a short ``output/README.md`` on first render.
-
-### Follow-ups unchanged from earlier
 
 - **Tesseract OCR as an offline fallback for `transcribe_page`.** LLM-vision transcription (via the active provider — see "Shipped" below) is the primary path and handles Turkish matbaa yazısı + moderate handwriting. A `pytesseract` + `tur` lang-pack fallback would let Ollama / NullProvider users (offline workflow) still OCR image-text PDFs without a cloud round-trip. Opt-in dependency, auto-detected at runtime; when Tesseract isn't installed, the tool continues to require LLM vision. Lower priority than it was before `transcribe_page` shipped.
 - **SonarCloud issue backlog — 6 remaining** (of 12; six cleared in the PR that added this bullet). Line numbers drift with every merge; the rule + file + symbol pair below is stable — re-run the API query when starting the PR to re-confirm hotspots:

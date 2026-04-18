@@ -1162,19 +1162,31 @@ def _render_message(
     stable_updated: bool,
     opened: bool,
 ) -> str:
-    """Assemble the A5 success line for the agent's reply."""
+    """Assemble the A5 success line for the agent's reply.
+
+    A single render drops four files (stable + versioned × A5 +
+    booklet). The user reads four files as "why is this producing so
+    much stuff?" unless each file's role is named. This message
+    focuses on the A5 pair; the booklet pair is narrated by
+    ``_impose_and_mirror`` in the same shape.
+    """
     if not stable_updated:
         return (
             f"Wrote snapshot {versioned}. Couldn't update {stable.name} "
             "(is it open in a PDF viewer? close it and copy "
             f"{versioned.name} over {stable.name} to refresh)."
         )
-    tail = (
-        " and opened it in your viewer."
+    opened_tail = (
+        " Opened it in your viewer."
         if opened
-        else ". Open it manually — couldn't launch a PDF viewer here."
+        else " Open it manually — couldn't launch a PDF viewer here."
     )
-    return f"Wrote A5 book to {stable} (also kept snapshot {versioned.name}){tail}"
+    return (
+        f"A5 book written to {stable} — this is the file to open and "
+        f"read.{opened_tail} "
+        f"Also kept a snapshot at {versioned.name} (rollback only, "
+        "safe to ignore unless you want to compare with a later render)."
+    )
 
 
 def _impose_and_mirror(
@@ -1200,9 +1212,13 @@ def _impose_and_mirror(
     )
     booklet_target = stable_booklet if booklet_stable_updated else versioned_booklet
     return (
-        f"{message} Also wrote A4 booklet to {booklet_target} (snapshot "
-        f"{versioned_booklet.name}). Tell the user to print "
-        "double-sided (flipped on short edge), fold, and staple."
+        f"{message} "
+        f"A4 booklet written to {booklet_target} — print this one "
+        "double-sided (flipped on short edge), fold in half, staple the "
+        "spine. "
+        f"Also kept a snapshot at {versioned_booklet.name} (rollback "
+        "only, safe to ignore unless you want to compare with a later "
+        "render)."
     )
 
 
