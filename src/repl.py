@@ -109,7 +109,17 @@ _AGENT_GREETING_HINT = (
     "and briefly describe what you see (page count, how many drawings, "
     "whether the title and author are set). Ask the single most important "
     "thing you need to decide next — do NOT ask a long list of questions "
-    "up front."
+    "up front.\n\n"
+    "When the conversation reaches the cover step, ALWAYS offer the user "
+    "all three options explicitly — don't silently default to picking a "
+    "page drawing:\n"
+    "  (a) reuse one of the page drawings as the cover (call set_cover "
+    "with the page number), or\n"
+    "  (b) generate an AI cover illustration (call "
+    "generate_cover_illustration — registered only on OpenAI; if the "
+    "user is on another provider tell them to switch via /model), or\n"
+    "  (c) poster (type-only cover with no drawing — set_cover with "
+    "style='poster')."
 )
 
 
