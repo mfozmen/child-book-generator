@@ -18,6 +18,8 @@ The protocol has two entry points:
 
 from __future__ import annotations
 
+import json
+import uuid
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -646,8 +648,6 @@ def _openai_assistant_message(content) -> dict:
     into one OpenAI assistant message. Text blocks concatenate into
     ``content``; ``tool_use`` blocks become ``tool_calls`` with
     OpenAI's JSON-string ``arguments`` encoding."""
-    import json
-
     texts: list[str] = []
     tool_calls: list[dict] = []
     for block in content or []:
@@ -727,8 +727,6 @@ def _openai_tool_use_block(tc) -> dict:
     """One OpenAI ``tool_call`` → Anthropic-style ``tool_use`` block.
     Arguments come back as a JSON string; malformed payloads go
     through untouched so the tool's own handler can report them."""
-    import json
-
     fn = getattr(tc, "function", None)
     name = getattr(fn, "name", "") if fn else ""
     raw_args = getattr(fn, "arguments", "") if fn else ""
@@ -893,7 +891,15 @@ def _build_tool_use_id_to_name_map(messages: list[dict]) -> dict[str, str]:
     """Agent ``tool_result`` blocks carry only the synthesised
     ``tool_use_id``; providers that correlate by function name
     (Gemini, Ollama) need the name that was on the matching
-    ``tool_use`` block. Scan the conversation once."""
+    ``tool_use`` block. Scan the conversation once.
+
+    An id-less ``tool_use`` block is skipped rather than recorded
+    under the empty-string key — otherwise a later ``tool_result``
+    with a missing ``tool_use_id`` would resolve to a misleading
+    function name. (The Anthropic agent-loop always synthesises an
+    ``id``, so in practice this branch guards against malformed
+    conversations rather than a real flow.)
+    """
     id_to_name: dict[str, str] = {}
     for msg in messages:
         if msg.get("role") != "assistant":
@@ -902,8 +908,12 @@ def _build_tool_use_id_to_name_map(messages: list[dict]) -> dict[str, str]:
         if not isinstance(content, list):
             continue
         for block in content:
-            if block.get("type") == "tool_use":
-                id_to_name[block.get("id", "")] = block.get("name", "")
+            if block.get("type") != "tool_use":
+                continue
+            block_id = block.get("id")
+            if not block_id:
+                continue
+            id_to_name[block_id] = block.get("name", "")
     return id_to_name
 
 
@@ -990,8 +1000,6 @@ def _ollama_tool_use_block(tc) -> dict:
     ``arguments`` arrives as either a dict (most models) or a JSON
     string (a few quantised models stringify it); both land as a
     dict, with a ``__raw`` fallback on malformed JSON."""
-    import uuid
-
     fn = getattr(tc, "function", None)
     name = getattr(fn, "name", "") if fn else ""
     raw_args = getattr(fn, "arguments", None) if fn else None
@@ -1007,17 +1015,20 @@ def _ollama_tool_use_block(tc) -> dict:
 def _parse_ollama_tool_arguments(raw_args) -> dict:
     """Normalise Ollama's ``arguments`` shape. String → JSON parse,
     dict → defensive copy, None / empty → empty dict. Malformed JSON
-    keeps the raw string under ``__raw`` so the tool's handler can
-    surface it instead of us silently swallowing the error."""
-    import json
-
+    (or JSON that parses to a non-dict like ``"null"`` / ``"42"`` /
+    ``"[1,2]"``) keeps the raw string under ``__raw`` so the tool's
+    handler can surface it instead of us handing the agent loop a
+    non-dict under ``input`` that would crash dispatch."""
     if isinstance(raw_args, str):
         if not raw_args:
             return {}
         try:
-            return json.loads(raw_args)
+            parsed = json.loads(raw_args)
         except (json.JSONDecodeError, TypeError):
             return {"__raw": raw_args}
+        if not isinstance(parsed, dict):
+            return {"__raw": raw_args}
+        return parsed
     return dict(raw_args or {})
 
 
