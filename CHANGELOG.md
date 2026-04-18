@@ -1,7 +1,96 @@
 # CHANGELOG
 
 
+## v1.6.0 (2026-04-18)
+
+### Features
+
+- **agent**: Render_book message names each output file's role
+  ([#52](https://github.com/mfozmen/littlepress-ai/pull/52),
+  [`c72acc4`](https://github.com/mfozmen/littlepress-ai/commit/c72acc4fd78a6ee2ac648fa2a93309d64f0e1bc8))
+
+* feat(agent): render_book message names each output file's role
+
+P6 — the last Yavru Dinozor second-run feedback item. A single render drops four PDFs (stable +
+  versioned × A5 + booklet) by design (PR #30), but the Yavru-Dinozor run read four files as "why is
+  this producing so much stuff?" because the success message named paths without naming roles.
+
+Tightens the two message helpers so each file's job is explicit:
+
+- **A5 stable** — "this is the file to open and read" + the viewer-open tail ("and opened it in your
+  viewer" / "Open it manually …"). - **A4 booklet** — "print this one double-sided (flipped on short
+  edge), fold in half, staple the spine." - **A5 snapshot** (``.v1.pdf``) — "rollback only, safe to
+  ignore unless you want to compare with a later render." - **Booklet snapshot**
+  (``.v1_A4_booklet.pdf``) — same framing.
+
+No behaviour change — just user-facing copy. The ``_render_message`` and ``_impose_and_mirror``
+  helpers now carry the role narration; the versioned-snapshot test was already pinning the
+  "snapshot name must appear" invariant and still passes against the new copy.
+
+### Tests
+
+- New ``test_render_book_message_explains_the_role_of_each_output_file`` pins: "open" or "read"
+  mention for A5; "print" + "double-sided"
+
++ "fold" + "staple" for the booklet; "snapshot" + "ignore" (or "safe to ignore" / "rollback") for
+  the two versioned copies. - ``test_render_book_viewer_failure_is_non_fatal`` accepts either the
+  old ("Wrote A5 book") or new ("A5 book written") opener so the test doesn't pin a single phrasing.
+
+526 tests green (was 525).
+
+### PLAN.md
+
+All six Yavru-Dinozor-second-run items shipped; the section is closed out and collapsed back into
+  the regular Next-up list.
+
+* fix(agent): address PR #52 review — grammar + test tightening
+
+Four sub-threshold findings, all valid.
+
+1. **Grammar glitch on the common success path.** With ``opened=True``, the message read "…open and
+  read and opened it in your viewer" — two conjoined ``and`` clauses with a past-tense shift.
+  Restructured ``opened_tail`` so it's its own sentence ("Opened it in your viewer." / "Open it
+  manually — couldn't launch a PDF viewer here."), and moved the period inside the A5 role line so
+  the seam reads clean.
+
+2. **Loose test assertions.** ``"open"`` in result also matched ``"opened it in your viewer"`` and
+  ``"is it open in a PDF viewer?"``; ``"read this"`` never appeared in the code; the snapshot
+  assertion had a dead third disjunct (``"ignore"`` is subsumed by ``"safe to ignore"``). The
+  loosened viewer-failure assertion's ``"Wrote A5 book"`` branch was also dead (HEAD no longer uses
+  that opener). Tightened every role-naming check to a multi-word marker:
+
+- ``"to open and read"`` (A5 role) - ``"print this one double-sided"`` (booklet role) - ``"rollback
+  only"`` + ``"safe to ignore"`` (snapshot role)
+
+3. **Snapshot framing inconsistency.** The A5 snapshot line carried the ``"compare with a later
+  render"`` hedge; the booklet snapshot line dropped it. Added the hedge to both so the same feature
+  reads the same way in one reply. New test pins this — ``result.count("compare with a later
+  render") == 2``.
+
+4. **``impose=False`` branch was untested.** The previous test only ran ``{"impose": True}``. New
+  test pins the A5-only path: role still named, snapshot still named, AND the booklet / print / fold
+  / staple copy does NOT leak.
+
+- ``test_render_book_message_explains_the_role_of_each_output_file`` tightened. - New
+  ``test_render_book_message_names_a5_role_without_booklet_when_impose_false`` — positive + negative
+  assertions on the A5-only path. - New
+  ``test_render_book_snapshot_framing_consistent_across_a5_and_booklet`` — the hedge appears twice
+  per reply. - ``test_render_book_viewer_failure_is_non_fatal`` dropped its dead ``"Wrote A5 book"``
+  disjunct.
+
+528 tests green (was 526).
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+
 ## v1.5.0 (2026-04-18)
+
+### Chores
+
+- **release**: 1.5.0 [skip ci]
+  ([`190bbc7`](https://github.com/mfozmen/littlepress-ai/commit/190bbc70eb85856bed57a5e50101c629cada1026))
 
 ### Features
 
