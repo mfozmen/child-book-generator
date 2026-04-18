@@ -467,6 +467,23 @@ def transcribe_page_tool(
                 "vision-unsupported model). Draft left unchanged; "
                 "ask the user to transcribe manually."
             )
+        if _is_blank_sentinel_reply(cleaned):
+            # Samsung Notes exports routinely trail blank pages, and
+            # the prompt asks the vision model to answer those with
+            # the ``<BLANK>`` sentinel rather than fabricating text.
+            # When the model complies, leave ``page.text`` alone and
+            # tell the agent the page is probably blank — same shape
+            # as the empty-reply branch but a distinct message so the
+            # agent knows the model *saw* the page and confirmed it
+            # was empty, rather than refusing to answer.
+            return (
+                f"Page {page_n} looks blank to the vision model "
+                "(no transcribable text on the image). Draft left "
+                "unchanged — ask the user whether this page was meant "
+                "to be empty (e.g. a trailing blank from the export) "
+                "or whether they want to skip it / mark it as the "
+                "back cover."
+            )
 
         prompt_msg = _build_transcribe_confirm_prompt(page_n, page.text, cleaned)
         if not confirm(prompt_msg):
@@ -522,9 +539,19 @@ _TRANSCRIBE_PROMPT = (
     "child wrote or typed this; preserve every spelling mistake, line "
     "break, punctuation choice, and capitalisation verbatim. Do NOT "
     "fix, polish, or improve the wording in any way — "
-    "preserve-child-voice. Output ONLY the transcribed text, with no "
-    "preamble, quotes, or commentary."
+    "preserve-child-voice.\n\n"
+    "If the image has NO visible text (a truly blank page), reply "
+    "with exactly <BLANK> on its own — no quotes, no explanation, "
+    "nothing else. Otherwise output ONLY the transcribed text, "
+    "with no preamble, quotes, or commentary."
 )
+# The sentinel the prompt asks for when the page carries no text.
+# Language-agnostic: the prompt applies equally to Turkish, English,
+# or any other script, and all compliant replies collapse to this
+# one token. A hedged real transcription ("I cannot make out the
+# last line, but the rest reads: '…'") never collides with this
+# check, so it reaches the confirm gate intact.
+_BLANK_SENTINEL = "<BLANK>"
 
 
 def _build_image_block(image_path: Path) -> dict:
@@ -567,6 +594,21 @@ def _build_image_block(image_path: Path) -> dict:
             "data": base64.b64encode(raw).decode("ascii"),
         },
     }
+
+
+def _is_blank_sentinel_reply(reply: str) -> bool:
+    """Return True when the LLM's reply is the ``<BLANK>`` sentinel
+    (possibly wrapped in whitespace, quotes, or backticks) that the
+    prompt asks for on empty pages.
+
+    Exact comparison after stripping wrapping, so a story that
+    happens to contain ``<BLANK>`` as a substring inside a longer
+    sentence still transcribes through to the confirm gate. The
+    confirm gate remains the last line of defence for prose-style
+    meta-responses the model emits when it ignores the sentinel
+    instruction."""
+    core = reply.strip().strip("`'\"").strip()
+    return core == _BLANK_SENTINEL
 
 
 def _build_transcribe_confirm_prompt(
