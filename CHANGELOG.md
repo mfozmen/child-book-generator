@@ -1,6 +1,97 @@
 # CHANGELOG
 
 
+## v1.3.0 (2026-04-18)
+
+### Features
+
+- **agent**: Surface AI cover + poster as first-class cover options
+  ([#49](https://github.com/mfozmen/littlepress-ai/pull/49),
+  [`8a6b92d`](https://github.com/mfozmen/littlepress-ai/commit/8a6b92da74e719cde361f72d996c827d94d45ed4))
+
+* feat(agent): surface AI cover + poster as first-class cover options
+
+P3 from the Yavru Dinozor second-run feedback. On the live run Claude defaulted to "which page's
+  drawing do you want for the cover?" without ever mentioning the ``generate_cover_illustration``
+  tool or the ``poster`` type-only fallback — even though both are fully wired up. The user had to
+  know the options existed and ask for them by name.
+
+Tightens ``_AGENT_GREETING_HINT`` with an explicit "at the cover step, always offer all three
+  options" block:
+
+(a) reuse a page drawing — ``set_cover`` with a page number, (b) generate an AI cover —
+  ``generate_cover_illustration`` (OpenAI-only; on other providers, tell the user to switch via
+  ``/model``), (c) poster — type-only cover, ``set_cover`` with ``style='poster'``.
+
+Three new tests in a new ``tests/test_agent_greeting.py`` pin the invariants so future greeting-hint
+  tweaks can't silently drop one:
+
+- ``test_greeting_mentions_cover_step_and_its_three_options`` -
+  ``test_greeting_flags_openai_only_gate_for_ai_cover`` -
+  ``test_greeting_still_asks_agent_to_read_draft_first`` (regression guard on the pre-existing "call
+  read_draft first" behaviour — the rewrite could have dropped it)
+
+No production-code path changes outside the hint string. 514 tests green (was 511).
+
+PLAN.md: moved P3 out of Next-up, added a Shipped row for this PR (placeholder PR number to be
+  backfilled on merge).
+
+* fix(repl): address PR #49 review — guardrails on the cover-step hint
+
+Five findings, one critical preserve-child-voice echo and four polish items.
+
+### Critical
+
+1. **Greeting advertised ``generate_cover_illustration`` without carrying the PRESERVE-CHILD-VOICE
+  guard that lives on the tool's own description.** On Anthropic / Gemini / Ollama sessions the tool
+  isn't registered, so its description is invisible and the greeting is the only surface that names
+  the AI cover path on those sessions. Without the echo, an agent following the greeting could
+  switch to OpenAI via ``/model`` and prompt the image API with paraphrased child text — defeating
+  the PR #41 review round. The option (b) bullet now carries the guard verbatim:
+
+> PRESERVE-CHILD-VOICE still applies on this path: describe the > cover scene in your OWN words from
+  the story's themes — do > NOT quote or paraphrase the child's page text into the image > prompt.
+
+### Sub-threshold
+
+2. **``/model`` switch suggestion glossed over the OpenAI key prompt.** Adding: "warn them they'll
+  be prompted for an OpenAI API key on first switch if one isn't already stored in the OS keychain."
+
+3. **Hint mixed English slash-command tokens with a language-switch instruction.** A literal-minded
+  LLM on a Turkish session could translate ``/model`` / ``/render``. Added a clause to the
+  language-switch line:
+
+> keep slash commands like /model /render /load literal — they > are REPL tokens, do NOT translate
+  them.
+
+4. **Tests pinned loose keyword substrings, not the invariants they claimed.**
+  ``test_greeting_flags_openai_only_gate_for_ai_cover`` used ``"openai" in lowered or "/model" in
+  lowered`` — a rewrite that kept one of the two would still pass. Split into two independent
+  assertions. Other tests tightened to require tool names (``generate_cover_illustration``) and
+  explicit option enumeration markers ("(a)", "(b)", "(c)") so deleting a bullet can't slip through.
+
+5. **``poster`` was framed as one of three top-level cover paths, misleading the LLM.** The three
+  real axes are "where the drawing comes from" (page / AI / none); the five templates
+  (``full-bleed`` / ``framed`` / ``portrait-frame`` / ``title-band-top`` / ``poster``) are an
+  orthogonal style axis. Option (a) now points at the ``select-cover-template`` skill explicitly so
+  the middle three templates stay in scope.
+
+### Tests (4 new, 3 tightened — 7 total greeting pins)
+
+- ``test_greeting_echoes_preserve_child_voice_guard_for_ai_cover`` — Finding #1. -
+  ``test_greeting_warns_about_openai_key_prompt_on_model_switch`` — Finding #2. -
+  ``test_greeting_marks_slash_commands_as_non_translatable`` — Finding #3. -
+  ``test_greeting_option_a_points_at_select_cover_template`` — Finding #5. - Finding #4: the three
+  existing tests now take independent assertions (``openai`` AND ``/model``, tool name
+  ``generate_cover_illustration``, enumeration labels "(a)"/"(b)"/"(c)").
+
+518 tests green (was 514).
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+
 ## v1.2.2 (2026-04-18)
 
 ### Bug Fixes
@@ -169,6 +260,11 @@ Handler is down to: draft guard → parse → build → confirm → mutate. No b
 ---------
 
 Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+### Chores
+
+- **release**: 1.2.2 [skip ci]
+  ([`960ee43`](https://github.com/mfozmen/littlepress-ai/commit/960ee4363d4670bb1efe0a389ea9f02c4519a783))
 
 
 ## v1.2.1 (2026-04-18)
