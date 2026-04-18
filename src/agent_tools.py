@@ -5,10 +5,28 @@ that returns the currently-loaded Draft) and returns a ``Tool`` the agent
 can register. Keeping state out of the tool signature itself means tools
 stay testable without spinning up a full REPL.
 
-Preserve-child-voice lives in the tool *surface*: there is **no tool that
-rewrites page text freely**. The only way page text ever changes is
-``propose_typo_fix``, which requires a user y/n and rejects anything
-beyond mechanical substring substitutions.
+**Preserve-child-voice is enforced by making every mutation user-gated.**
+Tools that change draft state (page text, page image, page layout, full
+``DraftPage`` removal) all take a ``confirm: Callable[[str], bool]``
+callback and block on it before touching the draft. Today that covers:
+
+- ``propose_typo_fix`` — narrow substring substitutions on ``page.text``,
+  bounded in length so the tool can't funnel a rewrite.
+- ``transcribe_page`` — OCR via the active LLM's vision, writes
+  ``page.text`` and (by default) clears ``page.image`` + switches the
+  layout to ``text-only``. A ``keep_image`` flag lets the agent preserve
+  a separate drawing on mixed-content pages.
+- ``skip_page`` — removes a whole page from ``draft.pages``, renumbers
+  the rest.
+- ``propose_layouts`` — the batch layout tool, single y/n for the whole
+  rhythm.
+- ``generate_cover_illustration`` — AI cover generation with a
+  pricing-aware confirm.
+
+The contract the module guarantees is: *"every page-state change is
+reviewed by the user before it lands."* If a future tool ships without
+a ``confirm`` callback, that's a preserve-child-voice violation and
+belongs behind one.
 """
 
 from __future__ import annotations
@@ -200,8 +218,12 @@ def read_draft_tool(get_draft: Callable[[], Draft | None]) -> Tool:
             "the ``transcribe_page`` tool on each flagged page to OCR via "
             "the active LLM's vision (Anthropic only for now); if that "
             "tool isn't registered, ask the user to transcribe manually. "
-            "Never invent or paraphrase the child's words. Call this at "
-            "the start of a session to see what you're working with."
+            "When ``transcribe_page`` reports a page looks blank (the "
+            "``<BLANK>`` sentinel branch), confirm with the user and "
+            "call ``skip_page`` to drop it from the draft so it doesn't "
+            "render as an empty spread. Never invent or paraphrase the "
+            "child's words. Call this at the start of a session to see "
+            "what you're working with."
         ),
         input_schema={"type": "object", "properties": {}, "required": []},
         handler=handler,
@@ -378,6 +400,147 @@ def set_cover_tool(get_draft: Callable[[], Draft | None]) -> Tool:
     )
 
 
+def skip_page_tool(
+    get_draft: Callable[[], Draft | None],
+    confirm: Callable[[str], bool],
+) -> Tool:
+    """Tool: remove a page from ``draft.pages`` with user approval.
+
+    Samsung Notes exports commonly trail two or three blank pages.
+    ``transcribe_page`` flags them (``<BLANK>`` sentinel), but they
+    stay in the draft and the renderer treats them as real pages —
+    the printed book ends up with blank spreads the child never
+    meant to include. This tool drops the named page from the draft
+    after a y/n confirmation, shifting subsequent pages down so
+    numbering stays contiguous (matches how the renderer counts
+    pages, so ``choose_layout`` references don't suddenly target
+    the wrong page).
+    """
+
+    def handler(input_: dict) -> str:
+        draft = get_draft()
+        if draft is None:
+            return _MSG_NO_DRAFT
+        page_n, error = _parse_skip_page_input(input_, draft)
+        if error is not None:
+            return error
+        prompt = _build_skip_page_prompt(page_n, draft)
+        if not confirm(prompt):
+            # Only reference paths that actually exist: keep as a
+            # blank page, or type text with ``set_metadata`` style
+            # prompts (handled by the agent in conversation, not a
+            # tool call). Do not invent ``move_content`` /
+            # "mark as back cover" — neither has a tool today.
+            return (
+                f"User declined. Page {page_n} stays in the draft. "
+                "Ask whether they want to keep it as an intentional "
+                "blank spread, or type text into it (then confirm the "
+                "text manually — there's no mutating tool for typing "
+                "fresh page text)."
+            )
+        draft.pages.pop(page_n - 1)
+        return (
+            f"Page {page_n} removed. Draft now has {len(draft.pages)} "
+            f"page(s). Subsequent pages renumbered."
+        )
+
+    return Tool(
+        name="skip_page",
+        description=(
+            "Remove a page from the draft entirely. Use this when a "
+            "page is confirmed empty (e.g. a trailing blank from a "
+            "phone-scan export, flagged by transcribe_page with the "
+            "``<BLANK>`` sentinel) and shouldn't appear in the "
+            "printed book. Destructive — the confirm gate takes a "
+            "y/n before anything changes. Remaining pages renumber "
+            "so subsequent tool calls keep referencing pages the way "
+            "the user counts them (page 3 after skipping page 2 "
+            "becomes page 2)."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "page": {"type": "integer", "minimum": 1},
+            },
+            "required": ["page"],
+        },
+        handler=handler,
+    )
+
+
+def _parse_skip_page_input(input_: dict, draft: Draft) -> tuple[int | None, str | None]:
+    """Pull the 1-indexed ``page`` out of ``input_`` and bounds-check
+    it against ``draft.pages``. Returns ``(page_n, None)`` on a clean
+    input or ``(None, error_msg)`` when the caller sent something
+    unusable — the tool returns the error as a regular result so the
+    agent can recover without a crashed turn."""
+    raw = input_.get("page")
+    if raw is None:
+        return None, (
+            "Rejected: 'page' is required — which page should be removed?"
+        )
+    try:
+        page_n = int(raw)
+    except (TypeError, ValueError):
+        return None, (
+            f"Rejected: 'page' must be an integer; got {raw!r}. "
+            "Pass the 1-indexed page number."
+        )
+    if page_n < 1 or page_n > len(draft.pages):
+        return None, (
+            f"Page {page_n} is out of range — the draft has "
+            f"{len(draft.pages)} pages."
+        )
+    return page_n, None
+
+
+def _build_skip_page_prompt(page_n: int, draft: Draft) -> str:
+    """Compose the destructive-action confirm prompt. Each line has
+    a single job: the drawing warning names the destruction risk
+    explicitly when the page has an image; the preview surfaces
+    whatever text is there; the renumber line only appears when
+    there actually are pages to renumber."""
+    page = draft.pages[page_n - 1]
+    return (
+        f"Remove page {page_n} from the draft?\n"
+        f"{_skip_drawing_line(page.image)}\n"
+        f"  {_skip_preview_line(page.text)}\n"
+        f"{_skip_renumber_line(page_n, len(draft.pages))}"
+        "Approve the removal?"
+    )
+
+
+def _skip_preview_line(text: str) -> str:
+    preview = (text or "").strip()[:80].replace("\n", " ")
+    if not preview:
+        return "(empty — no extractable text)"
+    return f"text preview: {preview!r}"
+
+
+def _skip_drawing_line(image) -> str:
+    """Drawing warning is deliberately loud when the page has an
+    image — the status-flag version of this line was easy to
+    mis-read (PR #48 review #5)."""
+    if image is None:
+        return "  drawing: none"
+    return (
+        "  drawing: YES — the drawing on this page will also be "
+        "lost; removal is permanent (reload the PDF to restore the "
+        "image reference)"
+    )
+
+
+def _skip_renumber_line(page_n: int, total: int) -> str:
+    """No renumber claim when the target is the last page — naming
+    a page that doesn't exist reads as a bug."""
+    if page_n >= total:
+        return ""
+    return (
+        f"Remaining pages will renumber — page {page_n + 1} "
+        f"becomes page {page_n}.\n"
+    )
+
+
 def transcribe_page_tool(
     get_draft: Callable[[], Draft | None],
     get_llm: Callable[[], object],
@@ -422,6 +585,14 @@ def transcribe_page_tool(
                 f"Page {page_n} has no image to transcribe — nothing to "
                 "OCR."
             )
+        # ``keep_image`` tells the tool this page's image carries
+        # content other than text (a child's drawing on the same
+        # page as their typed story, a diagram, etc.). Default False
+        # is the Samsung-Notes case: clear the image after OCR so
+        # the text doesn't print twice. When the agent knows the
+        # image has a drawing it shouldn't destroy, it passes
+        # ``keep_image=True`` and the image + layout are preserved.
+        keep_image = bool(input_.get("keep_image", False))
 
         image_block = _build_image_block(Path(page.image))
         messages = [
@@ -485,7 +656,9 @@ def transcribe_page_tool(
                 "back cover."
             )
 
-        prompt_msg = _build_transcribe_confirm_prompt(page_n, page.text, cleaned)
+        prompt_msg = _build_transcribe_confirm_prompt(
+            page_n, page.text, cleaned, keep_image=keep_image
+        )
         if not confirm(prompt_msg):
             return (
                 f"User declined the OCR transcription for page {page_n}. "
@@ -495,9 +668,23 @@ def transcribe_page_tool(
 
         page.text = cleaned
         preview = cleaned[:80].replace("\n", " ")
+        if keep_image:
+            # The agent flagged this page as mixed-content — a
+            # drawing lives on it that we must preserve. Write only
+            # the text and leave the image + layout alone.
+            return (
+                f"Page {page_n} transcribed and applied ({len(cleaned)} "
+                f"chars; source image kept — mixed-content page). "
+                f"Preview: {preview!r}."
+            )
+        # Default Samsung-Notes path: clear the image to avoid the
+        # renderer printing text twice.
+        page.image = None
+        page.layout = "text-only"
         return (
             f"Page {page_n} transcribed and applied ({len(cleaned)} "
-            f"chars). Preview: {preview!r}."
+            f"chars; source image cleared, layout switched to "
+            f"text-only). Preview: {preview!r}."
         )
 
     return Tool(
@@ -511,15 +698,32 @@ def transcribe_page_tool(
             "to copy the text verbatim (no typo fixes, no paraphrase) "
             "AND the user must approve the OCR reply via a y/n prompt "
             "before it lands in the draft — same gate pattern as "
-            "propose_typo_fix. Registered only on Anthropic today "
-            "(the other providers don't forward image content blocks "
-            "yet); on non-Anthropic sessions the tool isn't available "
-            "and the user should transcribe manually."
+            "propose_typo_fix. SIDE EFFECT: by default, approving the "
+            "OCR also clears the page's source image and switches the "
+            "layout to ``text-only`` (the Samsung-Notes case — the "
+            "image is a screenshot of the text, keeping it would "
+            "double-print). Do NOT call this with the default on a "
+            "page whose image is a separate illustration you want to "
+            "keep — pass ``keep_image=true`` for mixed-content pages, "
+            "which preserves the image + layout. Registered only on "
+            "Anthropic today (other providers don't forward image "
+            "content blocks yet); on non-Anthropic sessions the tool "
+            "isn't available and the user should transcribe manually."
         ),
         input_schema={
             "type": "object",
             "properties": {
                 "page": {"type": "integer", "minimum": 1},
+                "keep_image": {
+                    "type": "boolean",
+                    "description": (
+                        "Pass true when the page's image carries a "
+                        "drawing the child wants to keep (mixed "
+                        "content). Default false — the image is "
+                        "cleared on OCR accept to avoid the "
+                        "duplicate-print bug."
+                    ),
+                },
             },
             "required": ["page"],
         },
@@ -612,23 +816,43 @@ def _is_blank_sentinel_reply(reply: str) -> bool:
 
 
 def _build_transcribe_confirm_prompt(
-    page_n: int, existing_text: str, new_text: str
+    page_n: int, existing_text: str, new_text: str, *, keep_image: bool
 ) -> str:
-    """Compose the y/n prompt shown to the user. When the page is
-    empty we render a simple "apply this transcription?" message;
-    when it already carries text (user typed it manually earlier)
-    the prompt shows both so the user can see what's being
-    overwritten."""
+    """Compose the y/n prompt shown to the user. The footer names the
+    exact consequences of approval — either we're keeping the image
+    (mixed-content page) or we're clearing it (default, Samsung-Notes
+    case). The drawing-destruction warning on the default path is
+    deliberately explicit: the child's drawing on this page will
+    ALSO be lost."""
+    if keep_image:
+        footer = (
+            "Approving writes the OCR text into the page. The source "
+            "image (and any drawing on this page) stays in place — "
+            "this is the ``keep_image=True`` branch, use it only when "
+            "the page image carries a drawing the child wants to keep."
+        )
+    else:
+        footer = (
+            "Approving also removes the source image on this page and "
+            "switches its layout to text-only. Any drawing on this "
+            "page will also be lost — the image is cleared from the "
+            "draft. Use this default branch only when the page image "
+            "is a text screenshot (Samsung Notes / phone-scan export). "
+            "For pages with a separate drawing you want to keep, call "
+            "this tool with ``keep_image=true`` instead."
+        )
     if existing_text.strip():
         return (
             f"Replace the existing text on page {page_n}?\n"
             f"  Existing (user-typed):\n    {existing_text!r}\n"
             f"  New (OCR):\n    {new_text!r}\n"
+            f"{footer}\n"
             "Approve the overwrite?"
         )
     return (
         f"Apply this OCR transcription to page {page_n}?\n"
         f"  {new_text!r}\n"
+        f"{footer}\n"
         "Approve?"
     )
 
