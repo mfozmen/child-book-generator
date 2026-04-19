@@ -1,7 +1,153 @@
 # CHANGELOG
 
 
+## v1.9.0 (2026-04-19)
+
+### Features
+
+- **agent**: Generate_page_illustration — restore illustrations after OCR
+  ([#57](https://github.com/mfozmen/littlepress-ai/pull/57),
+  [`d101aac`](https://github.com/mfozmen/littlepress-ai/commit/d101aacf70986030914f24a29d850b522fbfd6c1))
+
+* feat(agent): generate_page_illustration — restore illustrations after OCR
+
+Closes the deferred "Per-page AI illustration generation" item.
+
+PR #48 clears ``page.image`` + switches to ``text-only`` layout when ``transcribe_page`` accepts an
+  OCR result, which fixes the Samsung-Notes duplicate-text bug but leaves the page without an
+  illustration. This tool is the natural second half: restore (or add) a drawing on any page with a
+  one-prompt round-trip through OpenAI's ``gpt-image-1``.
+
+### Shape
+
+Symmetric to ``generate_cover_illustration`` — same pricing-aware y/n confirm, same
+  PRESERVE-CHILD-VOICE guard in the description ("describe the scene in your OWN words from the
+  story's themes — do NOT quote or paraphrase the child's page text"), same 1024x1536 portrait
+  sizing, same OpenAI-only REPL gate, same ``.book-gen/images/`` output directory (new prefix:
+  ``page-<N>-<hash>.png``).
+
+Inputs:
+
+- ``page`` (required, int, 1-indexed) - ``prompt`` (required, str) - ``quality`` (optional enum: low
+  / medium / high, default medium) - ``layout`` (optional enum: image-top / image-bottom /
+  image-full / text-only — switches the page off text-only if the user wants a specific layout in
+  the same call)
+
+On approval: ``draft.pages[n-1].image`` set to the saved PNG, optional ``draft.pages[n-1].layout``
+  set from the layout input.
+
+### Helpers
+
+- ``_hashed_image_output_path(session_root, prompt, prefix)`` shared between the cover + page
+  variants; ``_cover_image_output_path`` now delegates to it so the two tools produce symmetric
+  hashed filenames (``cover-<hash>.png`` vs ``page-<N>-<hash>.png``). -
+  ``_parse_page_illustration_input`` / ``_parse_page_illustration_fields`` mirror the skip_page /
+  transcribe_page parse-helper pattern — malformed input returns a tool-result string, never a
+  ``KeyError`` / ``ValueError`` across the tool boundary.
+
+### Tests (13 new in agent_tools; 3 new in REPL integration)
+
+``agent_tools`` (13):
+
+- Draft guard, page-range check, empty-prompt, invalid-quality, invalid-layout, missing/non-int page
+  (four malformed-input cases in one test). - Confirm prompt includes price + quality + page number
+  + the agent's prompt text. - Declined-confirm leaves draft untouched + provider not called. -
+  Approved path: provider called with prompt + 1024x1536 + medium; ``page.image`` set +
+  ``page.layout`` set when provided. - Output path lives under ``<root>/.book-gen/images/``. -
+  Provider error surfaces as a clean tool-result message. - Description carries the
+  PRESERVE-CHILD-VOICE guard ("own words", "child") — same strict phrase check as the cover variant.
+  - Schema advertises page / prompt / quality / layout; required is ``{"page", "prompt"}``.
+
+``repl_tools`` (3):
+
+- Registered on OpenAI with a key. - Omitted on Anthropic / Google / Ollama. - Omitted on OpenAI
+  without a key.
+
+581 tests green (was 565).
+
+### Docs
+
+- README: new Status bullet describing the feature + the OpenAI gate. - PLAN.md: removed the
+  "Per-page AI illustration generation" deferred line — shipped here.
+
+* fix(agent): address PR #57 review — text-only reject, overwrite warn, doc drift
+
+Eight findings, three critical and five sub-threshold.
+
+### Critical
+
+1. **``layout="text-only"`` was accepted by the handler and advertised in the schema — nonsensical
+  for a tool that writes an image onto the page.** User would pay for a PNG, the file would be
+  written, ``page.image`` set, and then ``page.layout = "text-only"`` would hide it. Rejected at the
+  input boundary with a clear "pick image-top / image-bottom / image-full" message; dropped from the
+  schema enum so the LLM doesn't suggest it.
+
+2. **No overwrite guard when ``page.image`` was already set.** Approval silently replaced scanned
+  child art, a ``keep_image=true`` preserve from ``transcribe_page``, or an earlier AI generation.
+  ``_build_page_illustration_confirm_prompt`` now takes ``existing_image`` and appends "NOTE: page N
+  already has an image (path) and will be REPLACED — the existing drawing cannot be recovered
+  in-session" to the confirm prompt.
+
+3. **CLAUDE.md architecture bullet didn't list ``generate_page_illustration``.** Fourth recurrence
+  of the same stale-bullet pattern. Extended the list to name the new tool alongside its cover
+  sibling.
+
+### Sub-threshold
+
+4. **Stale ``_IMAGE_COST_USD``.** Spot-checked against the OpenAI pricing page: at 1024x1536
+  portrait the ballpark is low ≈ $0.02, medium ≈ $0.06 (was $0.07), high ≈ $0.25 (was $0.19).
+  Updated the shared constant + refreshed the two tool descriptions and the README bullet so the
+  numbers stay in sync. Comment on the constant now names the last-checked date and points at the
+  pricing page for the next drift.
+
+5. **Preserve-child-voice test was keyword-only.** Tightened to require the canonical
+  ``PRESERVE-CHILD-VOICE:`` marker AND ``own words`` AND a regex ``(do not|don't) … paraphrase`` in
+  the same sentence — so a rewrite dropping any piece of the guard can't pass vacuously.
+
+7. **No filename-prefix regression test.** Added
+  ``test_generate_page_illustration_filename_uses_page_n_prefix`` pinning the
+  ``page-<N>-<hash>.png`` convention.
+
+8. **PLAN's "cap old render snapshots" item widened to cover generated images too.** Every retry of
+  ``generate_*_illustration`` leaves another file in ``.book-gen/images/`` (by design — the
+  ``time_ns()`` token means two identical-prompt calls produce two files, so the user can compare).
+  Called out as the biggest accumulator on an iterative workflow (8 pages × 3 retries × medium ≈ 24
+  images per book) so the eventual prune / cap work covers this surface too.
+
+### Not addressed in this PR
+
+- **#6 — behavioural paraphrase check.** Reviewer's own assessment: "not a regression, but a
+  behavioural check would
+
+complete the defence." A token-overlap guard (reject if the prompt shares > K consecutive tokens
+  with ``page.text``) has false-positive risk on generic child-story vocabulary ("dinozor",
+  "yumurta"). Deferred to its own PR where the K threshold and the matching strategy can be picked
+  deliberately.
+
+### Tests (4 new + 2 tightened; 584 total, was 581)
+
+- ``test_generate_page_illustration_rejects_text_only_layout`` -
+  ``test_generate_page_illustration_confirm_warns_when_page_has_existing_image`` -
+  ``test_generate_page_illustration_filename_uses_page_n_prefix`` -
+  ``test_generate_page_illustration_description_has_preserve_child_voice_guard`` tightened (marker +
+  regex). - ``test_generate_page_illustration_schema_advertises_page_prompt_quality_layout``
+  tightened (``text-only`` absent from the layout enum). - Existing 11 page-illustration tests still
+  passing.
+
+- README: refreshed pricing line. - CLAUDE.md: architecture bullet now names
+  ``generate_page_illustration``. - docs/PLAN.md: accumulation item widened.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+
 ## v1.8.0 (2026-04-19)
+
+### Chores
+
+- **release**: 1.8.0 [skip ci]
+  ([`57b50a0`](https://github.com/mfozmen/littlepress-ai/commit/57b50a08713b411263f39c799abedfb03b2b9c38))
 
 ### Features
 
