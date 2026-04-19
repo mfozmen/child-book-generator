@@ -605,9 +605,23 @@ def transcribe_page_tool(
         page_n, page, keep_image, error = _parse_transcribe_input(input_, draft)
         if error is not None:
             return error
-        cleaned, error = _call_vision_for_transcription(
-            get_llm(), Path(page.image), page_n
-        )
+        method = str(input_.get("method", "vision"))
+        if method not in {"vision", "tesseract"}:
+            return (
+                f"Invalid method '{method}'. Valid values: "
+                "'vision' (default; uses the active LLM) and "
+                "'tesseract' (offline OCR, requires pytesseract + a "
+                "system tesseract binary)."
+            )
+        if method == "tesseract":
+            lang = str(input_.get("lang", "eng"))
+            cleaned, error = _call_tesseract_for_transcription(
+                Path(page.image), page_n, lang
+            )
+        else:
+            cleaned, error = _call_vision_for_transcription(
+                get_llm(), Path(page.image), page_n
+            )
         if error is not None:
             return error
         early = _interpret_vision_reply(cleaned, page_n)
@@ -627,27 +641,33 @@ def transcribe_page_tool(
     return Tool(
         name="transcribe_page",
         description=(
-            "Transcribe a single page's text from its image using the "
-            "active LLM's vision capability. Use this when a page is "
-            "flagged ``[image-only]`` by read_draft — the embedded "
-            "text layer is empty but the image clearly shows words. "
+            "Transcribe a single page's text from its image. Use this "
+            "when a page is flagged ``[image-only]`` by read_draft — "
+            "the embedded text layer is empty but the image clearly "
+            "shows words. Two OCR engines via ``method``: 'vision' "
+            "(default) goes through the active LLM's vision "
+            "capability, 'tesseract' goes through an offline "
+            "pytesseract install (zero API cost, great for "
+            "matbaa yazısı, weaker on handwriting). Prefer "
+            "'tesseract' for Samsung-Notes-style matbaa PDFs and "
+            "pass ``lang='tur'`` (or 'eng', 'tur+eng', etc.). "
             "Preserve-child-voice: the vision prompt tells the model "
-            "to copy the text verbatim (no typo fixes, no paraphrase) "
-            "AND the user must approve the OCR reply via a y/n prompt "
-            "before it lands in the draft — same gate pattern as "
-            "propose_typo_fix. SIDE EFFECT: by default, approving the "
-            "OCR also clears the page's source image and switches the "
-            "layout to ``text-only`` (the Samsung-Notes case — the "
-            "image is a screenshot of the text, keeping it would "
-            "double-print). Do NOT call this with the default on a "
-            "page whose image is a separate illustration you want to "
-            "keep — pass ``keep_image=true`` for mixed-content pages, "
-            "which preserves the image + layout. Registered on every "
-            "real provider (Anthropic / OpenAI / Google / Ollama); "
-            "each provider's model still needs to actually support "
-            "vision (Claude 3+, GPT-4o, Gemini 1.5+, LLaVA on Ollama) "
-            "— a non-vision model will surface as a failed chat call "
-            "rather than a hallucinated transcription."
+            "to copy the text verbatim (no typo fixes, no "
+            "paraphrase); Tesseract returns bytes and can't "
+            "paraphrase at all. Either way the user must approve "
+            "the OCR reply via a y/n prompt before it lands in the "
+            "draft — same gate pattern as propose_typo_fix. SIDE "
+            "EFFECT: by default, approving also clears the page's "
+            "source image and switches the layout to ``text-only`` "
+            "(Samsung-Notes case). Pass ``keep_image=true`` on "
+            "mixed-content pages where the image also carries a "
+            "drawing you want to keep. Vision-method registered on "
+            "every real provider (Anthropic / OpenAI / Google / "
+            "Ollama); a non-vision model surfaces as a failed chat "
+            "call. Tesseract method needs pytesseract + a system "
+            "tesseract binary + matching traineddata installed — "
+            "when they're missing the tool surfaces a clean install "
+            "hint rather than a crash."
         ),
         input_schema={
             "type": "object",
@@ -661,6 +681,29 @@ def transcribe_page_tool(
                         "content). Default false — the image is "
                         "cleared on OCR accept to avoid the "
                         "duplicate-print bug."
+                    ),
+                },
+                "method": {
+                    "type": "string",
+                    "enum": ["vision", "tesseract"],
+                    "description": (
+                        "OCR engine. Default 'vision' — uses the "
+                        "active LLM's vision capability. 'tesseract' "
+                        "routes through a local pytesseract install "
+                        "(zero API cost, offline, excellent on "
+                        "matbaa yazısı; handwriting is shakier). "
+                        "Requires both the pytesseract package AND "
+                        "the system tesseract binary with the "
+                        "matching language trained-data installed."
+                    ),
+                },
+                "lang": {
+                    "type": "string",
+                    "description": (
+                        "Tesseract language code (only used when "
+                        "method='tesseract'). Examples: 'eng' "
+                        "(default), 'tur' for Turkish, 'tur+eng' "
+                        "for mixed."
                     ),
                 },
             },
@@ -737,6 +780,52 @@ def _call_vision_for_transcription(
             "This often means the active LLM doesn't support vision, "
             "or the network is down. Ask the user to transcribe "
             "manually, or switch to a multimodal provider via /model."
+        )
+    return str(reply).strip(), None
+
+
+def _call_tesseract_for_transcription(
+    image_path: Path, page_n: int, lang: str
+) -> tuple[str, str | None]:
+    """Run offline OCR via pytesseract and normalise errors into
+    ``(cleaned_reply, None)`` or ``("", error_message)``. Two
+    distinct failure modes get their own clean-error message:
+    ``pytesseract`` not installed (Python package), and the system
+    ``tesseract`` binary not on PATH (the package's
+    ``TesseractNotFoundError``).
+
+    Tesseract is the fast + free path for Samsung-Notes-style
+    matbaa yazısı where LLM vision would cost a cloud round-trip
+    per page. Handwriting still needs an LLM."""
+    try:
+        import pytesseract  # type: ignore[import-not-found]
+    except ImportError:
+        return "", (
+            f"Transcription failed on page {page_n}: pytesseract is "
+            "not installed. Install it with ``pip install pytesseract`` "
+            "(and a system tesseract binary with your language "
+            "trained-data, e.g. tesseract-lang-tur on Ubuntu or via "
+            "UB-Mannheim on Windows), or retry with method='vision'."
+        )
+
+    tess_not_found = getattr(
+        pytesseract, "TesseractNotFoundError", Exception
+    )
+    try:
+        reply = pytesseract.image_to_string(str(image_path), lang=lang)
+    except tess_not_found as e:  # type: ignore[misc]
+        return "", (
+            f"Transcription failed on page {page_n}: tesseract binary "
+            "not found on PATH. Install the system package (Windows: "
+            "UB-Mannheim installer; macOS: ``brew install tesseract "
+            "tesseract-lang``; Linux: ``apt install tesseract-ocr "
+            "tesseract-ocr-tur``), or retry with method='vision'. "
+            f"({str(e)[:200]})"
+        )
+    except Exception as e:  # noqa: BLE001 — surface every other tesseract error
+        return "", (
+            f"Transcription failed on page {page_n}: tesseract error: "
+            f"{str(e)[:200]}. Try method='vision' for a cloud fallback."
         )
     return str(reply).strip(), None
 

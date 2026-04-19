@@ -42,7 +42,6 @@ All five PRs from the original plan merged:
 
 Items below came out of the first real end-to-end test (Yavru Dinozor). Listed roughly in "most visible to the user" order.
 
-- **Tesseract OCR as an offline fallback for `transcribe_page`.** LLM-vision transcription (via the active provider — see "Shipped" below) is the primary path and handles Turkish matbaa yazısı + moderate handwriting. A `pytesseract` + `tur` lang-pack fallback would let Ollama / NullProvider users (offline workflow) still OCR image-text PDFs without a cloud round-trip. Opt-in dependency, auto-detected at runtime; when Tesseract isn't installed, the tool continues to require LLM vision. Lower priority than it was before `transcribe_page` shipped.
 - **Spine-wrap cover template.** Five templates ship now (`full-bleed`, `framed`, `portrait-frame`, `title-band-top`, `poster`). The one remaining idea is `spine-wrap` — drawing spans front + spine + back for the A4 imposed booklet. This needs multi-page cover rendering support that the current `draw_cover` (single page) doesn't have; defer until a real user asks for it.
 - **More image providers for AI cover generation.** First-slice ships OpenAI `gpt-image-1` (see "Shipped" below). Stability / Replicate / a local Stable Diffusion daemon are all plausible follow-ups — plug them in behind the existing `ImageProvider` protocol and add a user-visible way to pick.
 
