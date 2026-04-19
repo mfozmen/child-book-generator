@@ -1,7 +1,316 @@
 # CHANGELOG
 
 
+## v1.7.0 (2026-04-19)
+
+### Features
+
+- **llm**: Multi-provider transcribe_page via per-provider image translators
+  ([#55](https://github.com/mfozmen/littlepress-ai/pull/55),
+  [`ece8a9b`](https://github.com/mfozmen/littlepress-ai/commit/ece8a9b148d86eb30ba60bd2c3cf2c2c8cf18835))
+
+* feat(llm): multi-provider transcribe_page via per-provider image translators
+
+PR #48 review #1 flagged that ``transcribe_page`` was Anthropic-only because the other providers'
+  message translators silently dropped image content blocks (the LLM would see only the text prompt
+  and hallucinate a transcription). The Anthropic-only gate shipped as a safety measure; actual
+  multi-provider support was deliberately deferred to this PR.
+
+### Per-provider image wire formats
+
+Each provider has a different multi-modal shape. Each translator grew an image-block branch in its
+  native format:
+
+**OpenAI** — ``_openai_user_messages`` now detects any ``image`` block on a user message and emits a
+  single multi-modal user message whose ``content`` is an array of items: ``{type: "image_url",
+  image_url: {url: "data:<mime>;base64,<data>"}}`` for images, ``{type: "text", text: ...}`` for
+  text. Text-only user messages keep the string-content shape (hot path unchanged).
+
+**Gemini** — ``_gemini_parts_from_blocks`` now emits ``Part(inline_data=Blob(mime_type, data))`` for
+  image blocks, with the base64 data decoded to raw bytes (Gemini wants bytes, not the base64 string
+  OpenAI and Ollama take).
+
+**Ollama** — ``_ollama_user_messages`` now lifts image payloads into the message-level ``images``
+  list that the Python client accepts, keeping the text-string ``content`` intact (Ollama's LLaVA +
+  other vision models read images off ``images``, not the content array).
+
+### Helpers
+
+- ``_openai_multimodal_content`` builds the OpenAI content-array shape from a mixed block list. -
+  Ollama + OpenAI both take a "has image?" detection pass, so plain text-only user messages stay on
+  the original code path and existing tests don't rewrite.
+
+### Gate lifted
+
+``src/repl.py::_build_agent`` — ``transcribe_page_tool`` now registers on every real provider
+  (Anthropic / OpenAI / Google / Ollama). NullProvider still omits it; there's nothing to chat with.
+  The tool's description makes the vision-capability requirement explicit so the LLM knows a
+  non-vision model will surface as a failed chat, not a silent hallucination.
+
+### Tests (4 new in ``test_llm_translator_helpers.py``, 1 new in ``test_repl_tools.py``; 2 updated)
+
+- ``test_messages_to_openai_converts_image_block_to_image_url_content_item`` -
+  ``test_messages_to_openai_keeps_string_content_when_no_image`` (hot path didn't regress) -
+  ``test_messages_to_ollama_lifts_image_blocks_into_images_field`` -
+  ``test_messages_to_gemini_converts_image_block_to_inline_data_part`` (with a small fake
+  Part/Blob/Content fixture so the test doesn't need the real google-genai SDK) -
+  ``test_transcribe_page_registered_on_every_real_provider`` replaces the old Anthropic-only pin. -
+  ``test_transcribe_page_omitted_on_null_provider`` keeps the offline-default behaviour pinned. -
+  The ``skips_unknown_block_types`` test for ``_openai_user_messages`` updated to use ``video`` as
+  the stand-in unknown — ``image`` is handled now.
+
+### Docs
+
+- README: removed the "Anthropic-only" claim on the ``transcribe_page`` bullet, updated the
+  guardrail list (was 4, now 4 different items — the "Anthropic-only defence" dropped, replaced by
+  "non-vision models fail cleanly"). - ``read_draft``'s agent-facing description now says "every
+  real provider" instead of "Anthropic only for now".
+
+548 tests green (was 544).
+
+* fix(agent): address PR #55 review — doc drift + tool_result guards
+
+Four findings (#1 critical, #2-3 sub-threshold, #4 a minor maintainer's-call note we skip).
+
+### Critical
+
+1. **Two "Anthropic-only" claims survived the PR that lifts the Anthropic-only gate.** Both fixed:
+
+(a) ``CLAUDE.md:25`` — architecture bullet said ``transcribe_page (Anthropic-only)`` right above the
+  preserve-child-voice paragraph. Load-bearing doc drift. Rewritten to "every real provider; model
+  must support vision".
+
+(b) ``transcribe_page_tool`` function docstring axis 1 still described the old gate ("Only
+  registered when the active provider is Anthropic, because only AnthropicProvider.chat currently
+  forwards image content blocks intact"). Both halves of that sentence became false after PR #55.
+  Axis 1 rewritten to describe the new gate: registered on every real provider, but the active
+  *model* still has to support vision; non-vision models surface as a failed ``llm.chat`` call with
+  a truncated error message rather than a hallucinated transcription.
+
+### Sub-threshold
+
+2. **Image-containing user messages could silently drop ``tool_result`` blocks.** The
+  image-detecting branch in ``_openai_user_messages`` / ``_ollama_user_messages`` handed the content
+  list straight to the multi-modal builders, which only knew ``image`` + ``text``. A ``tool_result``
+  sharing a user message with an image would vanish. Not triggered by ``transcribe_page`` today (it
+  builds a fresh ``[image, text]`` pair), but a defensive handler costs nothing and future callers
+  can't trip the quiet-drop trap.
+
+Both helpers now emit ``tool_result`` blocks as separate ``role: tool`` messages first, then the
+  remaining image + text blocks form the multi-modal user message. Two new invariant tests pin the
+  "tool_result isn't lost when it shares a message with an image" contract — one per provider.
+
+3. **No parametrised regression test that ``confirm`` fires on the newly-enabled providers.** The
+  gate lives in the ``transcribe_page_tool`` handler (provider-agnostic), but the doc is clearer if
+  the test explicitly walks each of the four providers. Added
+  ``test_transcribe_page_gates_on_confirm_regardless_of_provider`` parametrised over ``anthropic`` /
+  ``openai`` / ``google`` / ``ollama``; each case asserts draft.pages[0].text stays untouched +
+  image + layout stay intact when ``confirm`` returns False.
+
+### Tests
+
+- 2 new translator invariant pins (OpenAI + Ollama tool_result defensive handling). - 4 parametrised
+  cases of ``test_transcribe_page_gates_on_confirm_regardless_of_provider``. - 554 tests green (was
+  548).
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+### Refactoring
+
+- **agent_tools**: Extract helpers to tame three S3776 hotspots
+  ([#53](https://github.com/mfozmen/littlepress-ai/pull/53),
+  [`ba92ed4`](https://github.com/mfozmen/littlepress-ai/commit/ba92ed4e78a87ccb990856ad86c52e3e75707914))
+
+* refactor(agent_tools): extract helpers to tame three S3776 hotspots
+
+Three of the eight remaining ``python:S3776`` cognitive-complexity findings all lived in
+  ``src/agent_tools.py`` tool-factory handlers. Pure extract-function refactor (same pattern used on
+  ``set_cover_tool`` / ``skip_page_tool`` / ``_render_message`` earlier); behaviour unchanged,
+  existing tests cover every branch.
+
+### Handlers refactored
+
+**``read_draft_tool::handler`` (complexity 20 → under 15)**
+
+- ``_read_draft_header_lines`` — the title / author / cover / page-count opener. -
+  ``_read_draft_page_lines`` — per-page line composition, also collects the ``[image-only]`` indices
+  it tagged. - ``_build_image_only_note`` — the single summary NOTE preserve-child-voice depends on,
+  built in one place.
+
+**``transcribe_page_tool::handler`` (complexity 19 → under 15)**
+
+- ``_parse_transcribe_input`` — page-number + image guard + ``keep_image`` extraction, returns a
+  uniform ``(page_n, page, keep_image, error)`` tuple. - ``_call_vision_for_transcription`` — LLM
+  call with narrow-then-generic exception handling, truncates error bodies to 200 chars so an SDK
+  that interpolates the base64 payload into a message can't echo the image back at the agent. -
+  ``_interpret_vision_reply`` — empty-reply + ``<BLANK>`` sentinel branches as a single early-return
+  helper. - ``_apply_transcription`` — the final write: either clear + ``text-only`` (default
+  Samsung-Notes path) or preserve image (``keep_image=True`` mixed-content path).
+
+**``generate_cover_illustration_tool::handler`` (complexity 17 → under 15)**
+
+- ``_parse_generate_cover_input`` — prompt + quality + style validation in one pass. -
+  ``_build_generate_cover_confirm_prompt`` — the pricing-aware y/n copy. -
+  ``_apply_generated_cover`` — cover-image + style write after approval.
+
+### Not in this PR
+
+The five remaining ``python:S3776`` findings all live in ``src/providers/llm.py``
+  (``_messages_to_gemini_contents``, ``_messages_to_openai``, ``_messages_to_ollama``, and the two
+  ``turn()`` methods). Each provider has a different wire format and these translators are easy to
+  get subtly wrong; next PR ships them on their own so review stays focused.
+
+### Verification
+
+- All 528 tests green. No behaviour changes. Every refactor is pure extract-function; the
+  agent-facing replies and the persisted draft state are identical byte-for-byte.
+
+### PLAN.md
+
+Backlog entry tightened: was "6 remaining" (stale), now "5 remaining" in llm.py with the hotspots
+  named.
+
+* fix(agent_tools): address PR #53 review — input guard + SRP polish
+
+All three sub-threshold findings from the PR review.
+
+**#1 — ``_parse_transcribe_input`` no longer crashes on malformed input.** ``int(input_["page"])``
+  used to raise ``KeyError`` when the field was absent and ``ValueError`` on ``"2nd"``, and the
+  exception escaped past the tool boundary into the agent turn. Mirrors the guard PR #48 review #11
+  added on ``_parse_skip_page_input``: missing key → tool-result string, non-integer → tool-result
+  string. Regression test ``test_transcribe_page_handles_missing_or_bad_input_gracefully`` pins both
+  branches (pre-existing bug from PR #46, never exercised with a weak-model malformed call until
+  now).
+
+**#2 — ``_read_draft_page_lines`` is now pure.** Signature changes from ``(draft, lines) ->
+  list[int]`` to ``(draft) -> tuple[list[str], list[int]]``; the caller does
+  ``lines.extend(page_lines)``. Removes the mixed in/out-parameter + return shape. Cosmetic but
+  mirrors the shape of ``_read_draft_header_lines`` (pure return) so the two helpers read together.
+
+**#3 — restored the "why the tag is compact" rationale at the call site.** Added a short comment
+  above the ``_read_draft_page_lines`` call in ``read_draft_tool``'s handler pointing at
+  ``_build_image_only_note`` for the full explanation. The read-through-at-a-glance is back without
+  duplicating the docstring.
+
+Still 529 tests green (was 528). Only new test is the input guard; the SRP polish and comment
+  restoration are covered by the existing ``read_draft`` suite.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+- **llm**: Split provider translators to close the S3776 backlog
+  ([#54](https://github.com/mfozmen/littlepress-ai/pull/54),
+  [`9fdaf1e`](https://github.com/mfozmen/littlepress-ai/commit/9fdaf1e3f3f79ea68d12799b735551f3aac1580e))
+
+* refactor(llm): split provider translators to close S3776 backlog
+
+The last five ``python:S3776`` cognitive-complexity findings all lived in ``src/providers/llm.py`` —
+  three message translators (Anthropic → provider) and two response translators (provider →
+  Anthropic). Each provider has a different wire format; this PR ships them on their own so review
+  stays focused, and every split is a pure extract-function with the existing per-provider test
+  suite as a safety net.
+
+### Translators parcelled out
+
+**``_messages_to_openai`` (32 → under 15)**
+
+- ``_openai_assistant_message`` collapses Anthropic blocks on an assistant message into one OpenAI
+  assistant message (text concatenates, tool_use → tool_calls with JSON-string arguments). -
+  ``_openai_user_messages`` expands user-message blocks into the one-``role: tool``-per-result
+  sequence OpenAI expects.
+
+**``_messages_to_ollama`` (43 → under 15)**
+
+- ``_ollama_assistant_message`` for the dict-arguments, id-less tool_calls shape. -
+  ``_ollama_user_messages`` for the name-correlated tool-result shape (Ollama keys by ``tool_name``,
+  not ``tool_call_id``). - ``_build_tool_use_id_to_name_map`` lifted out as a shared helper (Gemini
+  and Ollama both need this lookup).
+
+**``_messages_to_gemini_contents`` (31 → under 15)**
+
+- ``_gemini_parts_from_blocks`` translates one message's block list to a list of ``Part``s + a flag
+  saying whether any ``tool_result`` appeared. - ``_gemini_role_for_message`` maps Anthropic's
+  two-role world + tool flag to Gemini's three roles. - Uses the shared
+  ``_build_tool_use_id_to_name_map``.
+
+**``_openai_completion_to_blocks`` (~19 → under 15)**
+
+- ``_openai_tool_use_block`` for one ``tool_call`` → one ``tool_use`` block. -
+  ``_openai_finish_reason_explanation`` for the synthetic "[OpenAI stopped with reason: …]" text
+  that surfaces non-standard finishes (length / content_filter) to the user.
+
+**``_ollama_response_to_blocks`` (~18 → under 15)**
+
+- ``_ollama_tool_use_block`` for one ``tool_call`` → one ``tool_use`` block (synthesises an id since
+  Ollama doesn't issue one). - ``_parse_ollama_tool_arguments`` normalises the dict-or-string
+  arguments shape with the ``__raw`` fallback on malformed JSON.
+
+### Verification
+
+- All 529 tests green. No behaviour changes; every refactor is pure extract-function covered by the
+  pre-existing provider tests in ``tests/test_llm_providers.py`` (55 tests, every translator path
+  exercised).
+
+### PLAN.md
+
+SonarCloud backlog item removed — all 12 original S3776 findings cleared across PRs #45, #53, and
+  this one.
+
+* fix(llm): address PR #54 review + new-code coverage on the helpers
+
+Three sub-threshold review findings plus a dedicated coverage sweep of the extract-function helpers
+  PR #54 introduced. Full coverage rose from 98% → 99% and ``src/providers/llm.py`` from 95% → 98%
+  (19 uncovered lines → 7).
+
+### Review findings
+
+1. **``_build_tool_use_id_to_name_map`` silently changed Gemini semantics.** Pre-refactor Gemini
+  guarded on ``"id" in block`` and skipped id-less ``tool_use`` blocks; pre-refactor Ollama didn't.
+  The shared helper landed on Ollama's looser pattern by default, so an id-less block would write
+  ``id_to_name[""] = name`` and a later ``tool_result`` with a missing ``tool_use_id`` would
+  silently resolve to that name. Guard restored — id-less blocks and blocks with ``id == ""`` are
+  skipped. New test ``test_tool_use_map_skips_tool_use_blocks_without_an_id`` pins the behaviour so
+  a later refactor can't drop the guard again.
+
+2. **``_parse_ollama_tool_arguments`` annotated ``-> dict`` but returned non-dicts.** When Ollama
+  handed back a string like ``"null"`` / ``"42"`` / ``"[1,2,3]"``, ``json.loads`` returned ``None``
+  / ``int`` / ``list``. The agent loop wraps the result as ``{"input": args}`` and expects a dict —
+  a non-dict value crashed dispatch. Non-dict JSON now falls back to ``{"__raw": raw_args}`` the
+  same way malformed JSON does. Pinned by the parametrised
+  ``test_parse_ollama_tool_arguments_handles_every_shape``.
+
+3. **``import json`` / ``import uuid`` inside per-call helpers** — exactly the Sonar S1128 the PR
+  was closing. Hoisted both to module scope (both are used elsewhere in the file).
+
+### Coverage sweep
+
+Added ``tests/test_llm_translator_helpers.py`` with 15 directed unit tests on the extract-function
+  helpers that the higher-level provider tests don't reach:
+
+- id→name map: id-less skip, non-assistant / non-list filter - Gemini role mapping: default
+  ``model``, tool-result wins over role, user passthrough - OpenAI user messages: text branch,
+  unknown-block skip - OpenAI tool-use block: malformed JSON → ``__raw``, missing ``function`` attr
+  graceful fallback - OpenAI completion: empty choices → end_turn - Unknown role fallthrough on both
+  ``_messages_to_openai`` and ``_messages_to_ollama`` - Ollama response: no-message branch - Ollama
+  tool-use block: synthesised id + arg passthrough - ``_parse_ollama_tool_arguments``: None / empty
+  / JSON / dict / malformed / non-dict-JSON (six shapes in one parametrised test)
+
+544 tests green (was 529).
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+
 ## v1.6.0 (2026-04-18)
+
+### Chores
+
+- **release**: 1.6.0 [skip ci]
+  ([`4f40b73`](https://github.com/mfozmen/littlepress-ai/commit/4f40b739e21872d12e9895aebd6c08e1e1150d8d))
 
 ### Features
 
