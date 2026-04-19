@@ -95,6 +95,33 @@ def test_transcribe_page_registered_on_every_real_provider(tmp_path):
         )
 
 
+def test_generate_page_illustration_registered_when_openai_key_present(
+    tmp_path,
+):
+    """``generate_page_illustration`` needs the same OpenAI image
+    API as ``generate_cover_illustration``; wire the same gate."""
+    repl = _repl(tmp_path, provider_name="openai", api_key="sk-test")
+    assert "generate_page_illustration" in _tool_names(repl)
+
+
+def test_generate_page_illustration_omitted_on_non_openai(tmp_path):
+    for name, key in (
+        ("anthropic", "sk-ant-test"),
+        ("google", "AIzaSy-test"),
+        ("ollama", None),
+    ):
+        repl = _repl(tmp_path, provider_name=name, api_key=key)
+        assert "generate_page_illustration" not in _tool_names(repl), (
+            f"Page illustration tool must not be on {name} — it "
+            "calls the OpenAI image API."
+        )
+
+
+def test_generate_page_illustration_omitted_when_openai_key_missing(tmp_path):
+    repl = _repl(tmp_path, provider_name="openai", api_key=None)
+    assert "generate_page_illustration" not in _tool_names(repl)
+
+
 def test_transcribe_page_omitted_on_null_provider(tmp_path):
     """``NullProvider`` (the offline default before a picker runs)
     has no ``chat`` implementation to call. Skip so the tool isn't
