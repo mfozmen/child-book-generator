@@ -18,6 +18,8 @@ The protocol has two entry points:
 
 from __future__ import annotations
 
+import json
+import uuid
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -377,13 +379,7 @@ def _messages_to_gemini_contents(messages: list[dict], gtypes) -> list:
       the preceding ``tool_use`` block (Anthropic's ``tool_result``
       carries only the ``tool_use_id``; Gemini needs the name).
     """
-    id_to_name: dict[str, str] = {}
-    for msg in messages:
-        if msg.get("role") == "assistant" and isinstance(msg.get("content"), list):
-            for block in msg["content"]:
-                if block.get("type") == "tool_use" and "id" in block:
-                    id_to_name[block["id"]] = block.get("name", "")
-
+    id_to_name = _build_tool_use_id_to_name_map(messages)
     contents = []
     for msg in messages:
         role = msg.get("role")
@@ -397,46 +393,65 @@ def _messages_to_gemini_contents(messages: list[dict], gtypes) -> list:
                 )
             )
             continue
-        parts: list = []
-        has_tool_result = False
-        for block in content or []:
-            btype = block.get("type")
-            if btype == "text":
-                parts.append(gtypes.Part.from_text(text=block.get("text", "")))
-            elif btype == "tool_use":
-                parts.append(
-                    gtypes.Part(
-                        function_call=gtypes.FunctionCall(
-                            name=block.get("name", ""),
-                            args=block.get("input") or {},
-                        )
-                    )
-                )
-            elif btype == "tool_result":
-                has_tool_result = True
-                tool_use_id = block.get("tool_use_id", "")
-                name = id_to_name.get(tool_use_id, "")
-                # Construct FunctionResponse directly so we can forward
-                # the id. Without it, parallel same-name calls lose
-                # correlation — Gemini can't tell which function_call
-                # this response pairs with.
-                parts.append(
-                    gtypes.Part(
-                        function_response=gtypes.FunctionResponse(
-                            id=tool_use_id,
-                            name=name,
-                            response={"result": block.get("content", "")},
-                        )
-                    )
-                )
-        if has_tool_result:
-            gemini_role = "tool"
-        elif role == "user":
-            gemini_role = "user"
-        else:
-            gemini_role = "model"
+        parts, has_tool_result = _gemini_parts_from_blocks(
+            content, id_to_name, gtypes
+        )
+        gemini_role = _gemini_role_for_message(role, has_tool_result)
         contents.append(gtypes.Content(role=gemini_role, parts=parts))
     return contents
+
+
+def _gemini_parts_from_blocks(
+    content, id_to_name: dict[str, str], gtypes
+) -> tuple[list, bool]:
+    """Translate a list of Anthropic blocks to the equivalent list of
+    Gemini ``Part``s and a flag telling the caller whether any
+    ``tool_result`` appeared (the Gemini role becomes ``tool`` when
+    it does)."""
+    parts: list = []
+    has_tool_result = False
+    for block in content or []:
+        btype = block.get("type")
+        if btype == "text":
+            parts.append(gtypes.Part.from_text(text=block.get("text", "")))
+        elif btype == "tool_use":
+            parts.append(
+                gtypes.Part(
+                    function_call=gtypes.FunctionCall(
+                        name=block.get("name", ""),
+                        args=block.get("input") or {},
+                    )
+                )
+            )
+        elif btype == "tool_result":
+            has_tool_result = True
+            tool_use_id = block.get("tool_use_id", "")
+            # Construct FunctionResponse directly so we can forward
+            # the id. Without it, parallel same-name calls lose
+            # correlation — Gemini can't tell which function_call
+            # this response pairs with.
+            parts.append(
+                gtypes.Part(
+                    function_response=gtypes.FunctionResponse(
+                        id=tool_use_id,
+                        name=id_to_name.get(tool_use_id, ""),
+                        response={"result": block.get("content", "")},
+                    )
+                )
+            )
+    return parts, has_tool_result
+
+
+def _gemini_role_for_message(role: str | None, has_tool_result: bool) -> str:
+    """Gemini's three roles map from Anthropic's two-role + tool_use
+    world: ``tool`` when the message carries a ``tool_result``,
+    ``user`` for user messages without one, ``model`` for assistant
+    messages (and anything else we don't recognise)."""
+    if has_tool_result:
+        return "tool"
+    if role == "user":
+        return "user"
+    return "model"
 
 
 def _gemini_response_to_blocks(response) -> tuple[list[dict], str]:
@@ -608,8 +623,6 @@ def _messages_to_openai(messages: list[dict]) -> list[dict]:
     - User messages carrying ``tool_result`` blocks are expanded into
       one ``{role: tool, tool_call_id: ..., content: ...}`` per result.
     """
-    import json
-
     out: list[dict] = []
     for msg in messages:
         role = msg.get("role")
@@ -618,48 +631,10 @@ def _messages_to_openai(messages: list[dict]) -> list[dict]:
             out.append({"role": role, "content": content})
             continue
         if role == "assistant":
-            texts: list[str] = []
-            tool_calls: list[dict] = []
-            for block in content or []:
-                btype = block.get("type")
-                if btype == "text":
-                    texts.append(block.get("text", ""))
-                elif btype == "tool_use":
-                    tool_calls.append(
-                        {
-                            "id": block.get("id", ""),
-                            "type": "function",
-                            "function": {
-                                "name": block.get("name", ""),
-                                # OpenAI wants arguments as a JSON string.
-                                "arguments": json.dumps(
-                                    block.get("input") or {}
-                                ),
-                            },
-                        }
-                    )
-            assistant_msg: dict = {
-                "role": "assistant",
-                "content": "".join(texts) if texts else None,
-            }
-            if tool_calls:
-                assistant_msg["tool_calls"] = tool_calls
-            out.append(assistant_msg)
+            out.append(_openai_assistant_message(content))
             continue
         if role == "user":
-            for block in content or []:
-                if block.get("type") == "tool_result":
-                    out.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": block.get("tool_use_id", ""),
-                            "content": block.get("content", ""),
-                        }
-                    )
-                elif block.get("type") == "text":
-                    out.append(
-                        {"role": "user", "content": block.get("text", "")}
-                    )
+            out.extend(_openai_user_messages(content))
             continue
         # Unknown role with list content — fall through as-is; the SDK
         # will reject it, which is what we want rather than silent
@@ -668,13 +643,63 @@ def _messages_to_openai(messages: list[dict]) -> list[dict]:
     return out
 
 
+def _openai_assistant_message(content) -> dict:
+    """Collapse a list of Anthropic blocks on an assistant message
+    into one OpenAI assistant message. Text blocks concatenate into
+    ``content``; ``tool_use`` blocks become ``tool_calls`` with
+    OpenAI's JSON-string ``arguments`` encoding."""
+    texts: list[str] = []
+    tool_calls: list[dict] = []
+    for block in content or []:
+        btype = block.get("type")
+        if btype == "text":
+            texts.append(block.get("text", ""))
+        elif btype == "tool_use":
+            tool_calls.append(
+                {
+                    "id": block.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": block.get("name", ""),
+                        "arguments": json.dumps(block.get("input") or {}),
+                    },
+                }
+            )
+    assistant_msg: dict = {
+        "role": "assistant",
+        "content": "".join(texts) if texts else None,
+    }
+    if tool_calls:
+        assistant_msg["tool_calls"] = tool_calls
+    return assistant_msg
+
+
+def _openai_user_messages(content) -> list[dict]:
+    """Expand a list of Anthropic blocks on a user message into a
+    sequence of OpenAI messages — ``tool_result`` blocks become
+    ``role: tool`` messages keyed by ``tool_call_id``, text blocks
+    stay as ``role: user``."""
+    out: list[dict] = []
+    for block in content or []:
+        btype = block.get("type")
+        if btype == "tool_result":
+            out.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": block.get("tool_use_id", ""),
+                    "content": block.get("content", ""),
+                }
+            )
+        elif btype == "text":
+            out.append({"role": "user", "content": block.get("text", "")})
+    return out
+
+
 def _openai_completion_to_blocks(completion) -> tuple[list[dict], str]:
     """Translate an OpenAI ``ChatCompletion`` → Anthropic-style blocks
     + stop_reason. Non-``stop`` / non-``tool_calls`` finishes (length,
     content_filter) get a synthetic text block so the user sees why
     the turn ended — otherwise the REPL just goes silent."""
-    import json
-
     blocks: list[dict] = []
     choices = getattr(completion, "choices", None) or []
     if not choices:
@@ -688,43 +713,55 @@ def _openai_completion_to_blocks(completion) -> tuple[list[dict], str]:
         blocks.append({"type": "text", "text": text})
 
     tool_calls = getattr(message, "tool_calls", None) if message else None
-    any_tool_use = False
-    for tc in tool_calls or []:
-        any_tool_use = True
-        fn = getattr(tc, "function", None)
-        name = getattr(fn, "name", "") if fn else ""
-        raw_args = getattr(fn, "arguments", "") if fn else ""
-        try:
-            args = json.loads(raw_args) if raw_args else {}
-        except (json.JSONDecodeError, TypeError):
-            # Malformed arguments from the model — hand back as-is so
-            # the tool's handler can report the error clearly.
-            args = {"__raw": raw_args}
-        blocks.append(
-            {
-                "type": "tool_use",
-                "id": getattr(tc, "id", ""),
-                "name": name,
-                "input": args,
-            }
-        )
+    tool_blocks = [_openai_tool_use_block(tc) for tc in tool_calls or []]
+    blocks.extend(tool_blocks)
+    any_tool_use = bool(tool_blocks)
 
-    if (
-        finish_reason is not None
-        and str(finish_reason) not in {"stop", "tool_calls"}
-        and not any_tool_use
-    ):
-        blocks.append(
-            {
-                "type": "text",
-                "text": (
-                    f"[OpenAI stopped with reason: {finish_reason}. "
-                    "No further output was generated — try rephrasing "
-                    "or splitting the prompt.]"
-                ),
-            }
-        )
+    explanation = _openai_finish_reason_explanation(finish_reason, any_tool_use)
+    if explanation is not None:
+        blocks.append(explanation)
     return blocks, ("tool_use" if any_tool_use else "end_turn")
+
+
+def _openai_tool_use_block(tc) -> dict:
+    """One OpenAI ``tool_call`` → Anthropic-style ``tool_use`` block.
+    Arguments come back as a JSON string; malformed payloads go
+    through untouched so the tool's own handler can report them."""
+    fn = getattr(tc, "function", None)
+    name = getattr(fn, "name", "") if fn else ""
+    raw_args = getattr(fn, "arguments", "") if fn else ""
+    try:
+        args = json.loads(raw_args) if raw_args else {}
+    except (json.JSONDecodeError, TypeError):
+        args = {"__raw": raw_args}
+    return {
+        "type": "tool_use",
+        "id": getattr(tc, "id", ""),
+        "name": name,
+        "input": args,
+    }
+
+
+def _openai_finish_reason_explanation(
+    finish_reason, any_tool_use: bool
+) -> dict | None:
+    """Return a synthetic text block when OpenAI stopped for a reason
+    that isn't ``stop`` or ``tool_calls`` (``length``,
+    ``content_filter``) AND the turn didn't also emit a tool call —
+    otherwise the REPL goes silent and the user has no clue why the
+    model stopped. ``None`` when the normal path applies."""
+    if finish_reason is None or any_tool_use:
+        return None
+    if str(finish_reason) in {"stop", "tool_calls"}:
+        return None
+    return {
+        "type": "text",
+        "text": (
+            f"[OpenAI stopped with reason: {finish_reason}. "
+            "No further output was generated — try rephrasing "
+            "or splitting the prompt.]"
+        ),
+    }
 
 
 # Ollama defaults. The HTTP host is the Ollama daemon's local API;
@@ -830,18 +867,8 @@ def _messages_to_ollama(messages: list[dict]) -> list[dict]:
       ``tool_call_id`` — because the service correlates by name +
       order, not id.
     """
+    id_to_name = _build_tool_use_id_to_name_map(messages)
     out: list[dict] = []
-
-    # Build an id→name map for tool_result translation. Agent's
-    # ``tool_result`` blocks carry only the synthesised ``tool_use_id``;
-    # Ollama needs the function name.
-    id_to_name: dict[str, str] = {}
-    for msg in messages:
-        if msg.get("role") == "assistant" and isinstance(msg.get("content"), list):
-            for block in msg["content"]:
-                if block.get("type") == "tool_use":
-                    id_to_name[block.get("id", "")] = block.get("name", "")
-
     for msg in messages:
         role = msg.get("role")
         content = msg.get("content")
@@ -849,51 +876,98 @@ def _messages_to_ollama(messages: list[dict]) -> list[dict]:
             out.append({"role": role, "content": content})
             continue
         if role == "assistant":
-            texts: list[str] = []
-            tool_calls: list[dict] = []
-            for block in content or []:
-                btype = block.get("type")
-                if btype == "text":
-                    texts.append(block.get("text", ""))
-                elif btype == "tool_use":
-                    tool_calls.append(
-                        {
-                            "function": {
-                                "name": block.get("name", ""),
-                                # Ollama expects arguments as a dict,
-                                # not a JSON string (unlike OpenAI).
-                                "arguments": block.get("input") or {},
-                            }
-                        }
-                    )
-            assistant_msg: dict = {
-                "role": "assistant",
-                "content": "".join(texts) if texts else "",
-            }
-            if tool_calls:
-                assistant_msg["tool_calls"] = tool_calls
-            out.append(assistant_msg)
+            out.append(_ollama_assistant_message(content))
             continue
         if role == "user":
-            for block in content or []:
-                if block.get("type") == "tool_result":
-                    out.append(
-                        {
-                            "role": "tool",
-                            "content": block.get("content", ""),
-                            "tool_name": id_to_name.get(
-                                block.get("tool_use_id", ""), ""
-                            ),
-                        }
-                    )
-                elif block.get("type") == "text":
-                    out.append(
-                        {"role": "user", "content": block.get("text", "")}
-                    )
+            out.extend(_ollama_user_messages(content, id_to_name))
             continue
         # Unknown shape — pass through as-is; the SDK will surface any
         # real error rather than us silently reshaping it.
         out.append({"role": role, "content": content})
+    return out
+
+
+def _build_tool_use_id_to_name_map(messages: list[dict]) -> dict[str, str]:
+    """Agent ``tool_result`` blocks carry only the synthesised
+    ``tool_use_id``; providers that correlate by function name
+    (Gemini, Ollama) need the name that was on the matching
+    ``tool_use`` block. Scan the conversation once.
+
+    An id-less ``tool_use`` block is skipped rather than recorded
+    under the empty-string key — otherwise a later ``tool_result``
+    with a missing ``tool_use_id`` would resolve to a misleading
+    function name. (The Anthropic agent-loop always synthesises an
+    ``id``, so in practice this branch guards against malformed
+    conversations rather than a real flow.)
+    """
+    id_to_name: dict[str, str] = {}
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if block.get("type") != "tool_use":
+                continue
+            block_id = block.get("id")
+            if not block_id:
+                continue
+            id_to_name[block_id] = block.get("name", "")
+    return id_to_name
+
+
+def _ollama_assistant_message(content) -> dict:
+    """Collapse a list of Anthropic blocks on an assistant message
+    into one Ollama assistant message. Arguments stay as a dict
+    (unlike OpenAI, which wants a JSON string), and there's no
+    outer ``id`` on each tool_call."""
+    texts: list[str] = []
+    tool_calls: list[dict] = []
+    for block in content or []:
+        btype = block.get("type")
+        if btype == "text":
+            texts.append(block.get("text", ""))
+        elif btype == "tool_use":
+            tool_calls.append(
+                {
+                    "function": {
+                        "name": block.get("name", ""),
+                        "arguments": block.get("input") or {},
+                    }
+                }
+            )
+    assistant_msg: dict = {
+        "role": "assistant",
+        "content": "".join(texts) if texts else "",
+    }
+    if tool_calls:
+        assistant_msg["tool_calls"] = tool_calls
+    return assistant_msg
+
+
+def _ollama_user_messages(
+    content, id_to_name: dict[str, str]
+) -> list[dict]:
+    """Expand a list of Anthropic blocks on a user message into the
+    equivalent Ollama sequence — ``tool_result`` blocks become
+    ``role: tool`` keyed by ``tool_name`` (not ``tool_call_id``;
+    Ollama correlates by function name)."""
+    out: list[dict] = []
+    for block in content or []:
+        btype = block.get("type")
+        if btype == "tool_result":
+            out.append(
+                {
+                    "role": "tool",
+                    "content": block.get("content", ""),
+                    "tool_name": id_to_name.get(
+                        block.get("tool_use_id", ""), ""
+                    ),
+                }
+            )
+        elif btype == "text":
+            out.append({"role": "user", "content": block.get("text", "")})
     return out
 
 
@@ -905,9 +979,6 @@ def _ollama_response_to_blocks(response) -> tuple[list[dict], str]:
     with its later ``tool_result``, and Ollama itself correlates by
     name + order in the next turn, so our synth id stays internal.
     """
-    import json
-    import uuid
-
     blocks: list[dict] = []
     message = getattr(response, "message", None)
     if message is None:
@@ -918,28 +989,47 @@ def _ollama_response_to_blocks(response) -> tuple[list[dict], str]:
         blocks.append({"type": "text", "text": text})
 
     tool_calls = getattr(message, "tool_calls", None) or []
-    any_tool_use = False
-    for tc in tool_calls:
-        any_tool_use = True
-        fn = getattr(tc, "function", None)
-        name = getattr(fn, "name", "") if fn else ""
-        raw_args = getattr(fn, "arguments", None) if fn else None
-        if isinstance(raw_args, str):
-            try:
-                args = json.loads(raw_args) if raw_args else {}
-            except (json.JSONDecodeError, TypeError):
-                args = {"__raw": raw_args}
-        else:
-            args = dict(raw_args or {})
-        blocks.append(
-            {
-                "type": "tool_use",
-                "id": f"toolu_{uuid.uuid4().hex[:12]}",
-                "name": name,
-                "input": args,
-            }
-        )
+    tool_blocks = [_ollama_tool_use_block(tc) for tc in tool_calls]
+    blocks.extend(tool_blocks)
+    any_tool_use = bool(tool_blocks)
     return blocks, ("tool_use" if any_tool_use else "end_turn")
+
+
+def _ollama_tool_use_block(tc) -> dict:
+    """One Ollama ``tool_call`` → Anthropic-style ``tool_use`` block.
+    ``arguments`` arrives as either a dict (most models) or a JSON
+    string (a few quantised models stringify it); both land as a
+    dict, with a ``__raw`` fallback on malformed JSON."""
+    fn = getattr(tc, "function", None)
+    name = getattr(fn, "name", "") if fn else ""
+    raw_args = getattr(fn, "arguments", None) if fn else None
+    args = _parse_ollama_tool_arguments(raw_args)
+    return {
+        "type": "tool_use",
+        "id": f"toolu_{uuid.uuid4().hex[:12]}",
+        "name": name,
+        "input": args,
+    }
+
+
+def _parse_ollama_tool_arguments(raw_args) -> dict:
+    """Normalise Ollama's ``arguments`` shape. String → JSON parse,
+    dict → defensive copy, None / empty → empty dict. Malformed JSON
+    (or JSON that parses to a non-dict like ``"null"`` / ``"42"`` /
+    ``"[1,2]"``) keeps the raw string under ``__raw`` so the tool's
+    handler can surface it instead of us handing the agent loop a
+    non-dict under ``input`` that would crash dispatch."""
+    if isinstance(raw_args, str):
+        if not raw_args:
+            return {}
+        try:
+            parsed = json.loads(raw_args)
+        except (json.JSONDecodeError, TypeError):
+            return {"__raw": raw_args}
+        if not isinstance(parsed, dict):
+            return {"__raw": raw_args}
+        return parsed
+    return dict(raw_args or {})
 
 
 def create_provider(spec: ProviderSpec, api_key: str | None) -> LLMProvider:
