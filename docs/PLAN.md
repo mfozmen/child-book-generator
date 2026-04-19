@@ -47,7 +47,6 @@ Items below came out of the first real end-to-end test (Yavru Dinozor). Listed r
 
 ## Explicitly deferred (don't build unless asked)
 
-- **Per-page AI illustration generation (``generate_page_illustration``).** Complements P1 in "Next up": once ``transcribe_page`` auto-clears the Samsung-Notes source image, the cleanest way to restore an illustration on the page is to ask an image model for one. Same surface as ``generate_cover_illustration`` (prompt + quality + y/n confirm) but writes into ``draft.pages[n-1].image`` and sets a non-``text-only`` layout. Deferred because it needs style-consistency work across pages (a book with eight visibly different AI-generated dinosaurs looks worse than one with eight line-drawn dinosaurs).
 - **Full parametric layout engine.** `choose_layout` applies the skill's rule 1 and simple aspect-ratio branching; parametric splits can wait.
 - **Cap / prune old render snapshots.** Every render keeps a ``.vN.pdf`` snapshot, so heavy iteration on a 10 MB picture book can accumulate hundreds of megabytes of PDFs. Intentional for now — the user can compare or roll back freely — but eventually we'll want either a per-project cap (keep last N), an age-based sweep, or a ``/prune`` command. Pick whichever emerges from real usage.
 

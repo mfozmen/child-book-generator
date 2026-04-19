@@ -8,6 +8,7 @@ from src import agent_tools
 from src.agent_tools import (
     choose_layout_tool,
     generate_cover_illustration_tool,
+    generate_page_illustration_tool,
     open_in_default_viewer,
     propose_layouts_tool,
     propose_typo_fix_tool,
@@ -1060,6 +1061,267 @@ def test_generate_cover_illustration_schema_advertises_style_and_quality(
         "full-bleed", "framed", "poster", "portrait-frame", "title-band-top",
     }
     assert tool.input_schema["required"] == ["prompt"]
+
+
+# --- generate_page_illustration ------------------------------------------
+#
+# Symmetric to ``generate_cover_illustration`` but writes to a page
+# instead of the cover. Tests reuse the existing ``_FakeImageProvider``
+# helper (defined further down) so the fixture shape is consistent
+# between the two AI-image tools.
+
+
+def _draft_with_one_page(tmp_path):
+    return Draft(
+        source_pdf=tmp_path / "x.pdf",
+        title="Book",
+        author="A",
+        pages=[DraftPage(text="once upon a time", image=None, layout="text-only")],
+    )
+
+
+def test_generate_page_illustration_requires_draft(tmp_path):
+    tool = generate_page_illustration_tool(
+        get_draft=lambda: None,
+        get_session_root=lambda: tmp_path,
+        image_provider=_FakeImageProvider(),
+        confirm=lambda _p: True,
+    )
+    result = tool.handler({"page": 1, "prompt": "a dinosaur"})
+    assert "no draft" in result.lower()
+
+
+def test_generate_page_illustration_rejects_out_of_range_page(tmp_path):
+    draft = _draft_with_one_page(tmp_path)
+    tool = generate_page_illustration_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+        image_provider=_FakeImageProvider(),
+        confirm=lambda _p: True,
+    )
+    result = tool.handler({"page": 99, "prompt": "x"})
+    assert "99" in result or "out of" in result.lower()
+
+
+def test_generate_page_illustration_rejects_empty_prompt(tmp_path):
+    draft = _draft_with_one_page(tmp_path)
+    tool = generate_page_illustration_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+        image_provider=_FakeImageProvider(),
+        confirm=lambda _p: True,
+    )
+    result = tool.handler({"page": 1, "prompt": "  "})
+    assert "prompt" in result.lower()
+
+
+def test_generate_page_illustration_rejects_invalid_quality(tmp_path):
+    draft = _draft_with_one_page(tmp_path)
+    tool = generate_page_illustration_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+        image_provider=_FakeImageProvider(),
+        confirm=lambda _p: True,
+    )
+    result = tool.handler(
+        {"page": 1, "prompt": "x", "quality": "ultra"}
+    )
+    assert "quality" in result.lower() or "ultra" in result.lower()
+
+
+def test_generate_page_illustration_rejects_invalid_layout(tmp_path):
+    draft = _draft_with_one_page(tmp_path)
+    tool = generate_page_illustration_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+        image_provider=_FakeImageProvider(),
+        confirm=lambda _p: True,
+    )
+    result = tool.handler(
+        {"page": 1, "prompt": "x", "layout": "cinemascope"}
+    )
+    assert "layout" in result.lower() or "cinemascope" in result.lower()
+
+
+def test_generate_page_illustration_handles_missing_or_bad_page_input(
+    tmp_path,
+):
+    """Same shape of guard the skip_page / transcribe_page helpers
+    have — malformed input returns a tool-result string, not a
+    ``KeyError`` / ``ValueError`` across the tool boundary."""
+    draft = _draft_with_one_page(tmp_path)
+    tool = generate_page_illustration_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+        image_provider=_FakeImageProvider(),
+        confirm=lambda _p: True,
+    )
+
+    r_missing = tool.handler({"prompt": "x"})
+    assert "page" in r_missing.lower()
+
+    r_bad = tool.handler({"page": "second", "prompt": "x"})
+    assert "page" in r_bad.lower() or "integer" in r_bad.lower()
+
+
+def test_generate_page_illustration_asks_confirmation_with_price_and_page(
+    tmp_path,
+):
+    draft = _draft_with_one_page(tmp_path)
+    provider = _FakeImageProvider()
+    seen: list[str] = []
+
+    def _confirm(prompt):
+        seen.append(prompt)
+        return False
+
+    tool = generate_page_illustration_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+        image_provider=provider,
+        confirm=_confirm,
+    )
+
+    tool.handler(
+        {"page": 1, "prompt": "a dinosaur at dusk", "quality": "high"}
+    )
+
+    assert seen, "confirm gate must run before the provider is called"
+    prompt = seen[0]
+    # Cost cue + quality + which page.
+    assert "$" in prompt
+    assert "high" in prompt.lower()
+    assert "page 1" in prompt.lower() or "page=1" in prompt.lower()
+    # And the prompt text surfaces for user review.
+    assert "a dinosaur at dusk" in prompt
+    # Provider never called (user declined).
+    assert provider.calls == []
+
+
+def test_generate_page_illustration_declined_does_not_call_provider(tmp_path):
+    draft = _draft_with_one_page(tmp_path)
+    provider = _FakeImageProvider()
+    tool = generate_page_illustration_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+        image_provider=provider,
+        confirm=lambda _p: False,
+    )
+
+    result = tool.handler({"page": 1, "prompt": "x"})
+
+    assert provider.calls == []
+    assert draft.pages[0].image is None
+    assert "declined" in result.lower() or "cancel" in result.lower()
+
+
+def test_generate_page_illustration_approved_sets_page_image_and_layout(
+    tmp_path,
+):
+    draft = _draft_with_one_page(tmp_path)
+    provider = _FakeImageProvider()
+    tool = generate_page_illustration_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+        image_provider=provider,
+        confirm=lambda _p: True,
+    )
+
+    result = tool.handler(
+        {
+            "page": 1,
+            "prompt": "a watercolour egg hatching",
+            "quality": "medium",
+            "layout": "image-full",
+        }
+    )
+
+    # Provider called once with the prompt + portrait size.
+    assert len(provider.calls) == 1
+    call = provider.calls[0]
+    assert call["prompt"] == "a watercolour egg hatching"
+    assert call["size"] == "1024x1536"
+    assert call["quality"] == "medium"
+
+    # Draft page picked up the image and the optional layout.
+    assert draft.pages[0].image is not None
+    assert draft.pages[0].layout == "image-full"
+    assert call["output_path"].exists()
+    assert "page 1" in result.lower() or "page=1" in result.lower()
+
+
+def test_generate_page_illustration_writes_under_book_gen_images(tmp_path):
+    """Output lands in ``<session_root>/.book-gen/images/`` so the
+    existing ``draft.to_book`` projection resolves it without a
+    special case."""
+    draft = _draft_with_one_page(tmp_path)
+    provider = _FakeImageProvider()
+    tool = generate_page_illustration_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+        image_provider=provider,
+        confirm=lambda _p: True,
+    )
+
+    tool.handler({"page": 1, "prompt": "x"})
+
+    call = provider.calls[0]
+    assert call["output_path"].parent == tmp_path / ".book-gen" / "images"
+
+
+def test_generate_page_illustration_surfaces_provider_error(tmp_path):
+    draft = _draft_with_one_page(tmp_path)
+    provider = _FakeImageProvider(
+        raises=ImageGenerationError("OpenAI rejected: bad key")
+    )
+    tool = generate_page_illustration_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+        image_provider=provider,
+        confirm=lambda _p: True,
+    )
+
+    result = tool.handler({"page": 1, "prompt": "x"})
+
+    assert draft.pages[0].image is None
+    assert "bad key" in result.lower() or "failed" in result.lower()
+
+
+def test_generate_page_illustration_description_has_preserve_child_voice_guard(
+    tmp_path,
+):
+    """Same guard the cover variant carries: don't launder the
+    child's page text into the image prompt."""
+    tool = generate_page_illustration_tool(
+        get_draft=lambda: None,
+        get_session_root=lambda: tmp_path,
+        image_provider=_FakeImageProvider(),
+        confirm=lambda _p: True,
+    )
+    desc = tool.description.lower()
+
+    assert "own words" in desc or "not paraphrase" in desc or "do not paraphrase" in desc
+    assert "child" in desc
+
+
+def test_generate_page_illustration_schema_advertises_page_prompt_quality_layout(
+    tmp_path,
+):
+    tool = generate_page_illustration_tool(
+        get_draft=lambda: None,
+        get_session_root=lambda: tmp_path,
+        image_provider=_FakeImageProvider(),
+        confirm=lambda _p: True,
+    )
+
+    props = tool.input_schema["properties"]
+    assert "page" in props
+    assert "prompt" in props
+    assert set(props["quality"]["enum"]) == {"low", "medium", "high"}
+    assert set(props["layout"]["enum"]) == {
+        "image-top", "image-bottom", "image-full", "text-only",
+    }
+    assert set(tool.input_schema["required"]) == {"page", "prompt"}
 
 
 # --- transcribe_page ----------------------------------------------------

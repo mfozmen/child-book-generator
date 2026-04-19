@@ -1273,12 +1273,200 @@ def _cover_image_output_path(session_root: Path, prompt: str) -> Path:
     generation. The hash includes the prompt plus a call counter so
     regenerating with the same prompt doesn't overwrite the prior
     attempt — the user may want to compare results."""
+    return _hashed_image_output_path(session_root, prompt, "cover")
+
+
+def _hashed_image_output_path(
+    session_root: Path, prompt: str, prefix: str
+) -> Path:
+    """Shared helper for ``cover-<hash>.png`` / ``page-<hash>.png``
+    output paths. The token includes the prompt + a nanosecond
+    timestamp so regenerating with the same prompt yields a fresh
+    filename and the old render stays on disk for comparison."""
     import hashlib
     import time
 
     token = f"{prompt}|{time.time_ns()}"
     digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:10]
-    return session_root / ".book-gen" / "images" / f"cover-{digest}.png"
+    return session_root / ".book-gen" / "images" / f"{prefix}-{digest}.png"
+
+
+def generate_page_illustration_tool(
+    get_draft: Callable[[], Draft | None],
+    get_session_root: Callable[[], Path],
+    image_provider: ImageProvider,
+    confirm: Callable[[str], bool],
+) -> Tool:
+    """Tool: generate an AI illustration for a specific page and wire
+    it up as that page's drawing.
+
+    Symmetric to ``generate_cover_illustration`` but writes to
+    ``draft.pages[n-1].image`` instead of ``draft.cover_image``.
+    Restores illustrations on pages that ``transcribe_page`` cleared
+    (the Samsung-Notes duplicate-text fix) — or adds a fresh
+    drawing to any ``text-only`` page when the child wants one.
+
+    Same preserve-child-voice shape as the cover variant: user
+    must approve the prompt + quality + price; the prompt must be
+    the agent's own words, not a paraphrase of the child's page
+    text; an optional ``layout`` switches the page off ``text-only``
+    if the user wants image-top / image-bottom / image-full.
+    """
+
+    def handler(input_: dict) -> str:
+        draft = get_draft()
+        if draft is None:
+            return _MSG_NO_DRAFT
+        page_n, page, error = _parse_page_illustration_input(input_, draft)
+        if error is not None:
+            return error
+        prompt, quality, layout, error = _parse_page_illustration_fields(input_)
+        if error is not None:
+            return error
+
+        confirm_msg = _build_page_illustration_confirm_prompt(
+            page_n, prompt, quality, layout
+        )
+        if not confirm(confirm_msg):
+            return (
+                f"User declined the page {page_n} illustration "
+                "generation. Keep the existing image (if any) or ask "
+                "the user to propose a different prompt."
+            )
+        output_path = _hashed_image_output_path(
+            get_session_root(), prompt, f"page-{page_n}"
+        )
+        try:
+            image_provider.generate(
+                prompt=prompt,
+                output_path=output_path,
+                size=_IMAGE_SIZE_PORTRAIT,
+                quality=quality,
+            )
+        except ImageGenerationError as e:
+            return f"Page {page_n} illustration generation failed: {e}"
+
+        page.image = output_path
+        if layout is not None:
+            page.layout = layout
+        preview = (
+            f" Layout set to '{layout}'." if layout is not None else ""
+        )
+        return (
+            f"Page {page_n} illustration generated at {output_path}. "
+            f"Draft page image updated.{preview}"
+        )
+
+    return Tool(
+        name="generate_page_illustration",
+        description=(
+            "Generate an AI illustration for a specific page using "
+            "OpenAI's gpt-image-1 (requires an OpenAI API key). The "
+            "common case: after ``transcribe_page`` clears a "
+            "Samsung-Notes-style source image, the page needs a "
+            "fresh drawing; this tool produces one. PRESERVE-CHILD-"
+            "VOICE: describe the scene in your OWN words from the "
+            "story's themes — do NOT quote or paraphrase the "
+            "child's page text into the image prompt. The user is "
+            "shown the prompt and the estimated cost (low ≈ $0.02, "
+            "medium ≈ $0.07, high ≈ $0.19 per 1024x1536 portrait) "
+            "and must confirm before any API call happens. On "
+            "approval the PNG is saved into the project and set as "
+            "the page's ``image``. An optional ``layout`` switches "
+            "the page off ``text-only`` (image-top / image-bottom / "
+            "image-full). Registered only on the OpenAI provider — "
+            "on other providers, tell the user to switch via "
+            "/model first."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "page": {"type": "integer", "minimum": 1},
+                "prompt": {"type": "string"},
+                "quality": {
+                    "type": "string",
+                    "enum": sorted(_IMAGE_COST_USD),
+                },
+                "layout": {
+                    "type": "string",
+                    "enum": sorted(VALID_LAYOUTS),
+                },
+            },
+            "required": ["page", "prompt"],
+        },
+        handler=handler,
+    )
+
+
+def _parse_page_illustration_input(
+    input_: dict, draft: Draft
+) -> tuple[int | None, object, str | None]:
+    """Pull + validate the 1-indexed ``page``. Returns
+    ``(page_n, page, None)`` on success or
+    ``(None, None, error_msg)`` on the first invalid value."""
+    raw = input_.get("page")
+    if raw is None:
+        return None, None, (
+            "Rejected: 'page' is required — which page should get "
+            "the new illustration?"
+        )
+    try:
+        page_n = int(raw)
+    except (TypeError, ValueError):
+        return None, None, (
+            f"Rejected: 'page' must be an integer; got {raw!r}. "
+            "Pass the 1-indexed page number."
+        )
+    if page_n < 1 or page_n > len(draft.pages):
+        return None, None, (
+            f"Page {page_n} is out of range — the draft has "
+            f"{len(draft.pages)} pages."
+        )
+    return page_n, draft.pages[page_n - 1], None
+
+
+def _parse_page_illustration_fields(
+    input_: dict,
+) -> tuple[str, str, str | None, str | None]:
+    """Validate ``prompt`` / ``quality`` / ``layout``. Returns
+    ``(prompt, quality, layout, None)`` or
+    ``("", "", None, error_msg)`` on the first invalid field."""
+    prompt = str(input_.get("prompt", "")).strip()
+    if not prompt:
+        return "", "", None, (
+            "Rejected: prompt is required. Ask the user to describe "
+            "the illustration they want on this page."
+        )
+    quality = str(input_.get("quality", "medium"))
+    if quality not in _IMAGE_COST_USD:
+        return "", "", None, (
+            f"Invalid quality '{quality}'. "
+            f"Valid values: {sorted(_IMAGE_COST_USD)}."
+        )
+    layout = input_.get("layout")
+    if layout is not None and layout not in VALID_LAYOUTS:
+        return "", "", None, (
+            f"Invalid layout '{layout}'. Valid layouts: "
+            f"{sorted(VALID_LAYOUTS)}."
+        )
+    return prompt, quality, layout, None
+
+
+def _build_page_illustration_confirm_prompt(
+    page_n: int, prompt: str, quality: str, layout: str | None
+) -> str:
+    cost = _IMAGE_COST_USD[quality]
+    layout_line = (
+        f"  Layout : {layout}\n" if layout is not None else ""
+    )
+    return (
+        f"Generate an illustration for page {page_n} with OpenAI "
+        "gpt-image-1?\n"
+        f"  Prompt : {prompt}\n"
+        f"  Quality: {quality} (~${cost:.2f})\n"
+        f"{layout_line}"
+        "This will call the OpenAI image API and bill your account."
+    )
 
 
 _RHYTHM_RULES_FOR_TOOL_DESC = (
