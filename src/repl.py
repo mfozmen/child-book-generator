@@ -24,6 +24,7 @@ from src.agent import Agent
 from src.agent_tools import (
     choose_layout_tool,
     generate_cover_illustration_tool,
+    generate_page_illustration_tool,
     propose_layouts_tool,
     propose_typo_fix_tool,
     read_draft_tool,
@@ -334,11 +335,20 @@ class Repl:
         # another provider (or hasn't entered a key yet) the agent
         # simply doesn't see this option and falls back to set_cover.
         if self._provider is not None and self._provider.name == "openai" and self._api_key:
+            image_provider = OpenAIImageProvider(api_key=self._api_key)
             tools.append(
                 generate_cover_illustration_tool(
                     get_draft=get_draft,
                     get_session_root=get_session_root,
-                    image_provider=OpenAIImageProvider(api_key=self._api_key),
+                    image_provider=image_provider,
+                    confirm=self._confirm,
+                )
+            )
+            tools.append(
+                generate_page_illustration_tool(
+                    get_draft=get_draft,
+                    get_session_root=get_session_root,
+                    image_provider=image_provider,
                     confirm=self._confirm,
                 )
             )
