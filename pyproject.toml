@@ -63,6 +63,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0", "pytest-cov>=5.0.0"]
+# Offline OCR for ``transcribe_page`` on typeset pages (Samsung
+# Notes / phone-scan PDFs). Needs the system ``tesseract`` binary +
+# matching trained-data packs installed separately — the Python
+# library here just drives the CLI. When the user isn't opting in,
+# the tool's default ``method="vision"`` path goes through the
+# active LLM and never imports this package.
+tesseract = ["pytesseract>=0.3.10"]
 
 [project.scripts]
 # Primary command users actually type.

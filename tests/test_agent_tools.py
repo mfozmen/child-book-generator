@@ -1237,6 +1237,364 @@ def test_transcribe_page_reply_is_stripped_before_storing(tmp_path):
     assert draft.pages[0].text == "line one\nline two"
 
 
+def test_transcribe_page_defaults_to_vision_method(tmp_path):
+    """Hot path: no ``method`` input means the LLM vision branch
+    runs, just like every existing test. Regression pin so the
+    Tesseract work doesn't accidentally change the default."""
+    draft = _image_only_draft(tmp_path)
+    llm = _FakeLLM(reply="vision said this")
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: llm,
+        confirm=lambda _p: True,
+    )
+
+    tool.handler({"page": 1})
+
+    # Vision LLM was called (the list has a recorded chat call).
+    assert len(llm.calls) == 1
+    assert draft.pages[0].text == "vision said this"
+
+
+def test_transcribe_page_method_tesseract_uses_tesseract_not_llm(
+    tmp_path, monkeypatch
+):
+    """``method="tesseract"`` routes OCR through ``pytesseract``
+    instead of the LLM. No ``llm.chat`` call happens; the
+    Tesseract reply is what the confirm gate sees and what lands
+    in ``page.text``. Saves API cost + works offline for Samsung
+    Notes matbaa yazısı (which Tesseract reads verbatim)."""
+    import sys
+    import types as stdtypes
+
+    def _fake_image_to_string(image_path, lang="eng"):
+        # Return a Turkish fixture — the child's real draft shape.
+        return "Bir gün bir yumurta çatlamış\nve içinden yavru çıktı"
+
+    fake_pytesseract = stdtypes.SimpleNamespace(
+        image_to_string=_fake_image_to_string,
+        TesseractNotFoundError=type("TesseractNotFoundError", (Exception,), {}),
+    )
+    monkeypatch.setitem(sys.modules, "pytesseract", fake_pytesseract)
+
+    draft = _image_only_draft(tmp_path)
+    llm = _FakeLLM(reply="SHOULD NOT BE CALLED")
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: llm,
+        confirm=lambda _p: True,
+    )
+
+    tool.handler({"page": 1, "method": "tesseract", "lang": "tur"})
+
+    # LLM untouched — Tesseract path didn't go through the LLM.
+    assert llm.calls == []
+    assert draft.pages[0].text == (
+        "Bir gün bir yumurta çatlamış\nve içinden yavru çıktı"
+    )
+
+
+def test_transcribe_page_tesseract_passes_lang_through(tmp_path, monkeypatch):
+    """``lang`` input forwards verbatim to pytesseract — users on
+    Turkish drafts pass ``"tur"``; English-only drafts get the
+    default ``"eng"``; mixed Turkish + English go as
+    ``"tur+eng"`` or similar."""
+    import sys
+    import types as stdtypes
+
+    captured_kwargs: dict = {}
+
+    def _capture(image_path, lang="eng"):
+        captured_kwargs["lang"] = lang
+        return "text"
+
+    fake_pytesseract = stdtypes.SimpleNamespace(
+        image_to_string=_capture,
+        TesseractNotFoundError=type("TesseractNotFoundError", (Exception,), {}),
+    )
+    monkeypatch.setitem(sys.modules, "pytesseract", fake_pytesseract)
+
+    draft = _image_only_draft(tmp_path)
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: _FakeLLM(),
+        confirm=lambda _p: True,
+    )
+
+    tool.handler({"page": 1, "method": "tesseract", "lang": "tur+eng"})
+
+    assert captured_kwargs["lang"] == "tur+eng"
+
+
+def test_transcribe_page_tesseract_missing_library_returns_clean_error(
+    tmp_path, monkeypatch
+):
+    """``pytesseract`` is an optional dep. When it isn't installed
+    the tool must surface a clean error message with install hints
+    rather than crashing the agent turn with an ``ImportError``."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "pytesseract", None)
+
+    draft = _image_only_draft(tmp_path)
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: _FakeLLM(),
+        confirm=lambda _p: True,
+    )
+
+    result = tool.handler({"page": 1, "method": "tesseract"})
+
+    assert "tesseract" in result.lower()
+    # Some install pointer (install / pip / pytesseract mentioned).
+    assert "install" in result.lower() or "pip" in result.lower()
+    # Draft untouched.
+    assert draft.pages[0].text == ""
+
+
+def test_transcribe_page_tesseract_empty_reply_surfaces_tesseract_hint(
+    tmp_path, monkeypatch
+):
+    """PR #56 review #4 — an empty Tesseract reply is a different
+    signal than an empty vision reply (no safety filter, no
+    vision-capability story). The message has to name the
+    Tesseract-specific retry advice — different language, higher
+    DPI, switch to ``method='vision'`` — so the user doesn't
+    follow vision advice on a Tesseract failure."""
+    import sys
+    import types as stdtypes
+
+    fake_pytesseract = stdtypes.SimpleNamespace(
+        image_to_string=lambda *_a, **_k: "   ",
+        TesseractNotFoundError=type("TesseractNotFoundError", (Exception,), {}),
+    )
+    monkeypatch.setitem(sys.modules, "pytesseract", fake_pytesseract)
+
+    draft = _image_only_draft(tmp_path)
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: _FakeLLM(),
+        confirm=lambda _p: True,
+    )
+
+    result = tool.handler({"page": 1, "method": "tesseract"})
+    lowered = result.lower()
+
+    # Tesseract-specific advice, not the vision "safety filter" line.
+    assert "tesseract" in lowered
+    assert "safety filter" not in lowered
+    # Actionable hints: lang / DPI / switch to vision.
+    assert (
+        "lang" in lowered or "language" in lowered
+        or "dpi" in lowered or "resolution" in lowered
+        or "method='vision'" in lowered or "vision" in lowered
+    )
+    assert draft.pages[0].text == ""
+
+
+def test_transcribe_page_tesseract_empty_reply_does_not_overwrite(
+    tmp_path, monkeypatch
+):
+    """Same empty-reply guard as the vision path — Tesseract
+    returning ``""`` (blank page) must not clobber existing text
+    or mask a failure."""
+    import sys
+    import types as stdtypes
+
+    fake_pytesseract = stdtypes.SimpleNamespace(
+        image_to_string=lambda *_a, **_k: "   \n\n   ",  # all whitespace
+        TesseractNotFoundError=type("TesseractNotFoundError", (Exception,), {}),
+    )
+    monkeypatch.setitem(sys.modules, "pytesseract", fake_pytesseract)
+
+    img = _tiny_png(tmp_path / "p.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        title="Book",
+        author="A",
+        pages=[DraftPage(text="already here", image=img)],
+    )
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: _FakeLLM(),
+        confirm=lambda _p: True,
+    )
+
+    result = tool.handler({"page": 1, "method": "tesseract"})
+
+    assert draft.pages[0].text == "already here"
+    # Tesseract-specific retry advice (PR #56 review #4) — the
+    # exact keywords live in the sibling _surfaces_tesseract_hint
+    # test; here we just pin "didn't mutate + gave the user
+    # something to go on".
+    assert "tesseract" in result.lower() or "no text" in result.lower()
+
+
+def test_transcribe_page_tesseract_binary_missing_returns_clean_error(
+    tmp_path, monkeypatch
+):
+    """``pytesseract`` is installed but the Tesseract system binary
+    isn't on PATH — the library raises ``TesseractNotFoundError``.
+    Surface a clean install hint rather than the raw traceback."""
+    import sys
+    import types as stdtypes
+
+    TesseractNotFoundError = type(
+        "TesseractNotFoundError", (Exception,), {}
+    )
+
+    def _boom(image_path, lang="eng"):
+        raise TesseractNotFoundError(
+            "tesseract is not installed or it's not in your PATH"
+        )
+
+    fake_pytesseract = stdtypes.SimpleNamespace(
+        image_to_string=_boom,
+        TesseractNotFoundError=TesseractNotFoundError,
+    )
+    monkeypatch.setitem(sys.modules, "pytesseract", fake_pytesseract)
+
+    draft = _image_only_draft(tmp_path)
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: _FakeLLM(),
+        confirm=lambda _p: True,
+    )
+
+    result = tool.handler({"page": 1, "method": "tesseract"})
+
+    lowered = result.lower()
+    assert "tesseract" in lowered
+    assert "install" in lowered or "path" in lowered
+    assert draft.pages[0].text == ""
+
+
+def test_transcribe_page_tesseract_rejects_unsafe_lang(tmp_path, monkeypatch):
+    """PR #56 review #5 — ``lang`` forwards to the tesseract CLI's
+    ``-l`` flag via subprocess. Not classic RCE (no ``shell=True``)
+    but bogus values like ``"tur,eng"`` (wrong separator),
+    ``"../foo"`` (traversal), empty string, or ``"--help"`` surface
+    as cryptic binary errors. Allowlist the ISO-639-2 shape:
+    ``[a-z]{3}(+[a-z]{3})*``."""
+    import sys
+    import types as stdtypes
+
+    fake_pytesseract = stdtypes.SimpleNamespace(
+        image_to_string=lambda *_a, **_k: "should not reach here",
+        TesseractNotFoundError=type("TesseractNotFoundError", (Exception,), {}),
+    )
+    monkeypatch.setitem(sys.modules, "pytesseract", fake_pytesseract)
+
+    draft = _image_only_draft(tmp_path)
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: _FakeLLM(),
+        confirm=lambda _p: True,
+    )
+
+    for bad_lang in ("", "tur,eng", "../foo", "--help", "TUR/ENG", "x" * 50):
+        result = tool.handler(
+            {"page": 1, "method": "tesseract", "lang": bad_lang}
+        )
+        lowered = result.lower()
+        assert "lang" in lowered or "invalid" in lowered, (
+            f"Bad lang {bad_lang!r} should have been rejected; got: {result!r}"
+        )
+        assert draft.pages[0].text == ""
+
+
+def test_transcribe_page_tesseract_accepts_valid_langs(tmp_path, monkeypatch):
+    """Valid codes go through verbatim: ``eng``, ``tur``,
+    ``tur+eng``, ``tur+eng+deu``."""
+    import sys
+    import types as stdtypes
+
+    captured: list = []
+
+    def _capture(image, lang="eng"):
+        captured.append(lang)
+        return "ok"
+
+    fake_pytesseract = stdtypes.SimpleNamespace(
+        image_to_string=_capture,
+        TesseractNotFoundError=type("TesseractNotFoundError", (Exception,), {}),
+    )
+    monkeypatch.setitem(sys.modules, "pytesseract", fake_pytesseract)
+
+    draft = _image_only_draft(tmp_path)
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: _FakeLLM(),
+        confirm=lambda _p: False,  # decline so draft stays empty
+    )
+
+    for good_lang in ("eng", "tur", "tur+eng", "tur+eng+deu"):
+        tool.handler({"page": 1, "method": "tesseract", "lang": good_lang})
+
+    assert captured == ["eng", "tur", "tur+eng", "tur+eng+deu"]
+
+
+def test_transcribe_page_tesseract_unrelated_exception_not_mislabeled_as_binary_missing(
+    tmp_path, monkeypatch
+):
+    """PR #56 review #7 — the ``except tess_not_found`` fallback to
+    bare ``Exception`` converted every pytesseract failure (OOM,
+    permission, decode) into the "tesseract binary not on PATH"
+    install hint. Now: ``TesseractNotFoundError`` via
+    ``isinstance`` check so unrelated exceptions fall through to
+    the generic error branch with their own message."""
+    import sys
+    import types as stdtypes
+
+    class _PermissionBoom(Exception):
+        pass
+
+    def _raise_other(*_a, **_k):
+        raise _PermissionBoom("some permission thing")
+
+    # NB: TesseractNotFoundError IS defined on the fake package,
+    # but the raised exception is a completely unrelated class.
+    fake_pytesseract = stdtypes.SimpleNamespace(
+        image_to_string=_raise_other,
+        TesseractNotFoundError=type("TesseractNotFoundError", (Exception,), {}),
+    )
+    monkeypatch.setitem(sys.modules, "pytesseract", fake_pytesseract)
+
+    draft = _image_only_draft(tmp_path)
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: _FakeLLM(),
+        confirm=lambda _p: True,
+    )
+
+    result = tool.handler({"page": 1, "method": "tesseract"})
+    lowered = result.lower()
+
+    # The error message must NOT claim the binary is missing from
+    # PATH (that's the wrong diagnosis for an OOM / permission
+    # error).
+    assert "not found on path" not in lowered
+    assert "binary not found" not in lowered
+    # It should surface the actual error text the user can search for.
+    assert "permission thing" in lowered
+
+
+def test_transcribe_page_schema_advertises_method_and_lang(tmp_path):
+    """Schema must enumerate the two methods and accept ``lang`` so
+    the LLM can pass either correctly."""
+    tool = transcribe_page_tool(
+        get_draft=lambda: None,
+        get_llm=lambda: _FakeLLM(),
+        confirm=lambda _p: True,
+    )
+
+    props = tool.input_schema["properties"]
+    assert "method" in props
+    assert set(props["method"]["enum"]) == {"vision", "tesseract"}
+    assert "lang" in props
+    assert props["lang"]["type"] == "string"
+
+
 @pytest.mark.parametrize("provider_name", ["anthropic", "openai", "google", "ollama"])
 def test_transcribe_page_gates_on_confirm_regardless_of_provider(
     tmp_path, provider_name
