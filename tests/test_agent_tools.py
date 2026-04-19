@@ -1237,6 +1237,38 @@ def test_transcribe_page_reply_is_stripped_before_storing(tmp_path):
     assert draft.pages[0].text == "line one\nline two"
 
 
+@pytest.mark.parametrize("provider_name", ["anthropic", "openai", "google", "ollama"])
+def test_transcribe_page_gates_on_confirm_regardless_of_provider(
+    tmp_path, provider_name
+):
+    """PR #55 review #3 — regression guard on the Anthropic-only
+    lift: every newly-enabled provider must still route through
+    the ``confirm`` gate before ``page.text`` changes. The gate
+    lives in ``transcribe_page_tool``'s handler, not in any
+    provider-specific code, so this is really a "no provider
+    sneaks past it" pin. Parametrise over the four real providers
+    so a later wire-up mistake would fail on the specific branch."""
+    del provider_name  # Used for the test ID only; the gate is
+    # provider-agnostic inside the handler.
+    draft = _image_only_draft(tmp_path)
+    llm = _FakeLLM(reply="a transcription")
+
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: llm,
+        confirm=lambda _prompt: False,
+    )
+
+    tool.handler({"page": 1})
+
+    # Declined — draft.pages[0].text untouched.
+    assert draft.pages[0].text == ""
+    # Image untouched, layout untouched (the image-clearing side
+    # effect is also behind the confirm gate).
+    assert draft.pages[0].image is not None
+    assert draft.pages[0].layout == "image-top"
+
+
 def test_transcribe_page_handles_missing_or_bad_input_gracefully(tmp_path):
     """PR #53 review #1 — ``_parse_transcribe_input`` used to crash
     the agent turn on missing or non-integer ``page`` because the

@@ -313,12 +313,15 @@ class Repl:
             ),
             skip_page_tool(get_draft=get_draft, confirm=self._confirm),
         ]
-        # Vision-OCR tool is Anthropic-only for now — the other
-        # providers' ``_messages_to_*`` translators silently drop
-        # image content blocks, which would make the LLM hallucinate
-        # a transcription and write it into the draft. Follow-up PR
-        # extends image-block support to Gemini / OpenAI / Ollama.
-        if self._provider is not None and self._provider.name == "anthropic":
+        # Vision-OCR tool lights up on every real provider now that
+        # the message translators forward image content blocks
+        # (PR #54-follow-up). We still skip NullProvider / no
+        # provider — transcribe_page calls ``llm.chat`` so it has
+        # to have something to call. Individual providers still
+        # need a model that actually supports vision (Claude 3+,
+        # GPT-4o, Gemini 1.5+, LLaVA on Ollama); non-vision models
+        # surface as a failed chat rather than a hallucination.
+        if self._provider is not None and self._provider.name != "none":
             tools.append(
                 transcribe_page_tool(
                     get_draft=get_draft,

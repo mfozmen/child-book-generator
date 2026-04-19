@@ -407,13 +407,28 @@ def _gemini_parts_from_blocks(
     """Translate a list of Anthropic blocks to the equivalent list of
     Gemini ``Part``s and a flag telling the caller whether any
     ``tool_result`` appeared (the Gemini role becomes ``tool`` when
-    it does)."""
+    it does). Image blocks become ``Part(inline_data=Blob(...))``
+    with base64-decoded bytes — Gemini wants raw bytes, not the
+    base64-string OpenAI / Ollama take."""
+    import base64
+
     parts: list = []
     has_tool_result = False
     for block in content or []:
         btype = block.get("type")
         if btype == "text":
             parts.append(gtypes.Part.from_text(text=block.get("text", "")))
+        elif btype == "image":
+            src = block.get("source", {}) or {}
+            raw = base64.b64decode(src.get("data", ""))
+            parts.append(
+                gtypes.Part(
+                    inline_data=gtypes.Blob(
+                        mime_type=src.get("media_type", "image/png"),
+                        data=raw,
+                    )
+                )
+            )
         elif btype == "tool_use":
             parts.append(
                 gtypes.Part(
@@ -678,21 +693,57 @@ def _openai_user_messages(content) -> list[dict]:
     """Expand a list of Anthropic blocks on a user message into a
     sequence of OpenAI messages — ``tool_result`` blocks become
     ``role: tool`` messages keyed by ``tool_call_id``, text blocks
-    stay as ``role: user``."""
-    out: list[dict] = []
-    for block in content or []:
+    stay as ``role: user``. An image block triggers OpenAI's
+    multi-modal content-array shape: one ``role: user`` message
+    carrying a list of ``{type: "image_url"|"text", ...}`` items.
+    ``tool_result`` blocks in the same user message are always
+    emitted separately as ``role: tool`` messages regardless of
+    whether an image is also present — silent-drop would lose
+    state the agent needs."""
+    blocks = list(content or [])
+    out: list[dict] = [
+        {
+            "role": "tool",
+            "tool_call_id": b.get("tool_use_id", ""),
+            "content": b.get("content", ""),
+        }
+        for b in blocks
+        if b.get("type") == "tool_result"
+    ]
+    remaining = [b for b in blocks if b.get("type") != "tool_result"]
+    if any(b.get("type") == "image" for b in remaining):
+        out.append(
+            {"role": "user", "content": _openai_multimodal_content(remaining)}
+        )
+    else:
+        out.extend(
+            {"role": "user", "content": b.get("text", "")}
+            for b in remaining
+            if b.get("type") == "text"
+        )
+    return out
+
+
+def _openai_multimodal_content(blocks: list[dict]) -> list[dict]:
+    """Anthropic user-blocks → OpenAI ``content`` array shape. Image
+    blocks become ``{type: "image_url", image_url: {url: "data:..."}}``
+    data URLs; text blocks stay as ``{type: "text", text: ...}``."""
+    items: list[dict] = []
+    for block in blocks:
         btype = block.get("type")
-        if btype == "tool_result":
-            out.append(
+        if btype == "image":
+            src = block.get("source", {}) or {}
+            media = src.get("media_type", "image/png")
+            data = src.get("data", "")
+            items.append(
                 {
-                    "role": "tool",
-                    "tool_call_id": block.get("tool_use_id", ""),
-                    "content": block.get("content", ""),
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{media};base64,{data}"},
                 }
             )
         elif btype == "text":
-            out.append({"role": "user", "content": block.get("text", "")})
-    return out
+            items.append({"type": "text", "text": block.get("text", "")})
+    return items
 
 
 def _openai_completion_to_blocks(completion) -> tuple[list[dict], str]:
@@ -952,22 +1003,45 @@ def _ollama_user_messages(
     """Expand a list of Anthropic blocks on a user message into the
     equivalent Ollama sequence — ``tool_result`` blocks become
     ``role: tool`` keyed by ``tool_name`` (not ``tool_call_id``;
-    Ollama correlates by function name)."""
-    out: list[dict] = []
-    for block in content or []:
-        btype = block.get("type")
-        if btype == "tool_result":
-            out.append(
-                {
-                    "role": "tool",
-                    "content": block.get("content", ""),
-                    "tool_name": id_to_name.get(
-                        block.get("tool_use_id", ""), ""
-                    ),
-                }
-            )
-        elif btype == "text":
-            out.append({"role": "user", "content": block.get("text", "")})
+    Ollama correlates by function name). Image blocks lift to the
+    message-level ``images`` field. ``tool_result`` blocks are
+    always emitted as separate ``role: tool`` messages regardless
+    of whether an image is also present, so an image-carrying
+    user message doesn't silently lose a tool result that happens
+    to share it."""
+    blocks = list(content or [])
+    out: list[dict] = [
+        {
+            "role": "tool",
+            "content": b.get("content", ""),
+            "tool_name": id_to_name.get(b.get("tool_use_id", ""), ""),
+        }
+        for b in blocks
+        if b.get("type") == "tool_result"
+    ]
+    remaining = [b for b in blocks if b.get("type") != "tool_result"]
+    if any(b.get("type") == "image" for b in remaining):
+        texts = [
+            b.get("text", "") for b in remaining if b.get("type") == "text"
+        ]
+        images = [
+            (b.get("source", {}) or {}).get("data", "")
+            for b in remaining
+            if b.get("type") == "image"
+        ]
+        out.append(
+            {
+                "role": "user",
+                "content": "\n".join(texts),
+                "images": images,
+            }
+        )
+    else:
+        out.extend(
+            {"role": "user", "content": b.get("text", "")}
+            for b in remaining
+            if b.get("type") == "text"
+        )
     return out
 
 

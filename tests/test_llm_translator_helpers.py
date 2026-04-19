@@ -16,6 +16,7 @@ import pytest
 from src.providers.llm import (
     _build_tool_use_id_to_name_map,
     _gemini_role_for_message,
+    _messages_to_gemini_contents,
     _messages_to_ollama,
     _messages_to_openai,
     _ollama_response_to_blocks,
@@ -125,7 +126,11 @@ def test_openai_user_messages_converts_text_blocks():
 
 
 def test_openai_user_messages_skips_unknown_block_types():
-    out = _openai_user_messages([{"type": "image", "url": "x"}])
+    """Truly unknown block types (video / audio / document — things
+    the translator has no mapping for) drop rather than silently
+    emitting a malformed message. ``image`` is handled via the
+    multi-modal branch and doesn't belong here."""
+    out = _openai_user_messages([{"type": "video", "url": "x"}])
     assert out == []
 
 
@@ -243,6 +248,242 @@ def test_ollama_tool_use_block_preserves_name_and_synthesises_id():
     # Synthesised id — ``toolu_`` prefix, same shape as Anthropic.
     assert block["id"].startswith("toolu_")
     assert len(block["id"]) > len("toolu_")
+
+
+# --- Multi-provider image content block translation ---------------------
+#
+# The ``transcribe_page`` tool emits Anthropic-format ``image`` blocks
+# (``{type: "image", source: {type: "base64", media_type, data}}``). PR #46
+# review #1 flagged that the OpenAI / Gemini / Ollama translators silently
+# dropped those blocks, which is why the tool shipped Anthropic-only.
+# Each provider's wire format is different; these tests pin the
+# translation so ``transcribe_page`` can light up on every provider that
+# supports multimodal input.
+
+
+_SAMPLE_IMAGE_BLOCK = {
+    "type": "image",
+    "source": {
+        "type": "base64",
+        "media_type": "image/png",
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==",
+    },
+}
+
+
+def test_messages_to_openai_converts_image_block_to_image_url_content_item():
+    """OpenAI multi-modal input: user ``content`` must become an
+    array with ``{type: "image_url", image_url: {url: "data:..."}}``
+    entries. Image blocks from the transcribe tool must land in
+    that shape — currently they're dropped, which is why the tool
+    is Anthropic-only."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                _SAMPLE_IMAGE_BLOCK,
+                {"type": "text", "text": "transcribe this"},
+            ],
+        }
+    ]
+
+    out = _messages_to_openai(messages)
+
+    # The image block materialised as a data-URL entry in the
+    # multi-modal ``content`` array (not dropped).
+    assert len(out) == 1
+    user_msg = out[0]
+    assert user_msg["role"] == "user"
+    content = user_msg["content"]
+    assert isinstance(content, list)
+
+    image_items = [c for c in content if c.get("type") == "image_url"]
+    assert len(image_items) == 1
+    url = image_items[0]["image_url"]["url"]
+    assert url.startswith("data:image/png;base64,")
+    assert _SAMPLE_IMAGE_BLOCK["source"]["data"] in url
+
+    # The text block stayed, co-existing with the image.
+    text_items = [c for c in content if c.get("type") == "text"]
+    assert any(t.get("text") == "transcribe this" for t in text_items)
+
+
+def test_messages_to_openai_keeps_string_content_when_no_image():
+    """Plain text-only user messages (the hot path) keep the
+    string ``content`` shape — no unnecessary array wrapping that
+    might surprise existing tests."""
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "just text"}],
+        }
+    ]
+
+    out = _messages_to_openai(messages)
+
+    # Text-only messages still land as {role: user, content: "text"} entries.
+    assert out == [{"role": "user", "content": "just text"}]
+
+
+def test_messages_to_ollama_lifts_image_blocks_into_images_field():
+    """Ollama's multi-modal shape keeps text in ``content`` (a
+    string) and puts base64-encoded image payloads in a separate
+    ``images`` list — not the inline content array OpenAI uses."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                _SAMPLE_IMAGE_BLOCK,
+                {"type": "text", "text": "transcribe this"},
+            ],
+        }
+    ]
+
+    out = _messages_to_ollama(messages)
+
+    # One user message with both ``content`` (the text) and
+    # ``images`` (the lifted base64 payload).
+    assert len(out) == 1
+    msg = out[0]
+    assert msg["role"] == "user"
+    assert "transcribe this" in msg["content"]
+    assert "images" in msg
+    assert msg["images"] == [_SAMPLE_IMAGE_BLOCK["source"]["data"]]
+
+
+def test_messages_to_gemini_converts_image_block_to_inline_data_part():
+    """Gemini's ``Content.parts`` accepts ``Part(inline_data=Blob(
+    mime_type, data))`` for binary data. The translator must emit
+    one of those parts per image block so Gemini Vision sees the
+    image instead of dropping it silently."""
+    captured_parts: list = []
+
+    class _FakePart:
+        def __init__(self, **kwargs):
+            captured_parts.append(kwargs)
+
+        @classmethod
+        def from_text(cls, text):
+            return cls(text=text)
+
+    class _FakeBlob:
+        def __init__(self, mime_type, data):
+            self.mime_type = mime_type
+            self.data = data
+
+    class _FakeContent:
+        def __init__(self, role, parts):
+            self.role = role
+            self.parts = parts
+
+    gtypes = types.SimpleNamespace(
+        Part=_FakePart,
+        Blob=_FakeBlob,
+        Content=_FakeContent,
+        FunctionCall=lambda **k: k,
+        FunctionResponse=lambda **k: k,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                _SAMPLE_IMAGE_BLOCK,
+                {"type": "text", "text": "transcribe this"},
+            ],
+        }
+    ]
+
+    contents = _messages_to_gemini_contents(messages, gtypes)
+
+    # One Content (user role) with two parts: inline_data image + text.
+    assert len(contents) == 1
+    assert contents[0].role == "user"
+    parts = contents[0].parts
+    assert len(parts) == 2
+    # First part was constructed with an ``inline_data`` kwarg
+    # carrying a Blob with the matching mime type.
+    image_kwargs = next((k for k in captured_parts if "inline_data" in k), None)
+    assert image_kwargs is not None
+    blob = image_kwargs["inline_data"]
+    assert blob.mime_type == "image/png"
+    # The data should be the base64-decoded bytes, ready for Gemini.
+    import base64
+    expected_bytes = base64.b64decode(_SAMPLE_IMAGE_BLOCK["source"]["data"])
+    assert blob.data == expected_bytes
+
+
+def test_openai_multimodal_message_still_emits_tool_results_separately():
+    """PR #55 review #2 — the image-detecting early return used to
+    skip ``_openai_user_messages``'s tool_result branch entirely,
+    which would silent-drop a tool_result sharing a user message
+    with an image. Defensive fix: tool_results are always emitted
+    first as ``role: tool`` messages, then the remaining image +
+    text blocks become the multi-modal user message."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_42",
+                    "content": "42",
+                },
+                _SAMPLE_IMAGE_BLOCK,
+                {"type": "text", "text": "transcribe"},
+            ],
+        }
+    ]
+
+    out = _messages_to_openai(messages)
+
+    # tool_result came out as a separate role:tool message, not lost.
+    tool_msgs = [m for m in out if m.get("role") == "tool"]
+    assert len(tool_msgs) == 1
+    assert tool_msgs[0]["tool_call_id"] == "toolu_42"
+    assert tool_msgs[0]["content"] == "42"
+    # Image + text still land in one multi-modal user message.
+    user_msgs = [m for m in out if m.get("role") == "user"]
+    assert len(user_msgs) == 1
+    assert isinstance(user_msgs[0]["content"], list)
+
+
+def test_ollama_multimodal_message_still_emits_tool_results_separately():
+    """Same invariant as the OpenAI test above, for Ollama's shape
+    (tool_result → ``role: tool`` with ``tool_name``; image → lifted
+    to ``images`` field alongside text ``content``)."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "toolu_42", "name": "get_42"},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_42",
+                    "content": "42",
+                },
+                _SAMPLE_IMAGE_BLOCK,
+                {"type": "text", "text": "transcribe"},
+            ],
+        },
+    ]
+
+    out = _messages_to_ollama(messages)
+
+    tool_msgs = [m for m in out if m.get("role") == "tool"]
+    assert len(tool_msgs) == 1
+    assert tool_msgs[0]["content"] == "42"
+    assert tool_msgs[0]["tool_name"] == "get_42"
+
+    user_msgs = [m for m in out if m.get("role") == "user"]
+    assert len(user_msgs) == 1
+    assert "images" in user_msgs[0]
+    assert user_msgs[0]["images"] == [_SAMPLE_IMAGE_BLOCK["source"]["data"]]
 
 
 def test_parse_ollama_tool_arguments_handles_every_shape():

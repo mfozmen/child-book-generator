@@ -76,34 +76,28 @@ def test_generate_cover_illustration_omitted_when_openai_key_missing(tmp_path):
     assert "generate_cover_illustration" not in _tool_names(repl)
 
 
-def test_transcribe_page_registered_only_on_anthropic(tmp_path):
-    """PR #46 review #1 — only ``AnthropicProvider.chat`` currently
-    forwards image content blocks intact to the SDK. The other
-    providers' ``_messages_to_*`` translators silently drop unknown
-    block types, so on OpenAI / Gemini / Ollama the vision model
-    sees only the text prompt and hallucinates a transcription that
-    then gets written into ``draft.pages[n-1].text``. Until the
-    non-Anthropic translators grow image-block support in a dedicated
-    PR, gate this tool to Anthropic — mirrors the OpenAI-only gate
-    on ``generate_cover_illustration``."""
-    repl = _repl(tmp_path, provider_name="anthropic", api_key="sk-ant-test")
-    assert "transcribe_page" in _tool_names(repl)
-
-
-def test_transcribe_page_omitted_on_non_anthropic_providers(tmp_path):
-    """Same rationale as above — OpenAI / Gemini / Ollama agents must
-    not see this tool until their ``_messages_to_*`` translators
-    handle image blocks, otherwise a clean-looking success writes
-    fabricated child text into the draft."""
+def test_transcribe_page_registered_on_every_real_provider(tmp_path):
+    """Multi-provider support (PR #54-follow-up): every provider's
+    ``_messages_to_*`` translator now forwards image content blocks
+    in its native wire format — OpenAI's multi-modal content array,
+    Gemini's ``inline_data`` Part, Ollama's top-level ``images``
+    list. The Anthropic-only gate from PR #48 is lifted."""
     for name, key in (
+        ("anthropic", "sk-ant-test"),
         ("openai", "sk-test"),
         ("google", "AIzaSy-test"),
         ("ollama", None),
     ):
         repl = _repl(tmp_path, provider_name=name, api_key=key)
-        assert "transcribe_page" not in _tool_names(repl), (
-            f"transcribe_page must not be registered on {name} — "
-            "image blocks aren't translated to that provider's wire "
-            "format yet, so the LLM would invent text without seeing "
-            "the page image."
+        assert "transcribe_page" in _tool_names(repl), (
+            f"transcribe_page must now be available on {name} — "
+            "its translator forwards image blocks."
         )
+
+
+def test_transcribe_page_omitted_on_null_provider(tmp_path):
+    """``NullProvider`` (the offline default before a picker runs)
+    has no ``chat`` implementation to call. Skip so the tool isn't
+    advertised as available when nothing is there to answer."""
+    repl = _repl(tmp_path, provider_name="none", api_key=None)
+    assert "transcribe_page" not in _tool_names(repl)
