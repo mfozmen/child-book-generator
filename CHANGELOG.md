@@ -1,7 +1,159 @@
 # CHANGELOG
 
 
+## v1.8.0 (2026-04-19)
+
+### Features
+
+- **agent**: Tesseract OCR fallback for transcribe_page
+  ([#56](https://github.com/mfozmen/littlepress-ai/pull/56),
+  [`bd05b12`](https://github.com/mfozmen/littlepress-ai/commit/bd05b125ee69c27e64f4662f440c4a5ca143321a))
+
+* feat(agent): Tesseract OCR fallback for transcribe_page
+
+Adds a ``method`` parameter to ``transcribe_page`` — default ``"vision"`` (existing LLM-vision path)
+  or ``"tesseract"`` for a local-offline OCR pass via ``pytesseract``. Same handler, same confirm
+  gate, same preserve-child-voice guards; just a different front-end.
+
+### Why
+
+LLM vision costs a cloud round-trip per page (~$0.005-$0.02 on most providers). Samsung-Notes-style
+  matbaa yazısı — the Yavru-Dinozor-shaped draft — reads at near-100% accuracy on a modern Tesseract
+  install with the ``tur`` trained-data pack, at zero API cost and offline. Per-page agent choice:
+  hard-case handwriting goes through the LLM, clean typed text goes through Tesseract.
+
+### Inputs
+
+- ``method: "vision" | "tesseract"`` — default ``"vision"``. - ``lang: string`` — Tesseract language
+  code (``"eng"`` default; ``"tur"``, ``"tur+eng"``, etc. for Turkish drafts).
+
+### Error handling
+
+Two distinct failure modes for Tesseract get their own clean messages:
+
+- ``pytesseract`` not installed (Python package missing) → ``pip install pytesseract`` hint +
+  suggestion to retry with ``method='vision'``. - System ``tesseract`` binary not on PATH (the
+  package's ``TesseractNotFoundError``) → per-OS install hints (Windows UB-Mannheim installer,
+  ``brew install`` on macOS, ``apt install tesseract-ocr tesseract-ocr-tur`` on Linux). - Any other
+  Tesseract error → truncated ``str(e)[:200]`` + retry hint.
+
+Draft is never touched before the confirm gate, so a mistyped ``method`` or missing dep leaves
+  ``page.text`` untouched.
+
+### Tests (7 new; 561 total, was 554)
+
+- ``test_transcribe_page_defaults_to_vision_method`` — hot-path regression: no ``method`` → LLM
+  branch runs, no Tesseract.
+
+- ``test_transcribe_page_method_tesseract_uses_tesseract_not_llm`` — ``llm.chat`` is not called when
+  method='tesseract'. - ``test_transcribe_page_tesseract_passes_lang_through`` — the ``lang`` input
+  reaches pytesseract verbatim. -
+  ``test_transcribe_page_tesseract_missing_library_returns_clean_error`` — ``pytesseract`` not
+  installed, clean error + draft untouched. -
+  ``test_transcribe_page_tesseract_empty_reply_does_not_overwrite`` — whitespace reply treated like
+  the vision empty branch; draft keeps its existing text. -
+  ``test_transcribe_page_tesseract_binary_missing_returns_clean_error`` — ``TesseractNotFoundError``
+  raised by pytesseract surfaces as an install-hint message with "PATH" / "install" keywords. -
+  ``test_transcribe_page_schema_advertises_method_and_lang`` — schema enumerates the two methods and
+  accepts a string lang.
+
+### Docs
+
+- Tool description rewritten to name both engines, their use cases, and the install preconditions
+  for Tesseract. - README bullet expanded: "two engines behind one tool". - ``docs/PLAN.md`` —
+  Tesseract item removed from "Next up" (shipped here).
+
+* fix(agent): address PR #56 review — extras, docs, Tesseract robustness
+
+Eight findings (three critical, five sub-threshold). All valid.
+
+### Critical
+
+1. **``pytesseract`` was not declared as an optional extra.** The in-tool error's ``pip install
+  pytesseract`` hint was a workaround, not a declared dependency set. Added ``tesseract =
+  ["pytesseract>=0.3.10"]`` under ``[project.optional-dependencies]`` and updated the README Install
+  block with ``pip install 'littlepress-ai[tesseract]'`` plus per-OS install instructions for the
+  system tesseract binary + trained-data packs.
+
+2. **CLAUDE.md architecture bullet was stale again.** PR #55 review had forced this exact bullet
+  from ``(Anthropic-only)`` to ``(every real provider; model must support vision)`` but this PR
+  shipped a second engine (Tesseract) and the bullet still described only vision. Updated to name
+  both engines + the opt-in extra.
+
+3. **English-only rule violated in production strings.** Four occurrences of "matbaa yazısı" — tool
+  description, schema field description, helper docstring, README Status bullet. CLAUDE.md:
+  test-fixture exception does NOT cover production strings. Rewritten to the English primary term
+  ("typeset / printed text") with the Turkish phrase kept as an italicised parenthetical in the
+  README only, where the term is the most pedagogically useful.
+
+### Sub-threshold
+
+4. **Empty-reply error was vision-specific on the Tesseract path.** ``_interpret_vision_reply`` was
+  shared; on Tesseract an empty OCR result got the "safety filter / vision- unsupported" diagnosis.
+  Renamed to ``_interpret_reply`` and gave it a ``method`` parameter. Tesseract branch now advises
+  "low contrast / wrong lang / higher DPI / switch to ``method='vision'``." New test pins the
+  Tesseract-specific wording.
+
+5. **``lang`` was unvalidated before hitting the Tesseract CLI.** Bogus values (``"tur,eng"``,
+  ``"../foo"``, ``"--help"``, empty string, unusual casing) surfaced as cryptic binary errors the
+  user couldn't map back to their input. Added ``_validate_tesseract_lang`` — ISO-639-2/B allowlist:
+  ``[a-z]{3}(\+[a-z]{3})*``. Rejected values return a clean tool-result error before the CLI is
+  invoked. Two new tests — rejected-bad-langs batch and accepted-good-langs batch.
+
+6. **Tool description oversold Tesseract's verbatim guarantee.** "Tesseract returns bytes and can't
+  paraphrase at all" was misleading — OCR errors + dropped diacritics happen. Softened to "classical
+  OCR engine — it will misread characters but won't rewrite or summarise, and the y/n confirm gate
+  is the real preserve-child-voice guard."
+
+7. **``except tess_not_found`` mislabelled unrelated errors.** The ``getattr(..., Exception)``
+  fallback converted every pytesseract exception (OOM, permission, decode) into the "tesseract
+  binary not on PATH" install hint. Switched to ``getattr(..., None)`` + ``isinstance`` check inside
+  a generic handler — unrelated exceptions now fall through with their own message. New test pins
+  the distinction: a ``_PermissionBoom`` exception does NOT produce the "not found on path" hint.
+
+8. **Tesseract path skipped the PIL decode the vision path used.** Two practical consequences on
+  Windows: (a) broken PNGs emitted garbage OCR instead of a clean decode error; (b) long-path /
+  non-ASCII filenames tripped the CLI. Fix: wrap the image in ``with Image.open(image_path) as img``
+  and pass the PIL image to ``pytesseract.image_to_string`` — pytesseract's temp-file shim handles
+  path quirks when given an Image.
+
+### Tests
+
+4 new (560 → 564): ``tesseract_empty_reply_surfaces_tesseract_hint``,
+  ``tesseract_rejects_unsafe_lang``, ``tesseract_accepts_valid_langs``,
+  ``tesseract_unrelated_exception_not_mislabeled_as_binary_missing``.
+
+Plus 1 existing test loosened: the generic ``tesseract_empty_reply_does_not_overwrite`` now checks
+  for the Tesseract-specific message markers the sibling test pins in detail.
+
+565 tests green (was 561).
+
+* refactor(agent_tools): extract OCR-engine dispatch to close Sonar S3776
+
+PR #56's review-fix pass added a second engine branch + ``lang`` validation to
+  ``transcribe_page_tool::handler``, which pushed its cognitive complexity from ~15 to 18 on the
+  PR-#56 Sonar scan (python:S3776).
+
+Pure extract-function — same pattern as earlier in the file (``_parse_skip_page_input`` /
+  ``_parse_generate_cover_input`` / ``_parse_transcribe_input``). New helper
+  ``_run_ocr_engine(method, input_, page, page_n, get_llm)`` handles the method-switch, the ``lang``
+  validation, and the two ``_call_*_for_transcription`` dispatches; returns the same
+  ``(cleaned_reply, error)`` shape the callers used inline before.
+
+Handler is back to a short linear script: draft guard → parse input → run OCR → interpret → confirm
+  → apply. Complexity under the 15-limit again. 565 tests green, no behaviour change.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+
 ## v1.7.0 (2026-04-19)
+
+### Chores
+
+- **release**: 1.7.0 [skip ci]
+  ([`3ff67dc`](https://github.com/mfozmen/littlepress-ai/commit/3ff67dc0ade25b2d98932f91db5445f1a58de420))
 
 ### Features
 
