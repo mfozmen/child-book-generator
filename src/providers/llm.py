@@ -407,13 +407,28 @@ def _gemini_parts_from_blocks(
     """Translate a list of Anthropic blocks to the equivalent list of
     Gemini ``Part``s and a flag telling the caller whether any
     ``tool_result`` appeared (the Gemini role becomes ``tool`` when
-    it does)."""
+    it does). Image blocks become ``Part(inline_data=Blob(...))``
+    with base64-decoded bytes — Gemini wants raw bytes, not the
+    base64-string OpenAI / Ollama take."""
+    import base64
+
     parts: list = []
     has_tool_result = False
     for block in content or []:
         btype = block.get("type")
         if btype == "text":
             parts.append(gtypes.Part.from_text(text=block.get("text", "")))
+        elif btype == "image":
+            src = block.get("source", {}) or {}
+            raw = base64.b64decode(src.get("data", ""))
+            parts.append(
+                gtypes.Part(
+                    inline_data=gtypes.Blob(
+                        mime_type=src.get("media_type", "image/png"),
+                        data=raw,
+                    )
+                )
+            )
         elif btype == "tool_use":
             parts.append(
                 gtypes.Part(
@@ -678,9 +693,16 @@ def _openai_user_messages(content) -> list[dict]:
     """Expand a list of Anthropic blocks on a user message into a
     sequence of OpenAI messages — ``tool_result`` blocks become
     ``role: tool`` messages keyed by ``tool_call_id``, text blocks
-    stay as ``role: user``."""
+    stay as ``role: user``. An image block triggers OpenAI's
+    multi-modal content-array shape: one ``role: user`` message
+    carrying a list of ``{type: "image_url"|"text", ...}`` items
+    (text blocks fold into that array instead of being emitted
+    separately so the model sees text + image together)."""
+    blocks = list(content or [])
+    if any(b.get("type") == "image" for b in blocks):
+        return [{"role": "user", "content": _openai_multimodal_content(blocks)}]
     out: list[dict] = []
-    for block in content or []:
+    for block in blocks:
         btype = block.get("type")
         if btype == "tool_result":
             out.append(
@@ -693,6 +715,28 @@ def _openai_user_messages(content) -> list[dict]:
         elif btype == "text":
             out.append({"role": "user", "content": block.get("text", "")})
     return out
+
+
+def _openai_multimodal_content(blocks: list[dict]) -> list[dict]:
+    """Anthropic user-blocks → OpenAI ``content`` array shape. Image
+    blocks become ``{type: "image_url", image_url: {url: "data:..."}}``
+    data URLs; text blocks stay as ``{type: "text", text: ...}``."""
+    items: list[dict] = []
+    for block in blocks:
+        btype = block.get("type")
+        if btype == "image":
+            src = block.get("source", {}) or {}
+            media = src.get("media_type", "image/png")
+            data = src.get("data", "")
+            items.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{media};base64,{data}"},
+                }
+            )
+        elif btype == "text":
+            items.append({"type": "text", "text": block.get("text", "")})
+    return items
 
 
 def _openai_completion_to_blocks(completion) -> tuple[list[dict], str]:
@@ -952,9 +996,30 @@ def _ollama_user_messages(
     """Expand a list of Anthropic blocks on a user message into the
     equivalent Ollama sequence — ``tool_result`` blocks become
     ``role: tool`` keyed by ``tool_name`` (not ``tool_call_id``;
-    Ollama correlates by function name)."""
+    Ollama correlates by function name). Image blocks lift to the
+    message-level ``images`` field (Ollama's multi-modal shape:
+    ``content`` stays as a text string, ``images`` is a parallel
+    list of base64 payloads)."""
+    blocks = list(content or [])
+    if any(b.get("type") == "image" for b in blocks):
+        texts: list[str] = []
+        images: list[str] = []
+        for block in blocks:
+            btype = block.get("type")
+            if btype == "text":
+                texts.append(block.get("text", ""))
+            elif btype == "image":
+                src = block.get("source", {}) or {}
+                images.append(src.get("data", ""))
+        return [
+            {
+                "role": "user",
+                "content": "\n".join(texts),
+                "images": images,
+            }
+        ]
     out: list[dict] = []
-    for block in content or []:
+    for block in blocks:
         btype = block.get("type")
         if btype == "tool_result":
             out.append(

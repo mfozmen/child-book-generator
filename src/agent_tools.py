@@ -184,14 +184,15 @@ def read_draft_tool(get_draft: Callable[[], Draft | None]) -> Tool:
             "(Samsung Notes / phone-scan exports) are flagged "
             "``[image-only]`` with a summary NOTE — when that fires, call "
             "the ``transcribe_page`` tool on each flagged page to OCR via "
-            "the active LLM's vision (Anthropic only for now); if that "
-            "tool isn't registered, ask the user to transcribe manually. "
-            "When ``transcribe_page`` reports a page looks blank (the "
-            "``<BLANK>`` sentinel branch), confirm with the user and "
-            "call ``skip_page`` to drop it from the draft so it doesn't "
-            "render as an empty spread. Never invent or paraphrase the "
-            "child's words. Call this at the start of a session to see "
-            "what you're working with."
+            "the active LLM's vision capability (registered on every real "
+            "provider now); if the active model doesn't support vision, "
+            "``transcribe_page`` surfaces a clean failure and the user "
+            "can transcribe manually. When ``transcribe_page`` reports a "
+            "page looks blank (the ``<BLANK>`` sentinel branch), confirm "
+            "with the user and call ``skip_page`` to drop it from the "
+            "draft so it doesn't render as an empty spread. Never invent "
+            "or paraphrase the child's words. Call this at the start of "
+            "a session to see what you're working with."
         ),
         input_schema={"type": "object", "properties": {}, "required": []},
         handler=handler,
@@ -636,10 +637,12 @@ def transcribe_page_tool(
             "double-print). Do NOT call this with the default on a "
             "page whose image is a separate illustration you want to "
             "keep — pass ``keep_image=true`` for mixed-content pages, "
-            "which preserves the image + layout. Registered only on "
-            "Anthropic today (other providers don't forward image "
-            "content blocks yet); on non-Anthropic sessions the tool "
-            "isn't available and the user should transcribe manually."
+            "which preserves the image + layout. Registered on every "
+            "real provider (Anthropic / OpenAI / Google / Ollama); "
+            "each provider's model still needs to actually support "
+            "vision (Claude 3+, GPT-4o, Gemini 1.5+, LLaVA on Ollama) "
+            "— a non-vision model will surface as a failed chat call "
+            "rather than a hallucinated transcription."
         ),
         input_schema={
             "type": "object",
