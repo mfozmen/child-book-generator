@@ -24,9 +24,9 @@ def test_orphaned_images_returns_unreferenced_pngs(tmp_path):
     from src.prune import orphaned_images
 
     images_dir = tmp_path / ".book-gen" / "images"
-    cover = _touch(images_dir / "cover-abc.png")
-    page_img = _touch(images_dir / "page-1-def.png")
-    orphan = _touch(images_dir / "cover-old-retry.png")
+    cover = _touch(images_dir / "cover-abcdef0123.png")
+    page_img = _touch(images_dir / "page-1234567890.png")
+    orphan = _touch(images_dir / "cover-9999999999.png")
 
     draft = Draft(
         source_pdf=tmp_path / "draft.pdf",
@@ -51,8 +51,9 @@ def test_orphaned_images_all_when_draft_has_no_refs(tmp_path):
     from src.prune import orphaned_images
 
     images_dir = tmp_path / "images"
-    a = _touch(images_dir / "a.png")
-    b = _touch(images_dir / "b.png")
+    # Both AI-pattern names — nothing references them, so both orphans.
+    a = _touch(images_dir / "cover-0000000000.png")
+    b = _touch(images_dir / "page-1111111111.png")
     draft = Draft(source_pdf=tmp_path / "draft.pdf")
 
     result = sorted(orphaned_images(images_dir, draft))
@@ -65,10 +66,41 @@ def test_orphaned_images_ignores_non_png(tmp_path):
 
     images_dir = tmp_path / "images"
     _touch(images_dir / "note.txt")
-    png = _touch(images_dir / "cover-xyz.png")
+    # AI-generated pattern: 10-hex digest.
+    png = _touch(images_dir / "cover-0123456789.png")
     draft = Draft(source_pdf=tmp_path / "draft.pdf")
 
     assert orphaned_images(images_dir, draft) == [png]
+
+
+def test_orphaned_images_preserves_child_extracted_drawings(tmp_path):
+    """Regression guard for the core "child is the author" invariant.
+
+    ``pdf_ingest.extract_images`` writes the child's drawings as
+    ``page-01.png``, ``page-02.png``, …. ``transcribe_page`` clears the
+    draft's ``page.image`` reference on approve (so the printer doesn't
+    double-print the text). If orphan detection matched those files
+    they'd be silently deleted on the next render's auto-prune — the
+    child would lose their original art. Prune therefore only matches
+    the tool-generated AI-illustration pattern (``cover-<hex>.png`` /
+    ``page-<hex>.png`` with a 10-char hex digest).
+    """
+    from src.prune import orphaned_images
+
+    images_dir = tmp_path / "images"
+    # Child's original extracted drawing, no longer referenced.
+    child_drawing = _touch(images_dir / "page-01.png")
+    # AI retry leftover — real orphan.
+    ai_orphan = _touch(images_dir / "cover-abcdef0123.png")
+    # User-dropped custom asset (jpg, odd name) — also preserved.
+    custom = _touch(images_dir / "my-reference.png")
+    draft = Draft(source_pdf=tmp_path / "draft.pdf")
+
+    result = orphaned_images(images_dir, draft)
+
+    assert child_drawing.exists()
+    assert custom.exists()
+    assert result == [ai_orphan]
 
 
 def test_excess_snapshots_keeps_top_n_by_version(tmp_path):
@@ -136,9 +168,9 @@ def test_prune_removes_orphans_and_old_snapshots_reports_bytes(tmp_path):
     out = root / ".book-gen" / "output"
     input_dir = root / ".book-gen" / "input"
 
-    cover = _touch(images / "cover-new.png", size=100)
-    orphan1 = _touch(images / "cover-old.png", size=50)
-    orphan2 = _touch(images / "page-1-retry.png", size=25)
+    cover = _touch(images / "cover-aaaaaaaaaa.png", size=100)
+    orphan1 = _touch(images / "cover-bbbbbbbbbb.png", size=50)
+    orphan2 = _touch(images / "page-cccccccccc.png", size=25)
     # Stable pointer — must survive.
     stable = _touch(out / "story.pdf", size=1000)
     # Snapshots — v3 is newest, v1 goes.
@@ -181,7 +213,7 @@ def test_prune_dry_run_deletes_nothing(tmp_path):
     images = root / ".book-gen" / "images"
     out = root / ".book-gen" / "output"
 
-    orphan = _touch(images / "cover-old.png", size=50)
+    orphan = _touch(images / "cover-dddddddddd.png", size=50)
     v1 = _touch(out / "story.v1.pdf", size=400)
     v2 = _touch(out / "story.v2.pdf", size=400)
 
@@ -209,4 +241,28 @@ def test_prune_noop_when_nothing_to_remove(tmp_path):
 
     assert report.images_removed == []
     assert report.snapshots_removed == []
+    assert report.bytes_freed == 0
+
+
+def test_prune_swallows_unexpected_errors(tmp_path, monkeypatch):
+    """The comment in ``render_book`` and ``_auto_prune`` promises
+    "silent on failure": the auto-prune hook must never let an
+    unexpected error bubble up and mask a successful render. If
+    ``orphaned_images`` blows up (e.g. a platform-specific glob quirk
+    on a locked directory) ``prune`` must still return an empty
+    report instead of raising."""
+    from src import prune as prune_mod
+
+    def blow_up(*_a, **_kw):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(prune_mod, "orphaned_images", blow_up)
+
+    root = _make_session(tmp_path)
+    draft = Draft(source_pdf=root / "draft.pdf", title="Story")
+
+    # Must NOT raise.
+    report = prune_mod.prune(root, draft, keep=3)
+
+    assert report.empty
     assert report.bytes_freed == 0

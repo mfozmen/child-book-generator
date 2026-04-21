@@ -38,6 +38,15 @@ class PruneReport:
         return not self.images_removed and not self.snapshots_removed
 
 
+# AI-generated illustration filenames. ``generate_cover_illustration``
+# and ``generate_page_illustration`` both go through
+# ``agent_tools._hashed_image_output_path``, which produces
+# ``cover-<10-hex>.png`` / ``page-<10-hex>.png``. ``pdf_ingest`` saves
+# the child's extracted drawings under ``page-<NN>.png`` — different
+# shape, different regex, preserved.
+_AI_IMAGE_PATTERN = re.compile(r"^(?:cover|page)-[0-9a-f]{10}\.png$")
+
+
 def _referenced_paths(draft: Draft) -> set[Path]:
     refs: set[Path] = set()
     if draft.cover_image is not None:
@@ -49,16 +58,26 @@ def _referenced_paths(draft: Draft) -> set[Path]:
 
 
 def orphaned_images(images_dir: Path, draft: Draft) -> list[Path]:
-    """Return PNGs under ``images_dir`` not referenced by ``draft``.
+    """Return AI-generated PNGs under ``images_dir`` not referenced by
+    the draft.
 
-    Ignores non-PNG files so a user's stray note or non-tool-generated
-    asset is never deleted. Missing ``images_dir`` returns ``[]``.
+    Only files matching the ``_hashed_image_output_path`` naming
+    convention (``cover-<10-hex>.png`` / ``page-<10-hex>.png``) are
+    candidates. The child's original drawings extracted by
+    ``pdf_ingest`` use a ``page-NN.png`` shape and are always
+    preserved — losing them would silently destroy the child's art
+    after ``transcribe_page`` clears the page's image reference.
+    Missing ``images_dir`` returns ``[]``.
     """
     images_dir = Path(images_dir)
     if not images_dir.is_dir():
         return []
     refs = _referenced_paths(draft)
-    return [p for p in images_dir.glob("*.png") if p.resolve() not in refs]
+    return [
+        p
+        for p in images_dir.glob("*.png")
+        if _AI_IMAGE_PATTERN.match(p.name) and p.resolve() not in refs
+    ]
 
 
 def excess_snapshots(output_dir: Path, slug: str, keep: int) -> list[Path]:
@@ -107,7 +126,25 @@ def prune(
     ``dry_run=True`` reports what would be removed without touching
     disk — the report still sums ``bytes_freed`` so the caller can show
     a meaningful preview.
+
+    Never raises. Housekeeping runs as a side-effect of a successful
+    render, so any failure here must not bubble up and convince the
+    caller the render itself failed. On unexpected errors an empty
+    report is returned and the next prune will pick up what was
+    missed.
     """
+    try:
+        return _prune(session_root, draft, keep=keep, dry_run=dry_run)
+    except Exception:
+        return PruneReport()
+
+
+def _prune(
+    session_root: Path,
+    draft: Draft,
+    keep: int,
+    dry_run: bool,
+) -> PruneReport:
     session_root = Path(session_root)
     images_dir = session_root / ".book-gen" / "images"
     output_dir = session_root / ".book-gen" / "output"

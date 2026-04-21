@@ -53,8 +53,8 @@ def test_prune_removes_orphans_and_old_snapshots(tmp_path):
 
     images = tmp_path / ".book-gen" / "images"
     out = tmp_path / ".book-gen" / "output"
-    cover = _touch(images / "cover.png")
-    orphan = _touch(images / "cover-retry.png")
+    cover = _touch(images / "cover-abcdef0123.png")
+    orphan = _touch(images / "cover-9999999999.png")
     v1 = _touch(out / "book.v1.pdf")
     v2 = _touch(out / "book.v2.pdf")
     v3 = _touch(out / "book.v3.pdf")
@@ -84,7 +84,7 @@ def test_prune_dry_run_keeps_files(tmp_path):
     from src.draft import Draft
 
     images = tmp_path / ".book-gen" / "images"
-    orphan = _touch(images / "leftover.png")
+    orphan = _touch(images / "cover-0000000000.png")
 
     repl, buf = _make(tmp_path, ["/prune --dry-run", "/exit"])
     repl._draft = Draft(source_pdf=tmp_path / "draft.pdf", title="Book")
@@ -124,3 +124,66 @@ def test_prune_noop_says_nothing_to_remove(tmp_path):
 
     output = buf.getvalue().lower()
     assert "nothing" in output or "clean" in output or "no" in output
+
+
+def _parse(args: str):
+    from src.repl import _parse_prune_args
+
+    return _parse_prune_args(args)
+
+
+def test_parse_prune_args_defaults_to_keep_3_no_dry_run():
+    assert _parse("") == (False, 3)
+
+
+def test_parse_prune_args_dry_run_flag():
+    assert _parse("--dry-run") == (True, 3)
+
+
+def test_parse_prune_args_keep_and_dry_run_combined():
+    assert _parse("--dry-run --keep 5") == (True, 5)
+    assert _parse("--keep 5 --dry-run") == (True, 5)
+
+
+def test_parse_prune_args_rejects_unknown_token():
+    assert _parse("--verbose") == (False, None)
+    assert _parse("extra") == (False, None)
+
+
+def test_parse_prune_args_rejects_bare_keep():
+    assert _parse("--keep") == (False, None)
+
+
+def test_parse_prune_args_rejects_non_integer_keep():
+    assert _parse("--keep abc") == (False, None)
+
+
+def test_parse_prune_args_rejects_negative_keep():
+    assert _parse("--keep -1") == (False, None)
+
+
+def test_parse_prune_args_rejects_zero_keep():
+    """``--keep 0`` would drop every snapshot; the usage message
+    promises "positive integer", so reject it rather than silently
+    nuking the user's history."""
+    assert _parse("--keep 0") == (False, None)
+
+
+def test_prune_usage_message_shown_for_bad_keep(tmp_path):
+    from src.draft import Draft
+
+    repl, buf = _make(tmp_path, ["/prune --keep 0", "/exit"])
+    repl._draft = Draft(source_pdf=tmp_path / "draft.pdf", title="Book")
+    repl.run()
+
+    assert "usage" in buf.getvalue().lower()
+
+
+def test_prune_usage_message_shown_for_unknown_flag(tmp_path):
+    from src.draft import Draft
+
+    repl, buf = _make(tmp_path, ["/prune --wat", "/exit"])
+    repl._draft = Draft(source_pdf=tmp_path / "draft.pdf", title="Book")
+    repl.run()
+
+    assert "usage" in buf.getvalue().lower()

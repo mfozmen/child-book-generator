@@ -359,10 +359,10 @@ def test_versioned_render_auto_prunes_old_snapshots(tmp_path):
     v3 = output_dir / "book.v3.pdf"
     v3.write_bytes(b"old-v3")
 
-    # Orphan image under images/ — untracked by the draft, should go.
+    # Orphan AI-illustration — untracked by the draft, should go.
     images = tmp_path / ".book-gen" / "images"
     images.mkdir(parents=True, exist_ok=True)
-    orphan = images / "leftover-retry.png"
+    orphan = images / "cover-0123456789.png"
     orphan.write_bytes(b"abc")
 
     repl, _ = _make(
@@ -393,7 +393,7 @@ def test_custom_path_render_does_not_prune(tmp_path):
     v1.write_bytes(b"keep-me")
     images = tmp_path / ".book-gen" / "images"
     images.mkdir(parents=True, exist_ok=True)
-    orphan = images / "keep-me.png"
+    orphan = images / "cover-9999999999.png"
     orphan.write_bytes(b"x")
 
     out = tmp_path / "custom" / "book.pdf"

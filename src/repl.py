@@ -993,7 +993,10 @@ def _parse_prune_args(args: str) -> tuple[bool, int | None]:
                 keep = int(tokens[i + 1])
             except ValueError:
                 return dry_run, None
-            if keep < 0:
+            if keep <= 0:
+                # Matches the usage message: "positive integer". A zero
+                # would quietly drop every snapshot, which is never what
+                # a user types on accident.
                 return dry_run, None
             i += 2
             continue

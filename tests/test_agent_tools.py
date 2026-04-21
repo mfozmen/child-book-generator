@@ -3708,8 +3708,11 @@ def test_render_book_auto_prunes_orphans_and_old_snapshots(tmp_path):
     draft = _two_page_draft(tmp_path)
 
     # Pre-existing orphan image — retry leftover, not referenced by the draft.
+    # Matches the ``cover-<10-hex>.png`` shape that ``generate_*_illustration``
+    # actually writes; filenames outside that pattern (e.g. the child's own
+    # extracted ``page-01.png``) are preserved by ``orphaned_images``.
     images = tmp_path / ".book-gen" / "images"
-    orphan = images / "cover-old-retry.png"
+    orphan = images / "cover-0123456789.png"
     orphan.write_bytes(b"abc")
     # Pre-existing snapshots: v1/v2/v3. After this render (v4) with
     # default keep=3, v1 must go; v2/v3/v4 survive.
