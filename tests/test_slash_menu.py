@@ -36,6 +36,7 @@ def test_slash_commands_follow_logical_workflow_order():
         "title",
         "author",
         "render",
+        "prune",
         "model",
         "logout",
         "help",

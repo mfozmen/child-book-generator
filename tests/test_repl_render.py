@@ -345,3 +345,65 @@ def test_render_custom_path_does_not_version(tmp_path):
     assert out.is_file()
     # No snapshot next to the user-chosen path.
     assert not (out.parent / "book.v1.pdf").is_file()
+
+
+def test_versioned_render_auto_prunes_old_snapshots(tmp_path):
+    pdf = _write_pdf(tmp_path, [{"text": "hi"}])
+
+    output_dir = tmp_path / ".book-gen" / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    v1 = output_dir / "book.v1.pdf"
+    v1.write_bytes(b"old-v1")
+    v2 = output_dir / "book.v2.pdf"
+    v2.write_bytes(b"old-v2")
+    v3 = output_dir / "book.v3.pdf"
+    v3.write_bytes(b"old-v3")
+
+    # Orphan AI-illustration — untracked by the draft, should go.
+    images = tmp_path / ".book-gen" / "images"
+    images.mkdir(parents=True, exist_ok=True)
+    orphan = images / "cover-0123456789.png"
+    orphan.write_bytes(b"abc")
+
+    repl, _ = _make(
+        tmp_path,
+        [f"/load {pdf}", "/title Book", "/render", "/exit"],
+    )
+    repl.run()
+
+    # The fresh render creates v4. Default keep=3 drops v1, keeps v2/v3/v4.
+    assert (output_dir / "book.v4.pdf").is_file()
+    assert not v1.exists()
+    assert v2.exists()
+    assert v3.exists()
+    # Orphan image pruned.
+    assert not orphan.exists()
+
+
+def test_custom_path_render_does_not_prune(tmp_path):
+    """``/render <path>`` is the escape hatch — no versioning, no
+    housekeeping. If the user asked for an explicit destination, we
+    shouldn't touch other files on disk."""
+    pdf = _write_pdf(tmp_path, [{"text": "hi"}])
+
+    # Snapshots + orphan that would normally be pruned by a versioned render.
+    output_dir = tmp_path / ".book-gen" / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    v1 = output_dir / "book.v1.pdf"
+    v1.write_bytes(b"keep-me")
+    images = tmp_path / ".book-gen" / "images"
+    images.mkdir(parents=True, exist_ok=True)
+    orphan = images / "cover-9999999999.png"
+    orphan.write_bytes(b"x")
+
+    out = tmp_path / "custom" / "book.pdf"
+    repl, _ = _make(
+        tmp_path,
+        [f"/load {pdf}", "/title Book", f"/render {out}", "/exit"],
+    )
+    repl.run()
+
+    assert out.is_file()
+    # Nothing under .book-gen touched by the custom-path escape hatch.
+    assert v1.exists()
+    assert orphan.exists()

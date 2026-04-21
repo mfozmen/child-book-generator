@@ -36,6 +36,7 @@ Primary flow is `littlepress draft.pdf` → interactive agent → printable PDF.
 - `src/builder.py` — ReportLab-based A5 PDF assembly.
 - `src/imposition.py` — 2-up saddle-stitch A4 booklet via `pypdf`.
 - `src/pdf_ingest.py` — text + image extraction from the input PDF.
+- `src/prune.py` — `.book-gen/` housekeeping. Drops orphan AI-generated images (`cover-<hex>.png` / `page-<hex>.png` patterns only, so the child's extracted drawings are never touched) and snapshot PDFs beyond the most-recent few. Called silently at the end of every versioned render (both `render_book` agent tool and REPL `/render`); exposed manually as `/prune`.
 - `.book-gen/` — per-project runtime state (gitignored): `session.json`, `draft.json`, `input/`, `images/`, `output/`.
 
 ## Book schema

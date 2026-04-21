@@ -884,17 +884,39 @@ def _run_versioned_render(
     stable_ok = _mirror_or_warn(repl, versioned, stable)
     repl._console.print(f"[green]Wrote[/green] {stable if stable_ok else versioned}")
     repl._console.print(f"  [dim]snapshot: {versioned.name}[/dim]")
-    if not impose:
+    if impose:
+        versioned_booklet = versioned.with_name(f"{versioned.stem}_A4_booklet.pdf")
+        stable_booklet = stable.with_name(f"{stable.stem}_A4_booklet.pdf")
+        if not _impose_to_file(repl, versioned, versioned_booklet):
+            _auto_prune(repl, source_dir)
+            return
+        booklet_ok = stable_ok and _mirror_or_warn(
+            repl, versioned_booklet, stable_booklet
+        )
+        repl._console.print(
+            f"[green]Wrote[/green] "
+            f"{stable_booklet if booklet_ok else versioned_booklet}"
+        )
+        repl._console.print(f"  [dim]snapshot: {versioned_booklet.name}[/dim]")
+    _auto_prune(repl, source_dir)
+
+
+def _auto_prune(repl: Repl, source_dir: Path) -> None:
+    """Quietly drop orphan images and old snapshots after a versioned
+    render. Only the versioned path uses ``.book-gen/`` as its home, so
+    the custom-path escape hatch deliberately skips this."""
+    from src.prune import prune
+
+    session_root = source_dir.parent
+    report = prune(session_root, repl.draft)
+    if report.empty:
         return
-    versioned_booklet = versioned.with_name(f"{versioned.stem}_A4_booklet.pdf")
-    stable_booklet = stable.with_name(f"{stable.stem}_A4_booklet.pdf")
-    if not _impose_to_file(repl, versioned, versioned_booklet):
-        return
-    booklet_ok = stable_ok and _mirror_or_warn(repl, versioned_booklet, stable_booklet)
+    n_images = len(report.images_removed)
+    n_snaps = len(report.snapshots_removed)
     repl._console.print(
-        f"[green]Wrote[/green] {stable_booklet if booklet_ok else versioned_booklet}"
+        f"  [dim]pruned {n_images} orphan image(s), "
+        f"{n_snaps} old snapshot(s)[/dim]"
     )
-    repl._console.print(f"  [dim]snapshot: {versioned_booklet.name}[/dim]")
 
 
 def _cmd_render(repl: Repl, args: str) -> None:
@@ -913,6 +935,73 @@ def _cmd_render(repl: Repl, args: str) -> None:
     else:
         _run_versioned_render(repl, impose, source_dir)
     return None
+
+
+def _cmd_prune(repl: Repl, args: str) -> None:
+    """Remove orphan images from ``.book-gen/images/`` and old snapshot
+    PDFs beyond the most-recent ``--keep`` versions. Defaults to
+    ``keep=3``. ``--dry-run`` reports what would be removed without
+    touching disk."""
+    from src.prune import prune as _prune_fn
+
+    if not _require_draft(repl):
+        return None
+    dry_run, keep = _parse_prune_args(args)
+    if keep is None:
+        repl._console.print(
+            "Usage: /prune [--dry-run] [--keep N]   (N must be a positive integer)"
+        )
+        return None
+    session_root = repl._session_root or Path.cwd()
+    report = _prune_fn(session_root, repl.draft, keep=keep, dry_run=dry_run)
+    if report.empty:
+        repl._console.print("[dim]Nothing to prune — already clean.[/dim]")
+        return None
+    prefix = "[yellow]Would remove[/yellow]" if dry_run else "[green]Removed[/green]"
+    kb = report.bytes_freed / 1024
+    size = f"{kb:.1f} KB" if kb < 1024 else f"{kb / 1024:.1f} MB"
+    repl._console.print(
+        f"{prefix} {len(report.images_removed)} orphan image(s), "
+        f"{len(report.snapshots_removed)} old snapshot(s) "
+        f"({size}){' [dim](dry run)[/dim]' if dry_run else ''}"
+    )
+    for p in report.images_removed:
+        repl._console.print(f"  [dim]image:[/dim] {p.name}")
+    for p in report.snapshots_removed:
+        repl._console.print(f"  [dim]snapshot:[/dim] {p.name}")
+    return None
+
+
+def _parse_prune_args(args: str) -> tuple[bool, int | None]:
+    """Parse ``--dry-run`` and ``--keep N`` flags. Returns (dry_run, keep).
+    A ``keep`` of ``None`` signals a malformed argument — the caller prints
+    usage."""
+    dry_run = False
+    keep = 3
+    tokens = args.split()
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == "--dry-run":
+            dry_run = True
+            i += 1
+            continue
+        if tok == "--keep":
+            if i + 1 >= len(tokens):
+                return dry_run, None
+            try:
+                keep = int(tokens[i + 1])
+            except ValueError:
+                return dry_run, None
+            if keep <= 0:
+                # Matches the usage message: "positive integer". A zero
+                # would quietly drop every snapshot, which is never what
+                # a user types on accident.
+                return dry_run, None
+            i += 2
+            continue
+        return dry_run, None
+    return dry_run, keep
 
 
 def _cmd_load(repl: Repl, args: str) -> None:
@@ -962,6 +1051,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("title",  "Show or set the book's title",                        _cmd_title),
     SlashCommand("author", "Show or set the book's author",                       _cmd_author),
     SlashCommand("render", "Build the A5 PDF (add --impose for the A4 booklet)",  _cmd_render),
+    SlashCommand("prune",  "Remove orphan images + old snapshots from .book-gen", _cmd_prune),
     SlashCommand("model",  "Switch the active LLM provider",                      _cmd_model),
     SlashCommand("logout", "Forget the saved API key and go offline",             _cmd_logout),
     SlashCommand("help",   "Show available commands",                             _cmd_help),

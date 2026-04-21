@@ -42,6 +42,7 @@ from src.agent import Tool
 from src.builder import build_pdf
 from src.draft import Draft, atomic_copy, next_version_number, slugify, to_book
 from src.imposition import impose_a5_to_a4
+from src.prune import prune
 from src.providers.image import ImageGenerationError, ImageProvider
 from src.schema import VALID_COVER_STYLES, VALID_LAYOUTS
 
@@ -1877,6 +1878,11 @@ def render_book_tool(
             message = _impose_and_mirror(
                 versioned_a5, stable_a5, stable_updated, message
             )
+
+        # Housekeeping: drop orphan images from earlier AI retries and
+        # snapshot PDFs beyond the most-recent few. Silent on failure —
+        # locked files (PDF viewer on Windows) are caught inside prune.
+        prune(Path(get_session_root()), draft)
 
         return message
 

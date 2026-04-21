@@ -3704,6 +3704,45 @@ def test_render_book_reports_success_when_stable_copy_is_locked(
     assert "viewer" in result.lower() or "open" in result.lower()
 
 
+def test_render_book_auto_prunes_orphans_and_old_snapshots(tmp_path):
+    draft = _two_page_draft(tmp_path)
+
+    # Pre-existing orphan image — retry leftover, not referenced by the draft.
+    # Matches the ``cover-<10-hex>.png`` shape that ``generate_*_illustration``
+    # actually writes; filenames outside that pattern (e.g. the child's own
+    # extracted ``page-01.png``) are preserved by ``orphaned_images``.
+    images = tmp_path / ".book-gen" / "images"
+    orphan = images / "cover-0123456789.png"
+    orphan.write_bytes(b"abc")
+    # Pre-existing snapshots: v1/v2/v3. After this render (v4) with
+    # default keep=3, v1 must go; v2/v3/v4 survive.
+    output_dir = tmp_path / ".book-gen" / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    v1 = output_dir / "the_brave_owl.v1.pdf"
+    v1.write_bytes(b"old-v1")
+    v2 = output_dir / "the_brave_owl.v2.pdf"
+    v2.write_bytes(b"old-v2")
+    v3 = output_dir / "the_brave_owl.v3.pdf"
+    v3.write_bytes(b"old-v3")
+
+    tool = render_book_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+    )
+
+    tool.handler({})
+
+    # Orphan image pruned.
+    assert not orphan.exists()
+    # v1 pruned; v2/v3 and the newly-written v4 survive.
+    assert not v1.exists()
+    assert v2.exists()
+    assert v3.exists()
+    assert (output_dir / "the_brave_owl.v4.pdf").is_file()
+    # Stable pointer was written and kept.
+    assert (output_dir / "the_brave_owl.pdf").is_file()
+
+
 # --- open_in_default_viewer (platform dispatch) --------------------------
 
 

@@ -37,7 +37,8 @@ What it does today:
 - Asks for a short back-cover blurb (one or two sentences about what the book is about) and writes it onto the back cover during render. The agent records your words verbatim — it won't invent or "improve" the blurb for you. Say you don't want one and the field stays empty.
 - Final review checkpoint before the PDF is built. Once title / author / cover / layouts / back-cover text are all set, the agent summarises everything back to you — title and author quoted verbatim from what you entered — and waits for you to approve or correct any of it. No render until you say yes; last chance to catch a typo before it lands in the printed book.
 - Writes an A5 PDF under `.book-gen/output/` and, when you ask, an A4 2-up booklet ready to print, fold, and staple. After a successful render, the A5 pops open in your OS default PDF viewer so you don't have to hunt for the file; the booklet stays on disk (it's a print artefact, not a reading copy).
-- Never overwrites a previous render. Each render keeps a numbered snapshot alongside the stable `<slug>.pdf` (e.g. `the_brave_owl.v1.pdf`, `.v2.pdf`, …) so you can compare drafts or roll back. Snapshots accumulate forever for now — prune them manually if you hit disk-space pressure. The snapshot filename is printed every time you render.
+- Never overwrites a previous render. Each render keeps a numbered snapshot alongside the stable `<slug>.pdf` (e.g. `the_brave_owl.v1.pdf`, `.v2.pdf`, …) so you can compare drafts or roll back. The snapshot filename is printed every time you render.
+- Auto-housekeeping on every render: orphan images from earlier `generate_*_illustration` retries are dropped from `.book-gen/images/`, and snapshot PDFs beyond the most-recent 3 are swept from `.book-gen/output/`. The stable `<slug>.pdf` / `<slug>_A4_booklet.pdf` pointers, your input PDFs, and referenced cover/page images are never touched. Run it manually with `/prune` (add `--dry-run` to preview, `--keep N` to change how many snapshots survive).
 - Remembers what you decided: rerunning `littlepress same-draft.pdf` picks up where the last session left off instead of asking everything again. The draft PDF is mirrored into `.book-gen/input/` on first load, so you can delete the original (Downloads, Desktop, …) and the saved session still restores.
 
 Roadmap lives in `docs/PLAN.md`.
@@ -106,6 +107,7 @@ Today's slash commands (still available as escape hatches). Type `/` alone to po
 | `/title [name]` | show or set the book's title |
 | `/author [name]` | show or set the book's author |
 | `/render [--impose] [path]` | build the A5 picture-book PDF from the loaded draft. With `--impose` also writes an A4 2-up booklet ready to print double-sided, fold, and staple. |
+| `/prune [--dry-run] [--keep N]` | remove orphan images and old snapshot PDFs from `.book-gen/`. Keeps the newest `N` snapshot versions (default 3); `--dry-run` previews without deleting. Runs automatically after every versioned `/render` too. |
 | `/model` | switch the active LLM provider (re-prompts for an API key if required) |
 | `/logout` | forget the saved API key and drop back to offline mode |
 | `/help` | show available commands |

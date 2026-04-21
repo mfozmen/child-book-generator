@@ -24,6 +24,7 @@ All five PRs from the original plan merged:
 | TBD | `feat/always-ask-series-question` | P4 — greeting now tells the agent to ALWAYS ask whether the book is part of a series (every book, regardless of title pattern) and, on a yes, follow up with the volume number. User records the answer in the title they set; no new data fields. |
 | TBD | `feat/metadata-review-and-back-cover` | P5 — greeting now asks for a short back-cover blurb (one or two sentences in the child's voice) and requires a metadata summary + user approval round before ``render_book`` runs. Restores the back-cover prompt that the agent had quietly dropped. |
 | TBD | `feat/clearer-render-output-message` | P6 — ``render_book``'s success message now names each of the four output files by role: A5 stable (open + read), A4 booklet (print double-sided, fold, staple), and the two ``.vN`` snapshots (rollback only, safe to ignore). Fixes the "why is this producing four PDFs?" read from the Yavru Dinozor run. |
+| TBD | `feat/prune-cleanup` | New ``src/prune.py`` drops orphan images from ``.book-gen/images/`` (retry leftovers not referenced by the draft) and snapshot PDFs beyond the most-recent 3 versions. Auto-runs at the end of every versioned render (both agent ``render_book`` and REPL ``/render``); also exposed as a ``/prune [--dry-run] [--keep N]`` slash command. Stable ``<slug>.pdf`` / ``<slug>_A4_booklet.pdf`` pointers, ``input/``, and referenced cover/page images are never touched. |
 
 ## "Done when" checklist
 
@@ -48,8 +49,6 @@ Items below came out of the first real end-to-end test (Yavru Dinozor). Listed r
 ## Explicitly deferred (don't build unless asked)
 
 - **Full parametric layout engine.** `choose_layout` applies the skill's rule 1 and simple aspect-ratio branching; parametric splits can wait.
-- **Cap / prune old render snapshots + generated images.** Every render keeps a ``.vN.pdf`` snapshot, and every ``generate_cover_illustration`` / ``generate_page_illustration`` retry leaves another ``<prefix>-<hash>.png`` in ``.book-gen/images/`` (the ``time_ns()`` token in the hash means even two identical-prompt calls produce two files). Intentional for now — the user can compare or roll back freely — but eventually we'll want either a per-project cap (keep last N), an age-based sweep, or a ``/prune`` command. The image-accumulation side of this is the biggest contributor on an iterative workflow (8 pages × 3 retries × medium quality ≈ 24 images per book).
-
 ---
 
 When new work lands, replace this status file with the next plan.
