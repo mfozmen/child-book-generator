@@ -43,7 +43,9 @@ All five PRs from the original plan merged:
 
 Items below came out of the first real end-to-end test (Yavru Dinozor). Listed roughly in "most visible to the user" order.
 
-- **Rework preserve-child-voice from "pre-approval" to "post-render review".** Yavru Dinozor run (2026-04-22) surfaced that the per-mutation `confirm` gate has become the UX problem, not the safety net it was meant to be. Three things to decide up front:
+- **Real-book pagination blanks in the A4 saddle-stitch imposition.** Surfaced alongside the review-based gate refactor (2026-04-22). The maintainer wants output blanks to follow real-book conventions — story starts on a right-hand (recto) page, total page count is padded to a multiple of 4 with blanks in "natural" positions (not tacked onto the end). Today `src/imposition.py` just hits the 4-page booklet requirement; this item formalises where the blanks go. Out of scope for the review-based-gate refactor (separate smaller PR).
+
+- **Rework preserve-child-voice from "pre-approval" to "post-render review".** Yavru Dinozor run (2026-04-22) surfaced that the per-mutation `confirm` gate has become the UX problem, not the safety net it was meant to be. Design approved 2026-04-22, spec at `docs/superpowers/specs/2026-04-22-review-based-gate-design.md`. Three things to decide up front:
 
   1. **The philosophy shift.** Today the contract is *"every mutation of the child's content is gated behind a y/n confirm before it lands."* The maintainer's direct feedback: *"This is an AI project. Produce the book, then ask me if there are problems — I'll tell you what to fix."* That is a legitimate relocation of the gate, not an abandonment of preserve-child-voice — the child's words still must survive verbatim in the printed book, but the user audits the **finished PDF** rather than every intermediate write. The per-step gate dies; the verbatim-only prompts (`transcribe_page`, `propose_typo_fix`) stay sacrosanct at the model level. CLAUDE.md's "Core principle" section and the `preserve-child-voice` skill both have to move with the contract.
   2. **What the new flow looks like.**
