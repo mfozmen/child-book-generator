@@ -30,6 +30,7 @@ class DraftPage:
     text: str = ""
     image: Path | None = None
     layout: str = "image-top"
+    hidden: bool = False
 
 
 @dataclass

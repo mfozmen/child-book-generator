@@ -334,3 +334,19 @@ def test_next_version_does_not_confuse_slugs_ending_with_version_digits(tmp_path
 
     # Unrelated slug; should start at v1.
     assert next_version_number(tmp_path, "book") == 1
+
+
+def test_draft_page_defaults_to_visible():
+    from src.draft import DraftPage
+
+    page = DraftPage(text="hi")
+
+    assert page.hidden is False
+
+
+def test_draft_page_can_be_hidden():
+    from src.draft import DraftPage
+
+    page = DraftPage(text="hi", hidden=True)
+
+    assert page.hidden is True
