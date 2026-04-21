@@ -5,28 +5,52 @@ that returns the currently-loaded Draft) and returns a ``Tool`` the agent
 can register. Keeping state out of the tool signature itself means tools
 stay testable without spinning up a full REPL.
 
-**Preserve-child-voice is enforced by making every mutation user-gated.**
-Tools that change draft state (page text, page image, page layout, full
-``DraftPage`` removal) all take a ``confirm: Callable[[str], bool]``
-callback and block on it before touching the draft. Today that covers:
+**Preserve-child-voice is enforced by gating every mutation of the
+child's content behind a user y/n confirm.** "The child's content"
+means page text, page image, and whole-page removal — the parts of
+the draft that came from the child's hand. Presentation choices
+(metadata, cover, single-page layout) can land directly because
+they're authoring decisions on top of the content, not the content
+itself.
+
+Content-gated tools (require a ``confirm: Callable[[str], bool]``):
 
 - ``propose_typo_fix`` — narrow substring substitutions on ``page.text``,
   bounded in length so the tool can't funnel a rewrite.
-- ``transcribe_page`` — OCR via the active LLM's vision, writes
-  ``page.text`` and (by default) clears ``page.image`` + switches the
-  layout to ``text-only``. A ``keep_image`` flag lets the agent preserve
-  a separate drawing on mixed-content pages.
-- ``skip_page`` — removes a whole page from ``draft.pages``, renumbers
-  the rest.
-- ``propose_layouts`` — the batch layout tool, single y/n for the whole
-  rhythm.
+- ``transcribe_page`` — OCR via the active LLM's vision; writes
+  ``page.text`` and, by default, clears ``page.image`` and switches
+  the layout to ``text-only``. A ``keep_image`` flag preserves a
+  separate drawing on mixed-content pages.
+- ``skip_page`` — removes a whole page from ``draft.pages`` and
+  renumbers the rest; the confirm explicitly warns when the dropped
+  page carries a drawing.
 - ``generate_cover_illustration`` — AI cover generation with a
-  pricing-aware confirm.
+  pricing-aware confirm that shows the prompt and the quality-tier
+  cost estimate before any API call.
+- ``generate_page_illustration`` — AI page illustration; same
+  confirm shape as the cover tool. Pairs with ``transcribe_page``
+  to give a page a fresh drawing after the source image was cleared.
 
-The contract the module guarantees is: *"every page-state change is
-reviewed by the user before it lands."* If a future tool ships without
-a ``confirm`` callback, that's a preserve-child-voice violation and
-belongs behind one.
+Also user-gated (not strictly "content" but coordinated changes that
+warrant a single explicit approval):
+
+- ``propose_layouts`` — batch layout tool, one y/n for the whole
+  rhythm. Presentation-only but wholesale, so the user reviews the
+  full plan before it lands.
+
+Not gated — read-only or presentation-only, land directly:
+
+- ``read_draft`` — returns the current draft for the agent to see.
+- ``set_metadata`` — title, author, back-cover blurb,
+  cover subtitle.
+- ``set_cover`` — cover image choice and template style.
+- ``choose_layout`` — single-page layout change (presentation only).
+- ``render_book`` — builds the finished PDF. Pure disk side-effect;
+  never mutates the draft.
+
+If a future tool ships that mutates ``page.text``, ``page.image``, or
+removes a page without a ``confirm`` callback, that's a
+preserve-child-voice violation and belongs behind one.
 """
 
 from __future__ import annotations
