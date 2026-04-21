@@ -3,17 +3,28 @@ render snapshots so iterative use doesn't balloon disk use.
 
 What gets pruned:
 
-- ``images/*.png`` that are not referenced as ``draft.cover_image`` or
-  as any ``page.image``. These are left behind by
+- PNGs in ``images/`` that match the **AI-generated** naming pattern
+  (``cover-<10hex>.png`` / ``page-<N>-<10hex>.png``) and are not
+  referenced by the current draft. These are left behind by
   ``generate_cover_illustration`` / ``generate_page_illustration``
-  retries (the ``time_ns()`` token in the filename hash means identical
-  prompts still produce new files).
+  retries (the ``time_ns()`` token in the filename hash means
+  identical prompts still produce new files). Page retries are the
+  dominant accumulator on an iterative workflow.
 - ``output/<slug>.vN.pdf`` and ``output/<slug>.vN_A4_booklet.pdf``
   snapshots beyond the most-recent ``keep`` versions.
 
-What is never touched: ``input/`` (user's source PDFs), the stable
-``<slug>.pdf`` / ``<slug>_A4_booklet.pdf`` pointers, ``draft.json``,
-``session.json``.
+What is never touched:
+
+- **The child's extracted drawings** (``page-NN.png`` produced by
+  ``pdf_ingest.extract_images``). Different filename shape than the
+  AI pattern on purpose — the child is the author, and their original
+  art must survive even when ``transcribe_page`` has cleared the
+  draft's ``page.image`` reference. This is the core
+  preserve-child-voice invariant that ``_AI_IMAGE_PATTERN`` enforces.
+- User-dropped custom assets in ``images/`` (anything that doesn't
+  match the AI pattern).
+- ``input/`` (user's source PDFs), the stable ``<slug>.pdf`` /
+  ``<slug>_A4_booklet.pdf`` pointers, ``draft.json``, ``session.json``.
 """
 
 from __future__ import annotations
@@ -38,13 +49,18 @@ class PruneReport:
         return not self.images_removed and not self.snapshots_removed
 
 
-# AI-generated illustration filenames. ``generate_cover_illustration``
-# and ``generate_page_illustration`` both go through
-# ``agent_tools._hashed_image_output_path``, which produces
-# ``cover-<10-hex>.png`` / ``page-<10-hex>.png``. ``pdf_ingest`` saves
-# the child's extracted drawings under ``page-<NN>.png`` — different
-# shape, different regex, preserved.
-_AI_IMAGE_PATTERN = re.compile(r"^(?:cover|page)-[0-9a-f]{10}\.png$")
+# AI-generated illustration filenames. Both tools go through
+# ``agent_tools._hashed_image_output_path``:
+#
+# - ``generate_cover_illustration`` → prefix ``"cover"`` → ``cover-<10hex>.png``
+# - ``generate_page_illustration`` → prefix ``f"page-{page_n}"`` → ``page-<N>-<10hex>.png``
+#
+# The child's extracted drawings from ``pdf_ingest`` land at
+# ``page-NN.png`` (no trailing ``-<10hex>``) — distinct shape on
+# purpose, so this regex never matches them and the auto-prune leaves
+# them alone even when ``transcribe_page`` has cleared the draft's
+# ``page.image`` reference.
+_AI_IMAGE_PATTERN = re.compile(r"^(?:cover|page-\d+)-[0-9a-f]{10}\.png$")
 
 
 def _referenced_paths(draft: Draft) -> set[Path]:

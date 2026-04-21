@@ -25,7 +25,7 @@ def test_orphaned_images_returns_unreferenced_pngs(tmp_path):
 
     images_dir = tmp_path / ".book-gen" / "images"
     cover = _touch(images_dir / "cover-abcdef0123.png")
-    page_img = _touch(images_dir / "page-1234567890.png")
+    page_img = _touch(images_dir / "page-1-1234567890.png")
     orphan = _touch(images_dir / "cover-9999999999.png")
 
     draft = Draft(
@@ -53,7 +53,7 @@ def test_orphaned_images_all_when_draft_has_no_refs(tmp_path):
     images_dir = tmp_path / "images"
     # Both AI-pattern names — nothing references them, so both orphans.
     a = _touch(images_dir / "cover-0000000000.png")
-    b = _touch(images_dir / "page-1111111111.png")
+    b = _touch(images_dir / "page-2-1111111111.png")
     draft = Draft(source_pdf=tmp_path / "draft.pdf")
 
     result = sorted(orphaned_images(images_dir, draft))
@@ -88,19 +88,31 @@ def test_orphaned_images_preserves_child_extracted_drawings(tmp_path):
     from src.prune import orphaned_images
 
     images_dir = tmp_path / "images"
-    # Child's original extracted drawing, no longer referenced.
-    child_drawing = _touch(images_dir / "page-01.png")
-    # AI retry leftover — real orphan.
-    ai_orphan = _touch(images_dir / "cover-abcdef0123.png")
-    # User-dropped custom asset (jpg, odd name) — also preserved.
+    # Child's original extracted drawings (``pdf_ingest.extract_images``
+    # writes ``page-{i:02d}.png``), no longer referenced.
+    child_drawing_1 = _touch(images_dir / "page-01.png")
+    child_drawing_2 = _touch(images_dir / "page-12.png")
+    # AI cover retry leftover — real orphan.
+    ai_cover_orphan = _touch(images_dir / "cover-abcdef0123.png")
+    # AI page illustration retry leftover — these dominate the
+    # accumulation problem (8 pages x 3 retries ≈ 24 images per book).
+    # ``generate_page_illustration`` writes ``page-{n}-{10hex}.png``.
+    ai_page_orphan = _touch(images_dir / "page-1-9999999999.png")
+    ai_page_orphan_two_digits = _touch(images_dir / "page-15-0000000000.png")
+    # User-dropped custom asset — also preserved.
     custom = _touch(images_dir / "my-reference.png")
     draft = Draft(source_pdf=tmp_path / "draft.pdf")
 
-    result = orphaned_images(images_dir, draft)
+    result = sorted(orphaned_images(images_dir, draft))
 
-    assert child_drawing.exists()
+    assert child_drawing_1.exists()
+    assert child_drawing_2.exists()
     assert custom.exists()
-    assert result == [ai_orphan]
+    assert result == sorted([
+        ai_cover_orphan,
+        ai_page_orphan,
+        ai_page_orphan_two_digits,
+    ])
 
 
 def test_excess_snapshots_keeps_top_n_by_version(tmp_path):
@@ -170,7 +182,7 @@ def test_prune_removes_orphans_and_old_snapshots_reports_bytes(tmp_path):
 
     cover = _touch(images / "cover-aaaaaaaaaa.png", size=100)
     orphan1 = _touch(images / "cover-bbbbbbbbbb.png", size=50)
-    orphan2 = _touch(images / "page-cccccccccc.png", size=25)
+    orphan2 = _touch(images / "page-3-cccccccccc.png", size=25)
     # Stable pointer — must survive.
     stable = _touch(out / "story.pdf", size=1000)
     # Snapshots — v3 is newest, v1 goes.
