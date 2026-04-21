@@ -280,3 +280,62 @@ def test_resolve_helper_falls_back_when_resolve_raises(monkeypatch):
     out = memory_mod._resolve(Path("something.pdf"))
     # Didn't raise, returned some Path.
     assert isinstance(out, Path)
+
+
+def test_hidden_flag_round_trips_through_draft_json(tmp_path):
+    from src.draft import Draft, DraftPage
+    from src.memory import save_draft, load_draft
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    draft = Draft(
+        source_pdf=root / "input.pdf",
+        title="Story",
+        pages=[
+            DraftPage(text="visible"),
+            DraftPage(text="skipped", hidden=True),
+        ],
+    )
+
+    save_draft(root, draft)
+    loaded = load_draft(root, expected_source=root / "input.pdf")
+
+    assert loaded is not None
+    assert [p.hidden for p in loaded.pages] == [False, True]
+
+
+def test_v1_draft_json_loads_as_all_visible(tmp_path):
+    """Old .book-gen/draft.json files predate the hidden field. The
+    loader must treat a missing 'hidden' key as False rather than
+    refusing the file, so existing projects keep working after the
+    schema bump."""
+    import json
+    from src.memory import load_draft
+
+    root = tmp_path / "proj"
+    (root / ".book-gen").mkdir(parents=True)
+    pdf = root / "input.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    (root / ".book-gen" / "draft.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "source_pdf": str(pdf),
+                "title": "Legacy",
+                "author": "",
+                "cover_image": None,
+                "cover_subtitle": "",
+                "cover_style": "full-bleed",
+                "back_cover_text": "",
+                "pages": [
+                    {"text": "p1", "image": None, "layout": "text-only"},
+                    {"text": "p2", "image": None, "layout": "text-only"},
+                ],
+            }
+        )
+    )
+
+    draft = load_draft(root, expected_source=pdf)
+
+    assert draft is not None
+    assert all(not p.hidden for p in draft.pages)

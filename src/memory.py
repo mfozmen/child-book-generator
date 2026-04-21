@@ -42,7 +42,8 @@ MEMORY_DIR = ".book-gen"
 MEMORY_FILE = "draft.json"
 TMP_PREFIX = ".draft."
 TMP_SUFFIX = ".tmp"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+_ACCEPTED_VERSIONS = {1, 2}
 
 
 def path(root: Path) -> Path:
@@ -99,7 +100,7 @@ def load_draft(
         return None
     if not isinstance(data, dict):
         return None
-    if data.get("version", SCHEMA_VERSION) != SCHEMA_VERSION:
+    if data.get("version", SCHEMA_VERSION) not in _ACCEPTED_VERSIONS:
         # Unknown future shape — don't risk applying stale fields with
         # new meanings. The user gets a fresh ingest.
         return None
@@ -139,6 +140,7 @@ def _to_dict(draft: Draft) -> dict:
                 "text": p.text,
                 "image": str(_resolve(p.image)) if p.image else None,
                 "layout": p.layout,
+                "hidden": p.hidden,
             }
             for p in draft.pages
         ],
@@ -151,6 +153,7 @@ def _from_dict(data: dict) -> Draft:
             text=p.get("text", ""),
             image=Path(p["image"]) if p.get("image") else None,
             layout=p.get("layout", "image-top"),
+            hidden=bool(p.get("hidden", False)),
         )
         for p in data.get("pages", [])
     ]
