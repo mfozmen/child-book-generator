@@ -2225,14 +2225,17 @@ def test_hide_page_handles_missing_or_bad_input_gracefully(tmp_path):
     assert "page" in result_bad.lower() or "integer" in result_bad.lower()
 
 
-def test_read_draft_description_names_the_skip_page_tool(tmp_path):
-    """PR #48 review #7 — the canonical flow after a blank sentinel
-    is to call ``skip_page``. The description must name it so an
-    agent that only reads the description finds the right tool."""
+def test_read_draft_description_names_the_hide_page_tool(tmp_path):
+    """PR #48 review #7 (updated by PR #60 #1) — after a blank sentinel
+    the page is auto-hidden via ``hide_page`` (the tool was renamed from
+    ``skip_page``). The description must name ``hide_page`` so an agent
+    that only reads the description finds the right tool; ``skip_page``
+    must NOT appear (it no longer exists)."""
     tool = read_draft_tool(get_draft=lambda: None)
 
     desc = tool.description.lower()
-    assert "skip_page" in desc
+    assert "hide_page" in desc
+    assert "skip_page" not in desc
 
 
 def test_hide_page_does_not_take_confirm():
@@ -3547,3 +3550,150 @@ def test_transcribe_page_tolerates_leading_blank_lines_for_blank_and_mixed(tmp_p
     assert mixed_draft.pages[0].text == "Küçük dinozor"
     assert mixed_draft.pages[0].image == img
     assert mixed_draft.pages[0].layout == "image-top"
+
+
+# ---------------------------------------------------------------------------
+# PR #60 review-findings regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_read_draft_description_does_not_mention_old_skip_page_or_confirm():
+    """Regression for PR #60 #1: tool description must not route the
+    agent to the renamed skip_page or the removed confirm flow."""
+    draft = Draft(source_pdf=Path("."))
+    tool = read_draft_tool(get_draft=lambda: draft)
+    desc = tool.description.lower()
+    assert "skip_page" not in desc
+    assert "confirm with the user" not in desc
+
+
+def test_image_only_note_does_not_mandate_user_confirm():
+    """Regression for PR #60 #2: the image-only advisory note must
+    reflect auto-apply, not the old 'always confirm' gate."""
+    from src.agent_tools import _build_image_only_note
+
+    note = _build_image_only_note([1, 2]).lower()
+    assert "always confirm" not in note
+    assert "confirm the transcription with the user" not in note
+
+
+def test_restore_page_finds_jpg_extracted_drawing(tmp_path):
+    """Regression for PR #60 #3: pdf_ingest writes .jpg for JPEG-embedded
+    PDFs (Samsung Notes). restore_page must re-attach them by extension-
+    agnostic lookup."""
+    from PIL import Image
+    from src.agent_tools import restore_page_tool
+
+    images = tmp_path / ".book-gen" / "images"
+    images.mkdir(parents=True)
+    original_jpg = images / "page-01.jpg"
+    Image.new("RGB", (40, 40), (10, 20, 30)).save(original_jpg, "JPEG")
+
+    draft = Draft(
+        source_pdf=tmp_path / "draft.pdf",
+        pages=[DraftPage(text="edited", image=None, layout="text-only", hidden=True)],
+    )
+    tool = restore_page_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+    )
+
+    tool.handler({"page": 1})
+
+    assert draft.pages[0].hidden is False
+    assert draft.pages[0].image == original_jpg
+
+
+def test_restore_page_prefers_png_when_both_exist(tmp_path):
+    """Determinism: when both .png and .jpg exist for the same page,
+    prefer .png."""
+    from PIL import Image
+    from src.agent_tools import restore_page_tool
+
+    images = tmp_path / ".book-gen" / "images"
+    images.mkdir(parents=True)
+    png = images / "page-01.png"
+    jpg = images / "page-01.jpg"
+    Image.new("RGB", (40, 40), "red").save(png)
+    Image.new("RGB", (40, 40), "blue").save(jpg, "JPEG")
+
+    draft = Draft(
+        source_pdf=tmp_path / "draft.pdf",
+        pages=[DraftPage(text="p1", image=None, hidden=True)],
+    )
+    tool = restore_page_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+    )
+
+    tool.handler({"page": 1})
+
+    assert draft.pages[0].image == png
+
+
+def test_transcribe_page_unknown_sentinel_fallback_preserves_image_and_layout(tmp_path):
+    """Regression for PR #60 #5: when the vision reply doesn't lead
+    with a known sentinel, write text best-effort but DO NOT touch
+    page.image or page.layout."""
+
+    class _FakeLLM:
+        def chat(self, *_a, **_kw):
+            return "Sure, here is the text from the page: Bir gün..."
+
+    img = _tiny_png(tmp_path / "p.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        pages=[DraftPage(text="", image=img, layout="image-top")],
+    )
+    tool = transcribe_page_tool(get_draft=lambda: draft, get_llm=lambda: _FakeLLM())
+
+    result = tool.handler({"page": 1})
+
+    assert "warning" in result.lower()
+    # Image and layout must survive — the fallback does not destroy them.
+    assert draft.pages[0].image == img
+    assert draft.pages[0].layout == "image-top"
+
+
+def test_apply_text_correction_auto_unhides_hidden_page(tmp_path):
+    """Regression for PR #60 #7: if the user issues 'page N text: ...'
+    on a currently-hidden page they almost certainly mean 'bring it
+    back with this text'. Auto-unhide and flag it in the reply so the
+    action is visible."""
+    from src.agent_tools import apply_text_correction_tool
+
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        pages=[DraftPage(text="old", hidden=True)],
+    )
+    tool = apply_text_correction_tool(get_draft=lambda: draft)
+
+    result = tool.handler({"page": 1, "text": "NEW"})
+
+    assert draft.pages[0].text == "NEW"
+    assert draft.pages[0].hidden is False
+    assert "unhid" in result.lower() or "visible" in result.lower()
+
+
+def test_read_draft_marks_hidden_pages(tmp_path):
+    """Regression for PR #60 #8: read_draft output must surface the
+    hidden flag so the agent can see that a page won't render."""
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        title="T",
+        pages=[
+            DraftPage(text="p1"),
+            DraftPage(text="p2", hidden=True),
+            DraftPage(text="p3"),
+        ],
+    )
+    tool = read_draft_tool(get_draft=lambda: draft)
+
+    out = tool.handler({})
+
+    # Line for page 2 carries the [hidden] marker; lines for page 1 / 3 do not.
+    lines = out.splitlines()
+    page2_line = next(l for l in lines if l.strip().startswith("Page 2"))
+    assert "[hidden]" in page2_line
+    page1_line = next(l for l in lines if l.strip().startswith("Page 1"))
+    assert "[hidden]" not in page1_line

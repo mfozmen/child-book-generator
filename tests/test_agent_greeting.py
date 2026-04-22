@@ -160,8 +160,9 @@ def test_greeting_drives_auto_ingest_then_review_turn():
     assert "render" in g and ("issues" in g or "review" in g)
     # Page-number-first ask.
     assert "page number" in g or "which pages" in g or "page numbers" in g
-    # Exit tokens — at least 4 present.
-    tokens = ("none", "yok", "ok", "ship", "done", "tamam")
+    # Exit tokens — at least 4 English tokens present (Turkish tokens
+    # were removed per PR #60 #4 to comply with CLAUDE.md English-only rule).
+    tokens = ("none", "ok", "ship", "done")
     found = sum(1 for t in tokens if t in g)
     assert found >= 4, (
         f"expected at least 4 of {tokens} in greeting, found {found}"
@@ -204,3 +205,34 @@ def test_greeting_no_longer_references_keep_image_flag():
     from src.repl import _AGENT_GREETING_HINT
 
     assert "keep_image" not in _AGENT_GREETING_HINT
+
+
+# ---------------------------------------------------------------------------
+# PR #60 review-findings regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_greeting_does_not_contain_turkish_tokens():
+    """Regression for PR #60 #4: per CLAUDE.md, nothing Turkish in the
+    repo outside test fixtures. The greeting is an agent system prompt,
+    not a fixture. Exit-token recognition must be language-neutral
+    (agent infers intent), not a hard-coded Turkish literal."""
+    from src.repl import _AGENT_GREETING_HINT
+
+    # Case-insensitive word-ish check.
+    lower = _AGENT_GREETING_HINT.lower()
+    forbidden_tr = (" yok", "yok ", "'yok'", '"yok"', "``yok``", "tamam")
+    for tok in forbidden_tr:
+        assert tok not in lower, f"Turkish token {tok!r} leaked into greeting"
+
+
+def test_greeting_instructs_language_neutral_exit_recognition():
+    """The greeting must tell the agent to recognise intent in
+    whatever language the user types, not match English tokens
+    verbatim. Regression for the fix to #4."""
+    from src.repl import _AGENT_GREETING_HINT
+
+    g = _AGENT_GREETING_HINT.lower()
+    # The instruction names intent-recognition rather than a fixed
+    # multilingual token list.
+    assert "language" in g or "any language" in g or "intent" in g

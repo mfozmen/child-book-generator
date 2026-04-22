@@ -304,6 +304,36 @@ def test_hidden_flag_round_trips_through_draft_json(tmp_path):
     assert [p.hidden for p in loaded.pages] == [False, True]
 
 
+def test_load_rejects_draft_json_with_missing_version(tmp_path):
+    """Regression for PR #60 #9: a JSON without a ``version`` key must
+    not be silently treated as the current schema. Missing version →
+    loader returns None (fresh ingest)."""
+    import json
+    from src.memory import load_draft
+
+    root = tmp_path / "proj"
+    (root / ".book-gen").mkdir(parents=True)
+    pdf = root / "input.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    (root / ".book-gen" / "draft.json").write_text(
+        json.dumps(
+            {
+                # no "version" key
+                "source_pdf": str(pdf),
+                "title": "X",
+                "author": "",
+                "cover_image": None,
+                "cover_subtitle": "",
+                "cover_style": "full-bleed",
+                "back_cover_text": "",
+                "pages": [],
+            }
+        )
+    )
+
+    assert load_draft(root, expected_source=pdf) is None
+
+
 def test_v1_draft_json_loads_as_all_visible(tmp_path):
     """Old .book-gen/draft.json files predate the hidden field. The
     loader must treat a missing 'hidden' key as False rather than

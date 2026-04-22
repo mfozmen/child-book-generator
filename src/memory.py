@@ -100,9 +100,10 @@ def load_draft(
         return None
     if not isinstance(data, dict):
         return None
-    if data.get("version", SCHEMA_VERSION) not in _ACCEPTED_VERSIONS:
-        # Unknown future shape — don't risk applying stale fields with
-        # new meanings. The user gets a fresh ingest.
+    version = data.get("version")
+    if version not in _ACCEPTED_VERSIONS:
+        # Unknown future shape OR missing version — don't risk applying
+        # stale fields with new meanings. The user gets a fresh ingest.
         return None
     try:
         draft = _from_dict(data)

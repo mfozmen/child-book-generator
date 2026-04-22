@@ -96,9 +96,6 @@ _CHILD_VOICE_FIELDS = {"cover_subtitle", "back_cover_text"}
 # "Typo" caps — anything beyond a short phrase is a story edit in disguise.
 _MAX_TYPO_CHARS = 30
 _MAX_TYPO_WORDS = 3
-# How many characters of surrounding page text to show in the y/n prompt
-# so the user sees what they're actually approving (not just a→b).
-_TYPO_CONTEXT_CHARS = 25
 
 # Message fragments surfaced back to the agent. Centralised so multiple
 # tools speak with one voice (and Sonar doesn't flag duplicated literals).
@@ -146,23 +143,6 @@ def _find_typo_match(text: str, before: str) -> re.Match[str] | None:
     return re.search(pattern, text)
 
 
-def _build_typo_prompt(
-    text: str, match: re.Match[str], page_n: int, before: str, after: str, reason: str
-) -> str:
-    """Render the y/n prompt with ±_TYPO_CONTEXT_CHARS of surrounding
-    page text so the user sees what they're actually approving."""
-    start = max(0, match.start() - _TYPO_CONTEXT_CHARS)
-    end = min(len(text), match.end() + _TYPO_CONTEXT_CHARS)
-    context = text[start:end].replace("\n", " ")
-    prefix = "…" if start > 0 else ""
-    suffix = "…" if end < len(text) else ""
-    reason_tag = f" ({reason})" if reason else ""
-    return (
-        f"Page {page_n}: fix '{before}' → '{after}'{reason_tag} "
-        f"in: {prefix}{context}{suffix}"
-    )
-
-
 def read_draft_tool(get_draft: Callable[[], Draft | None]) -> Tool:
     """Tool: summarise the loaded PDF draft for the agent.
 
@@ -206,9 +186,10 @@ def read_draft_tool(get_draft: Callable[[], Draft | None]) -> Tool:
             "provider now); if the active model doesn't support vision, "
             "``transcribe_page`` surfaces a clean failure and the user "
             "can transcribe manually. When ``transcribe_page`` reports a "
-            "page looks blank (the ``<BLANK>`` sentinel branch), confirm "
-            "with the user and call ``skip_page`` to drop it from the "
-            "draft so it doesn't render as an empty spread. Never invent "
+            "page looks blank (the ``<BLANK>`` sentinel branch), the page "
+            "is auto-hidden (``hide_page``) so it doesn't render as an "
+            "empty spread — the user catches a wrongly-hidden page in the "
+            "post-render review turn via ``restore_page``. Never invent "
             "or paraphrase the child's words. Call this at the start of "
             "a session to see what you're working with."
         ),
@@ -246,10 +227,11 @@ def _read_draft_page_lines(draft: Draft) -> tuple[list[str], list[int]]:
         text = page.text.strip().replace("\n", " ")
         image_only = page.image is not None and not text
         tag = " [image-only]" if image_only else ""
+        hidden_tag = " [hidden]" if page.hidden else ""
         if image_only:
             image_only_pages.append(i)
         page_lines.append(
-            f"  Page {i} ({marker}, layout={page.layout}):{tag} {text}"
+            f"  Page {i} ({marker}, layout={page.layout}){hidden_tag}:{tag} {text}"
         )
     return page_lines, image_only_pages
 
@@ -266,8 +248,10 @@ def _build_image_only_note(image_only_pages: list[int]) -> str:
         "Use the ``transcribe_page`` tool to OCR each flagged "
         "page via the active LLM's vision capability (Claude 3+, "
         "GPT-4o, Gemini 1.5+), or ask the user to transcribe "
-        "manually. Always confirm the transcription with the "
-        "user before moving on. Do not invent, paraphrase, or "
+        "manually. The ``transcribe_page`` tool auto-applies the "
+        "OCR result; the user audits the rendered PDF later and "
+        "can correct specific pages via ``apply_text_correction`` "
+        "in the review turn. Do not invent, paraphrase, or "
         "'guess' the child's words — preserve-child-voice."
     )
 
@@ -402,7 +386,14 @@ def apply_text_correction_tool(get_draft: Callable[[], Draft | None]) -> Tool:
                 f"Page {page_n} is out of range — the draft has "
                 f"{len(draft.pages)} pages."
             )
-        draft.pages[page_n - 1].text = text
+        page = draft.pages[page_n - 1]
+        page.text = text
+        if page.hidden:
+            page.hidden = False
+            return (
+                f"Page {page_n} text updated (verbatim, {len(text)} chars) "
+                f"and unhidden — page is now visible in the rendered PDF."
+            )
         return f"Page {page_n} text updated (verbatim, {len(text)} chars)."
 
     return Tool(
@@ -452,18 +443,25 @@ def restore_page_tool(
             )
         page = draft.pages[page_n - 1]
         page.hidden = False
-        original = (
-            Path(get_session_root())
-            / _BOOK_GEN_DIR
-            / "images"
-            / f"page-{page_n:02d}.png"
+        images_dir = Path(get_session_root()) / _BOOK_GEN_DIR / "images"
+        stem = f"page-{page_n:02d}"
+        candidates = sorted(
+            p
+            for p in images_dir.glob(f"{stem}.*")
+            if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg"}
         )
-        if original.is_file():
+        # Prefer PNG if the same page has multiple extensions on disk
+        # (deterministic — png is lossless, so keep it when present).
+        original = next(
+            (p for p in candidates if p.suffix.lower() == ".png"),
+            candidates[0] if candidates else None,
+        )
+        if original is not None:
             page.image = original
             return f"Page {page_n} restored (image re-attached, unhidden)."
         return (
             f"Page {page_n} unhidden (no original image found at "
-            f"{original.name})."
+            f"{images_dir / stem}.*)"
         )
 
     return Tool(
@@ -614,53 +612,6 @@ def _parse_skip_page_input(input_: dict, draft: Draft) -> tuple[int | None, str 
             f"{len(draft.pages)} pages."
         )
     return page_n, None
-
-
-def _build_skip_page_prompt(page_n: int, draft: Draft) -> str:
-    """Compose the destructive-action confirm prompt. Each line has
-    a single job: the drawing warning names the destruction risk
-    explicitly when the page has an image; the preview surfaces
-    whatever text is there; the renumber line only appears when
-    there actually are pages to renumber."""
-    page = draft.pages[page_n - 1]
-    return (
-        f"Remove page {page_n} from the draft?\n"
-        f"{_skip_drawing_line(page.image)}\n"
-        f"  {_skip_preview_line(page.text)}\n"
-        f"{_skip_renumber_line(page_n, len(draft.pages))}"
-        "Approve the removal?"
-    )
-
-
-def _skip_preview_line(text: str) -> str:
-    preview = (text or "").strip()[:80].replace("\n", " ")
-    if not preview:
-        return "(empty — no extractable text)"
-    return f"text preview: {preview!r}"
-
-
-def _skip_drawing_line(image) -> str:
-    """Drawing warning is deliberately loud when the page has an
-    image — the status-flag version of this line was easy to
-    mis-read (PR #48 review #5)."""
-    if image is None:
-        return "  drawing: none"
-    return (
-        "  drawing: YES — the drawing on this page will also be "
-        "lost; removal is permanent (reload the PDF to restore the "
-        "image reference)"
-    )
-
-
-def _skip_renumber_line(page_n: int, total: int) -> str:
-    """No renumber claim when the target is the last page — naming
-    a page that doesn't exist reads as a bug."""
-    if page_n >= total:
-        return ""
-    return (
-        f"Remaining pages will renumber — page {page_n + 1} "
-        f"becomes page {page_n}.\n"
-    )
 
 
 def transcribe_page_tool(
@@ -1047,15 +998,17 @@ def _apply_sentinel_result(page, reply: str, page_n: int, method: str) -> str:
             f"Preview: {preview!r}."
         )
 
-    # No recognised sentinel — model misbehaved. Treat whole reply as
-    # text-only (best-effort), surface a warning in the return string.
+    # No recognised sentinel — model misbehaved. Write the raw reply
+    # as page.text (best-effort) but DO NOT touch page.image or
+    # page.layout — a non-destructive fallback preserves the child's
+    # drawing until the user audits the render and corrects via
+    # apply_text_correction / restore_page in the review turn.
     page.text = reply
-    page.image = None
-    page.layout = "text-only"
     preview = reply[:80].replace("\n", " ")
     return (
         f"(warning: model didn't use a sentinel) page {page_n} "
-        f"transcribed as text-only ({len(reply)} chars). "
+        f"text written ({len(reply)} chars); image and layout "
+        f"unchanged — user should review in rendered PDF. "
         f"Preview: {preview!r}."
     )
 
@@ -1868,19 +1821,6 @@ def _reject_layout_batch(draft: Draft, items: list[dict]) -> str | None:
                 "Can't apply image-* layouts to an imageless page."
             )
     return None
-
-
-def _build_layout_prompt(items: list[dict]) -> str:
-    """Render a table-ish summary of the proposed rhythm for the y/n
-    prompt — the user sees every page and the reason for the choice."""
-    rows = ["Proposed layouts:"]
-    for item in sorted(items, key=lambda d: int(d["page"])):
-        page_n = int(item["page"])
-        layout = str(item["layout"])
-        reason = str(item.get("reason", ""))
-        rows.append(f"  Page {page_n}: {layout} — {reason}")
-    rows.append("Approve this rhythm?")
-    return "\n".join(rows)
 
 
 def render_book_tool(
