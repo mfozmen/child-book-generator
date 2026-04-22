@@ -101,6 +101,14 @@ _MAX_TYPO_WORDS = 3
 # tools speak with one voice (and Sonar doesn't flag duplicated literals).
 _MSG_NO_DRAFT = "No draft loaded. Ask the user to provide a PDF first."
 _BOOK_GEN_DIR = ".book-gen"
+# Extensions pdf_ingest._extension_for may emit. Broader than just the
+# common PNG/JPG pair so a PDF embedding WebP/GIF/TIFF/BMP (rare but
+# legal) still round-trips through restore_page; narrow enough that an
+# accidental stray ``.txt`` / ``.json`` in ``.book-gen/images/`` is not
+# attached as a page image and later crashed by the renderer.
+_PIL_IMAGE_EXTS = frozenset(
+    {".png", ".jpg", ".jpeg", ".webp", ".gif", ".tiff", ".tif", ".bmp"}
+)
 _MSG_UNSET = "(unset — ask the user)"
 
 
@@ -462,9 +470,14 @@ def restore_page_tool(
         # Accept any extension pdf_ingest may have written — PNG and
         # JPEG are the common shapes, but ``_extension_for`` returns
         # whatever PIL detected (WebP, GIF, TIFF, BMP on exotic PDFs).
-        # This directory is owned by Littlepress; we trust what's in it.
+        # The allow-list here is the known PIL image formats: it's
+        # permissive enough for every format pdf_ingest can produce,
+        # but still rejects stray non-image files (e.g. an accidental
+        # ``page-01.txt``) that would break the renderer downstream.
         candidates = sorted(
-            p for p in images_dir.glob(f"{stem}.*") if p.is_file()
+            p
+            for p in images_dir.glob(f"{stem}.*")
+            if p.is_file() and p.suffix.lower() in _PIL_IMAGE_EXTS
         )
         # Prefer PNG if the same page has multiple extensions on disk
         # (deterministic — png is lossless, so keep it when present).

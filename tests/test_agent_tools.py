@@ -3673,7 +3673,9 @@ def test_restore_page_accepts_exotic_extensions_pdf_ingest_may_write(tmp_path):
 def test_restore_page_description_mentions_multi_extension_support():
     """Regression for PR #60 round-3 #2: description is surfaced to
     the agent; it must not claim a hardcoded ``.png`` when the handler
-    actually globs ``page-NN.*``."""
+    actually globs ``page-NN.*``. Tightened per round-4 #2 — require
+    both the canonical wildcard literal AND a mention of .jpg so a
+    future rewrite can't silently drop either signal."""
     from src.agent_tools import restore_page_tool
 
     tool = restore_page_tool(
@@ -3682,19 +3684,55 @@ def test_restore_page_description_mentions_multi_extension_support():
     )
 
     desc = tool.description
-    assert "page-NN.*" in desc or ".jpg" in desc.lower()
+    assert "page-NN.*" in desc
+    assert ".jpg" in desc.lower()
 
 
 def test_apply_text_correction_description_mentions_auto_unhide():
     """Regression for PR #60 round-3 #3: description is surfaced to
     the agent; the auto-unhide side effect must be named so the agent
-    can describe it correctly to the user."""
+    can describe it correctly to the user. Tightened per round-4 #2
+    — require the canonical ``unhide`` verb so a rewrite that just
+    mentions ``hidden`` without the undo semantics fails the test."""
     from src.agent_tools import apply_text_correction_tool
 
     tool = apply_text_correction_tool(get_draft=lambda: None)
 
     desc = tool.description.lower()
-    assert "unhide" in desc or "hidden" in desc
+    assert "unhide" in desc
+
+
+def test_restore_page_ignores_non_image_strays(tmp_path):
+    """Regression for PR #60 round-4 #1: after broadening the
+    restore_page extension handling to cover WebP/GIF/etc., the
+    handler must still reject stray non-image files that might end up
+    in ``.book-gen/images/`` (e.g. an accidental ``page-01.txt``).
+    Attaching them as ``page.image`` would crash the renderer."""
+    from src.agent_tools import restore_page_tool
+    from src.draft import Draft, DraftPage
+
+    images = tmp_path / ".book-gen" / "images"
+    images.mkdir(parents=True)
+    # Two stray non-image files — no real image alongside.
+    (images / "page-01.txt").write_text("this is not an image")
+    (images / "page-01.json").write_text("{\"not\": \"an image\"}")
+
+    draft = Draft(
+        source_pdf=tmp_path / "draft.pdf",
+        pages=[DraftPage(text="edited", image=None, hidden=True)],
+    )
+    tool = restore_page_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+    )
+
+    result = tool.handler({"page": 1})
+
+    # Unhide still happens (the hide flag is independent of image
+    # recovery), but page.image is NOT attached to a .txt / .json.
+    assert draft.pages[0].hidden is False
+    assert draft.pages[0].image is None
+    assert "no original image" in result.lower()
 
 
 def test_restore_page_prefers_png_when_both_exist(tmp_path):
