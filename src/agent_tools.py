@@ -693,7 +693,6 @@ def _skip_renumber_line(page_n: int, total: int) -> str:
 def transcribe_page_tool(
     get_draft: Callable[[], Draft | None],
     get_llm: Callable[[], object],
-    confirm: Callable[[str], bool],
 ) -> Tool:
     """Tool: use the active LLM's vision capability to transcribe a
     page's image text verbatim into ``draft.pages[n-1].text``.
@@ -702,7 +701,7 @@ def transcribe_page_tool(
     scans) where the embedded text is pixels rather than ``/Font``
     glyphs and ``pypdf.extract_text`` legitimately returns empty.
 
-    Preserve-child-voice is enforced on three axes:
+    Preserve-child-voice is enforced on two axes:
 
     1. **Vision capability required.** Registered on every real
        provider (Anthropic / OpenAI / Google / Ollama), but the
@@ -714,39 +713,29 @@ def transcribe_page_tool(
        now forwards the image content block in its native wire
        format (OpenAI multi-modal content array, Gemini
        ``Part(inline_data=Blob(...))``, Ollama ``images`` list).
-    2. **User confirmation.** The OCR reply is shown to the user
-       *before* landing in ``page.text`` — same y/n pattern as
-       ``propose_typo_fix``. An existing transcription is surfaced
-       in the prompt so the user sees what's being overwritten.
-    3. **Verbatim prompt.** The vision prompt tells the model to
-       output the text exactly as written — no typo fixes, no
-       "polish," no paraphrase.
+    2. **Verbatim three-sentinel prompt.** The vision prompt tells
+       the model to classify the page and output the text exactly
+       as written — no typo fixes, no "polish," no paraphrase.
+       ``<TEXT>`` = pure text page (image cleared, layout →
+       text-only); ``<MIXED>`` = drawing + text (image kept);
+       ``<BLANK>`` = no text (page hidden).
     """
 
     def handler(input_: dict) -> str:
         draft = get_draft()
         if draft is None:
             return _MSG_NO_DRAFT
-        page_n, page, keep_image, error = _parse_transcribe_input(input_, draft)
+        page_n, page, error = _parse_transcribe_input(input_, draft)
         if error is not None:
             return error
         method = str(input_.get("method", "vision"))
         cleaned, error = _run_ocr_engine(method, input_, page, page_n, get_llm)
         if error is not None:
             return error
-        early = _interpret_reply(cleaned, page_n, method)
-        if early is not None:
-            return early
-        prompt_msg = _build_transcribe_confirm_prompt(
-            page_n, page.text, cleaned, keep_image=keep_image
-        )
-        if not confirm(prompt_msg):
-            return (
-                f"User declined the OCR transcription for page {page_n}. "
-                "Draft unchanged. Ask them to transcribe manually, or "
-                "call transcribe_page again after adjusting."
-            )
-        return _apply_transcription(page, cleaned, keep_image, page_n)
+        empty_msg = _check_empty_reply(cleaned, page_n, method)
+        if empty_msg is not None:
+            return empty_msg
+        return _apply_sentinel_result(page, cleaned, page_n, method)
 
     return Tool(
         name="transcribe_page",
@@ -756,24 +745,21 @@ def transcribe_page_tool(
             "the embedded text layer is empty but the image clearly "
             "shows words. Two OCR engines via ``method``: 'vision' "
             "(default) goes through the active LLM's vision "
-            "capability, 'tesseract' goes through a local pytesseract "
-            "install (zero API cost, works offline, strong on typeset "
+            "capability using a three-sentinel classifier; "
+            "'tesseract' goes through a local pytesseract install "
+            "(zero API cost, works offline, strong on typeset "
             "printed text like Turkish matbaa yazısı, noticeably "
             "weaker on handwriting). Prefer 'tesseract' for clean "
             "typed pages and pass ``lang='tur'`` (or 'eng', "
             "'tur+eng', etc., three-letter ISO-639-2/B codes). "
             "Preserve-child-voice: the vision prompt tells the model "
-            "to copy the text verbatim (no typo fixes, no "
-            "paraphrase); Tesseract is a classical OCR engine — it "
-            "will misread characters (diacritics, punctuation) but "
-            "won't rewrite or summarise, and the y/n confirm gate is "
-            "the real preserve-child-voice guard either way. The "
-            "user must approve the OCR reply before it lands in the "
-            "draft — same gate pattern as propose_typo_fix. SIDE "
-            "EFFECT: by default, approving also clears the page's "
-            "source image and switches the layout to ``text-only``. "
-            "Pass ``keep_image=true`` on mixed-content pages where "
-            "the image also carries a drawing you want to keep. "
+            "to copy the text verbatim (no typo fixes, no paraphrase) "
+            "and classify the page into one of three sentinels: "
+            "``<TEXT>`` (pure text — image is cleared, layout → "
+            "text-only to avoid the duplicate-print bug); "
+            "``<MIXED>`` (text + distinct drawing — text written, "
+            "image and layout kept so the child's drawing survives); "
+            "``<BLANK>`` (no text — page hidden). "
             "Vision-method registered on every real provider "
             "(Anthropic / OpenAI / Google / Ollama); a non-vision "
             "model surfaces as a failed chat call. Tesseract method "
@@ -786,22 +772,13 @@ def transcribe_page_tool(
             "type": "object",
             "properties": {
                 "page": {"type": "integer", "minimum": 1},
-                "keep_image": {
-                    "type": "boolean",
-                    "description": (
-                        "Pass true when the page's image carries a "
-                        "drawing the child wants to keep (mixed "
-                        "content). Default false — the image is "
-                        "cleared on OCR accept to avoid the "
-                        "duplicate-print bug."
-                    ),
-                },
                 "method": {
                     "type": "string",
                     "enum": ["vision", "tesseract"],
                     "description": (
                         "OCR engine. Default 'vision' — uses the "
-                        "active LLM's vision capability. 'tesseract' "
+                        "active LLM's vision capability with the "
+                        "three-sentinel classifier. 'tesseract' "
                         "routes through a local pytesseract install "
                         "(zero API cost, offline, strong on typeset "
                         "printed text; handwriting is shakier). "
@@ -828,38 +805,35 @@ def transcribe_page_tool(
 
 def _parse_transcribe_input(
     input_: dict, draft: Draft
-) -> tuple[int | None, object, bool, str | None]:
-    """Validate the 1-indexed page and the mixed-content flag. Returns
-    ``(page_n, page, keep_image, None)`` on success or ``(None, None,
-    False, error)`` when the input is unusable. ``keep_image`` lets
-    the agent signal "this image also carries a drawing — don't
-    auto-clear it on accept" (default False = Samsung-Notes case)."""
+) -> tuple[int | None, object, str | None]:
+    """Validate the 1-indexed page number. Returns ``(page_n, page,
+    None)`` on success or ``(None, None, error)`` when the input is
+    unusable."""
     raw = input_.get("page")
     if raw is None:
-        return None, None, False, (
+        return None, None, (
             "Rejected: 'page' is required — which page should be "
             "transcribed?"
         )
     try:
         page_n = int(raw)
     except (TypeError, ValueError):
-        return None, None, False, (
+        return None, None, (
             f"Rejected: 'page' must be an integer; got {raw!r}. "
             "Pass the 1-indexed page number."
         )
     if page_n < 1 or page_n > len(draft.pages):
-        return None, None, False, (
+        return None, None, (
             f"Page {page_n} is out of range — the draft has "
             f"{len(draft.pages)} pages."
         )
     page = draft.pages[page_n - 1]
     if page.image is None:
-        return None, None, False, (
+        return None, None, (
             f"Page {page_n} has no image to transcribe — nothing to "
             "OCR."
         )
-    keep_image = bool(input_.get("keep_image", False))
-    return page_n, page, keep_image, None
+    return page_n, page, None
 
 
 def _call_vision_for_transcription(
@@ -1004,14 +978,12 @@ def _call_tesseract_for_transcription(
     return str(reply).strip(), None
 
 
-def _interpret_reply(cleaned: str, page_n: int, method: str) -> str | None:
-    """Early-return message for the two non-transcription replies:
-    an empty string (safety filter / OCR failure) and the
-    ``<BLANK>`` sentinel (truly blank page, vision-only). Returns
-    ``None`` when the reply is a real transcription the handler
-    should forward to the confirm gate. The empty-reply wording
-    branches on ``method`` — Tesseract failures are not safety
-    filters, and the retry advice is different."""
+def _check_empty_reply(cleaned: str, page_n: int, method: str) -> str | None:
+    """Early-return message when the OCR engine returns nothing at all
+    (empty string after stripping). Returns ``None`` when the reply
+    has content and should be forwarded to the sentinel parser.
+    The empty-reply wording branches on ``method`` — Tesseract
+    failures are not safety filters, and the retry advice differs."""
     if not cleaned:
         if method == "tesseract":
             return (
@@ -1028,40 +1000,82 @@ def _interpret_reply(cleaned: str, page_n: int, method: str) -> str | None:
             "vision-unsupported model). Draft left unchanged; "
             "ask the user to transcribe manually."
         )
-    if _is_blank_sentinel_reply(cleaned):
-        return (
-            f"Page {page_n} looks blank to the vision model "
-            "(no transcribable text on the image). Draft left "
-            "unchanged — ask the user whether this page was meant "
-            "to be empty (e.g. a trailing blank from the export) "
-            "or whether they want to skip it / mark it as the "
-            "back cover."
-        )
     return None
 
 
-def _apply_transcription(
-    page, cleaned: str, keep_image: bool, page_n: int
-) -> str:
-    """Write the approved transcription into the draft. The default
-    Samsung-Notes path also clears ``page.image`` + switches to
-    ``text-only`` layout; the ``keep_image=True`` path leaves the
-    image alone so a drawing on a mixed-content page isn't
-    destroyed."""
-    page.text = cleaned
-    preview = cleaned[:80].replace("\n", " ")
-    if keep_image:
+def _extract_sentinel(reply: str) -> tuple[str, str]:
+    """Parse the model's reply into ``(sentinel, body)``.
+
+    The first non-empty line is normalised (whitespace + backtick/quote
+    stripped) and matched against the three known sentinels. ``body``
+    is everything after the first newline, ``.strip()``-ed.
+
+    Returns ``("", body)`` when no recognised sentinel is on the first
+    line (model misbehaved — caller uses fallback behaviour)."""
+    lines = reply.split("\n", 1)
+    raw_first = lines[0].strip().strip("`'\"").strip()
+    body = lines[1].strip() if len(lines) > 1 else ""
+    if raw_first in (_BLANK_SENTINEL, _TEXT_SENTINEL, _MIXED_SENTINEL):
+        return raw_first, body
+    return "", reply.strip()
+
+
+def _apply_sentinel_result(page, reply: str, page_n: int, method: str) -> str:
+    """Parse the OCR reply and apply the appropriate action based on
+    which sentinel the model used (or the fallback when it didn't).
+
+    Vision replies use three-sentinel classification.
+    Tesseract returns raw text — treated the same as ``<TEXT>``
+    (clear image, set text-only) since Tesseract doesn't produce
+    drawings alongside text."""
+    if method == "tesseract":
+        # Tesseract raw text: apply as TEXT sentinel behaviour.
+        page.text = reply
+        page.image = None
+        page.layout = "text-only"
+        preview = reply[:80].replace("\n", " ")
         return (
-            f"Page {page_n} transcribed and applied ({len(cleaned)} "
-            f"chars; source image kept — mixed-content page). "
+            f"Page {page_n} transcribed and applied ({len(reply)} "
+            f"chars; source image cleared, layout text-only). "
             f"Preview: {preview!r}."
         )
+
+    sentinel, body = _extract_sentinel(reply)
+
+    if sentinel == _BLANK_SENTINEL:
+        page.hidden = True
+        return f"Page {page_n} is blank — marked hidden."
+
+    if sentinel == _TEXT_SENTINEL:
+        page.text = body
+        page.image = None
+        page.layout = "text-only"
+        preview = body[:80].replace("\n", " ")
+        return (
+            f"Page {page_n} transcribed as pure text ({len(body)} "
+            f"chars; source image cleared, layout text-only). "
+            f"Preview: {preview!r}."
+        )
+
+    if sentinel == _MIXED_SENTINEL:
+        page.text = body
+        preview = body[:80].replace("\n", " ")
+        return (
+            f"Page {page_n} transcribed, drawing preserved "
+            f"({len(body)} chars; image and layout unchanged). "
+            f"Preview: {preview!r}."
+        )
+
+    # No recognised sentinel — model misbehaved. Treat whole reply as
+    # text-only (best-effort), surface a warning in the return string.
+    page.text = reply
     page.image = None
     page.layout = "text-only"
+    preview = reply[:80].replace("\n", " ")
     return (
-        f"Page {page_n} transcribed and applied ({len(cleaned)} "
-        f"chars; source image cleared, layout switched to "
-        f"text-only). Preview: {preview!r}."
+        f"(warning: model didn't use a sentinel) page {page_n} "
+        f"transcribed as text-only ({len(reply)} chars). "
+        f"Preview: {preview!r}."
     )
 
 
@@ -1073,23 +1087,37 @@ def _apply_transcription(
 _TRANSCRIBE_MAX_IMAGE_EDGE = 1568
 
 _TRANSCRIBE_PROMPT = (
-    "Transcribe the text visible in this image EXACTLY as written. A "
-    "child wrote or typed this; preserve every spelling mistake, line "
-    "break, punctuation choice, and capitalisation verbatim. Do NOT "
-    "fix, polish, or improve the wording in any way — "
-    "preserve-child-voice.\n\n"
-    "If the image has NO visible text (a truly blank page), reply "
-    "with exactly <BLANK> on its own — no quotes, no explanation, "
-    "nothing else. Otherwise output ONLY the transcribed text, "
-    "with no preamble, quotes, or commentary."
+    "Classify this image and transcribe any text it contains. "
+    "A child wrote or typed this; preserve every spelling mistake, "
+    "line break, punctuation choice, and capitalisation verbatim. "
+    "Do NOT fix, polish, translate, reorder, or improve the wording "
+    "in any way — preserve-child-voice. Do NOT describe or explain "
+    "any drawing.\n\n"
+    "You MUST reply with exactly ONE of these three sentinels on "
+    "the first line, then (when applicable) the verbatim "
+    "transcription on subsequent lines:\n\n"
+    "<BLANK>\n"
+    "  Use this sentinel alone when the page has no meaningful "
+    "content (truly blank).\n\n"
+    "<TEXT>\n"
+    "  Use this sentinel when the image is pure text (e.g. a "
+    "Samsung Notes screenshot or scanned typed page). Follow it "
+    "with the verbatim transcription.\n\n"
+    "<MIXED>\n"
+    "  Use this sentinel when the image contains a distinct drawing "
+    "alongside text. Follow it with the verbatim transcription of "
+    "the TEXT ONLY — do not describe or mention the drawing.\n\n"
+    "Reply format: sentinel on line 1, transcription on remaining "
+    "lines (or nothing after <BLANK>). No preamble, no quotes, no "
+    "commentary — only the sentinel line and the transcription."
 )
-# The sentinel the prompt asks for when the page carries no text.
+# Sentinels the three-sentinel vision prompt asks for.
 # Language-agnostic: the prompt applies equally to Turkish, English,
-# or any other script, and all compliant replies collapse to this
-# one token. A hedged real transcription ("I cannot make out the
-# last line, but the rest reads: '…'") never collides with this
-# check, so it reaches the confirm gate intact.
+# or any other script, and all compliant replies collapse to one of
+# these three tokens.
 _BLANK_SENTINEL = "<BLANK>"
+_TEXT_SENTINEL = "<TEXT>"
+_MIXED_SENTINEL = "<MIXED>"
 
 
 def _build_image_block(image_path: Path) -> dict:
@@ -1134,61 +1162,23 @@ def _build_image_block(image_path: Path) -> dict:
     }
 
 
-def _is_blank_sentinel_reply(reply: str) -> bool:
-    """Return True when the LLM's reply is the ``<BLANK>`` sentinel
-    (possibly wrapped in whitespace, quotes, or backticks) that the
-    prompt asks for on empty pages.
+def _is_sentinel_reply(reply: str, sentinel: str) -> bool:
+    """Return True when the LLM's reply is exactly ``sentinel``
+    (possibly wrapped in whitespace, quotes, or backticks).
 
     Exact comparison after stripping wrapping, so a story that
-    happens to contain ``<BLANK>`` as a substring inside a longer
-    sentence still transcribes through to the confirm gate. The
-    confirm gate remains the last line of defence for prose-style
-    meta-responses the model emits when it ignores the sentinel
-    instruction."""
+    happens to contain a sentinel substring inside a longer sentence
+    still passes through to the normal path. Works on all three
+    sentinels: ``<BLANK>``, ``<TEXT>``, ``<MIXED>``."""
     core = reply.strip().strip("`'\"").strip()
-    return core == _BLANK_SENTINEL
+    return core == sentinel
 
 
-def _build_transcribe_confirm_prompt(
-    page_n: int, existing_text: str, new_text: str, *, keep_image: bool
-) -> str:
-    """Compose the y/n prompt shown to the user. The footer names the
-    exact consequences of approval — either we're keeping the image
-    (mixed-content page) or we're clearing it (default, Samsung-Notes
-    case). The drawing-destruction warning on the default path is
-    deliberately explicit: the child's drawing on this page will
-    ALSO be lost."""
-    if keep_image:
-        footer = (
-            "Approving writes the OCR text into the page. The source "
-            "image (and any drawing on this page) stays in place — "
-            "this is the ``keep_image=True`` branch, use it only when "
-            "the page image carries a drawing the child wants to keep."
-        )
-    else:
-        footer = (
-            "Approving also removes the source image on this page and "
-            "switches its layout to text-only. Any drawing on this "
-            "page will also be lost — the image is cleared from the "
-            "draft. Use this default branch only when the page image "
-            "is a text screenshot (Samsung Notes / phone-scan export). "
-            "For pages with a separate drawing you want to keep, call "
-            "this tool with ``keep_image=true`` instead."
-        )
-    if existing_text.strip():
-        return (
-            f"Replace the existing text on page {page_n}?\n"
-            f"  Existing (user-typed):\n    {existing_text!r}\n"
-            f"  New (OCR):\n    {new_text!r}\n"
-            f"{footer}\n"
-            "Approve the overwrite?"
-        )
-    return (
-        f"Apply this OCR transcription to page {page_n}?\n"
-        f"  {new_text!r}\n"
-        f"{footer}\n"
-        "Approve?"
-    )
+# Backward-compat alias kept for any code that referenced the old name.
+def _is_blank_sentinel_reply(reply: str) -> bool:
+    """Return True when the LLM's reply is the ``<BLANK>`` sentinel.
+    Delegates to the generalised ``_is_sentinel_reply`` helper."""
+    return _is_sentinel_reply(reply, _BLANK_SENTINEL)
 
 
 def _validate_cover_inputs(draft, style, page_n_raw) -> str | None:

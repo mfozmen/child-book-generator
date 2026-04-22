@@ -1452,7 +1452,6 @@ def test_transcribe_page_requires_a_loaded_draft(tmp_path):
     tool = transcribe_page_tool(
         get_draft=lambda: None,
         get_llm=lambda: _FakeLLM(),
-        confirm=lambda _p: True,
     )
 
     result = tool.handler({"page": 1})
@@ -1465,7 +1464,6 @@ def test_transcribe_page_rejects_out_of_range_page(tmp_path):
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: _FakeLLM(),
-        confirm=lambda _p: True,
     )
 
     result = tool.handler({"page": 99})
@@ -1485,7 +1483,6 @@ def test_transcribe_page_rejects_page_without_image(tmp_path):
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: _FakeLLM(),
-        confirm=lambda _p: True,
     )
 
     result = tool.handler({"page": 1})
@@ -1499,11 +1496,10 @@ def test_transcribe_page_sends_image_and_preserve_child_voice_prompt(tmp_path):
     — no "polishing," no typo fixes. Preserve-child-voice applies to
     OCR output as strongly as to manual edits."""
     draft = _image_only_draft(tmp_path)
-    llm = _FakeLLM(reply="once upon a time")
+    llm = _FakeLLM(reply="<TEXT>\nonce upon a time")
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: llm,
-        confirm=lambda _p: True,
     )
 
     tool.handler({"page": 1})
@@ -1531,15 +1527,14 @@ def test_transcribe_page_sends_image_and_preserve_child_voice_prompt(tmp_path):
 
 
 def test_transcribe_page_stores_returned_text_in_draft(tmp_path):
-    """On a successful vision call and a user confirmation the reply
-    lands in ``draft.pages[n-1].text`` so the next ``read_draft``
-    sees it — no second tool call needed."""
+    """On a successful vision call the reply lands in
+    ``draft.pages[n-1].text`` so the next ``read_draft`` sees it —
+    no confirm gate, no second tool call needed."""
     draft = _image_only_draft(tmp_path)
-    llm = _FakeLLM(reply="Bir gün bir yumurta çatlamış")
+    llm = _FakeLLM(reply="<TEXT>\nBir gün bir yumurta çatlamış")
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: llm,
-        confirm=lambda _p: True,
     )
 
     tool.handler({"page": 1})
@@ -1556,7 +1551,6 @@ def test_transcribe_page_does_not_touch_draft_on_llm_error(tmp_path):
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: llm,
-        confirm=lambda _p: True,
     )
 
     result = tool.handler({"page": 1})
@@ -1566,16 +1560,15 @@ def test_transcribe_page_does_not_touch_draft_on_llm_error(tmp_path):
 
 
 def test_transcribe_page_reply_is_stripped_before_storing(tmp_path):
-    """LLM sometimes wraps the reply in whitespace / newlines;
+    """LLM sometimes wraps the transcription in whitespace / newlines;
     leading/trailing whitespace would render as a blank first line on
     the page. Strip only the edges — do NOT collapse interior
     whitespace (line breaks in the child's text are intentional)."""
     draft = _image_only_draft(tmp_path)
-    llm = _FakeLLM(reply="\n\n  line one\nline two  \n\n")
+    llm = _FakeLLM(reply="<TEXT>\n\n  line one\nline two  \n\n")
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: llm,
-        confirm=lambda _p: True,
     )
 
     tool.handler({"page": 1})
@@ -1588,11 +1581,10 @@ def test_transcribe_page_defaults_to_vision_method(tmp_path):
     runs, just like every existing test. Regression pin so the
     Tesseract work doesn't accidentally change the default."""
     draft = _image_only_draft(tmp_path)
-    llm = _FakeLLM(reply="vision said this")
+    llm = _FakeLLM(reply="<TEXT>\nvision said this")
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: llm,
-        confirm=lambda _p: True,
     )
 
     tool.handler({"page": 1})
@@ -1628,7 +1620,6 @@ def test_transcribe_page_method_tesseract_uses_tesseract_not_llm(
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: llm,
-        confirm=lambda _p: True,
     )
 
     tool.handler({"page": 1, "method": "tesseract", "lang": "tur"})
@@ -1664,7 +1655,6 @@ def test_transcribe_page_tesseract_passes_lang_through(tmp_path, monkeypatch):
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: _FakeLLM(),
-        confirm=lambda _p: True,
     )
 
     tool.handler({"page": 1, "method": "tesseract", "lang": "tur+eng"})
@@ -1686,7 +1676,6 @@ def test_transcribe_page_tesseract_missing_library_returns_clean_error(
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: _FakeLLM(),
-        confirm=lambda _p: True,
     )
 
     result = tool.handler({"page": 1, "method": "tesseract"})
@@ -1720,7 +1709,6 @@ def test_transcribe_page_tesseract_empty_reply_surfaces_tesseract_hint(
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: _FakeLLM(),
-        confirm=lambda _p: True,
     )
 
     result = tool.handler({"page": 1, "method": "tesseract"})
@@ -1763,7 +1751,6 @@ def test_transcribe_page_tesseract_empty_reply_does_not_overwrite(
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: _FakeLLM(),
-        confirm=lambda _p: True,
     )
 
     result = tool.handler({"page": 1, "method": "tesseract"})
@@ -1804,7 +1791,6 @@ def test_transcribe_page_tesseract_binary_missing_returns_clean_error(
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: _FakeLLM(),
-        confirm=lambda _p: True,
     )
 
     result = tool.handler({"page": 1, "method": "tesseract"})
@@ -1835,7 +1821,6 @@ def test_transcribe_page_tesseract_rejects_unsafe_lang(tmp_path, monkeypatch):
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: _FakeLLM(),
-        confirm=lambda _p: True,
     )
 
     for bad_lang in ("", "tur,eng", "../foo", "--help", "TUR/ENG", "x" * 50):
@@ -1871,10 +1856,13 @@ def test_transcribe_page_tesseract_accepts_valid_langs(tmp_path, monkeypatch):
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: _FakeLLM(),
-        confirm=lambda _p: False,  # decline so draft stays empty
     )
 
     for good_lang in ("eng", "tur", "tur+eng", "tur+eng+deu"):
+        # Reset image so tool doesn't reject on second call (image cleared
+        # by <TEXT> path after first successful transcription).
+        img = _tiny_png(tmp_path / "p.png")
+        draft.pages[0].image = img
         tool.handler({"page": 1, "method": "tesseract", "lang": good_lang})
 
     assert captured == ["eng", "tur", "tur+eng", "tur+eng+deu"]
@@ -1910,7 +1898,6 @@ def test_transcribe_page_tesseract_unrelated_exception_not_mislabeled_as_binary_
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: _FakeLLM(),
-        confirm=lambda _p: True,
     )
 
     result = tool.handler({"page": 1, "method": "tesseract"})
@@ -1931,7 +1918,6 @@ def test_transcribe_page_schema_advertises_method_and_lang(tmp_path):
     tool = transcribe_page_tool(
         get_draft=lambda: None,
         get_llm=lambda: _FakeLLM(),
-        confirm=lambda _p: True,
     )
 
     props = tool.input_schema["properties"]
@@ -1939,38 +1925,6 @@ def test_transcribe_page_schema_advertises_method_and_lang(tmp_path):
     assert set(props["method"]["enum"]) == {"vision", "tesseract"}
     assert "lang" in props
     assert props["lang"]["type"] == "string"
-
-
-@pytest.mark.parametrize("provider_name", ["anthropic", "openai", "google", "ollama"])
-def test_transcribe_page_gates_on_confirm_regardless_of_provider(
-    tmp_path, provider_name
-):
-    """PR #55 review #3 — regression guard on the Anthropic-only
-    lift: every newly-enabled provider must still route through
-    the ``confirm`` gate before ``page.text`` changes. The gate
-    lives in ``transcribe_page_tool``'s handler, not in any
-    provider-specific code, so this is really a "no provider
-    sneaks past it" pin. Parametrise over the four real providers
-    so a later wire-up mistake would fail on the specific branch."""
-    del provider_name  # Used for the test ID only; the gate is
-    # provider-agnostic inside the handler.
-    draft = _image_only_draft(tmp_path)
-    llm = _FakeLLM(reply="a transcription")
-
-    tool = transcribe_page_tool(
-        get_draft=lambda: draft,
-        get_llm=lambda: llm,
-        confirm=lambda _prompt: False,
-    )
-
-    tool.handler({"page": 1})
-
-    # Declined — draft.pages[0].text untouched.
-    assert draft.pages[0].text == ""
-    # Image untouched, layout untouched (the image-clearing side
-    # effect is also behind the confirm gate).
-    assert draft.pages[0].image is not None
-    assert draft.pages[0].layout == "image-top"
 
 
 def test_transcribe_page_handles_missing_or_bad_input_gracefully(tmp_path):
@@ -1983,7 +1937,6 @@ def test_transcribe_page_handles_missing_or_bad_input_gracefully(tmp_path):
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: _FakeLLM(),
-        confirm=lambda _p: True,
     )
 
     result_missing = tool.handler({})
@@ -2001,101 +1954,10 @@ def test_transcribe_page_schema_requires_only_page_number(tmp_path):
     tool = transcribe_page_tool(
         get_draft=lambda: None,
         get_llm=lambda: _FakeLLM(),
-        confirm=lambda _prompt: True,
     )
 
     assert tool.input_schema["required"] == ["page"]
     assert "page" in tool.input_schema["properties"]
-
-
-def test_transcribe_page_blocks_on_user_confirmation_before_writing(tmp_path):
-    """PR #46 review #2 — OCR is a text-mutating operation on the
-    child's pages, same class as ``propose_typo_fix``. That tool
-    requires y/n before touching the text; ``transcribe_page`` must
-    do the same. Passing ``confirm=lambda _: False`` must leave the
-    draft untouched."""
-    draft = _image_only_draft(tmp_path)
-    llm = _FakeLLM(reply="a transcription the user hasn't seen yet")
-    tool = transcribe_page_tool(
-        get_draft=lambda: draft,
-        get_llm=lambda: llm,
-        confirm=lambda _prompt: False,
-    )
-
-    result = tool.handler({"page": 1})
-
-    # Draft unchanged — the user declined the OCR result.
-    assert draft.pages[0].text == ""
-    # Agent gets a clear signal to fall back (ask the user to type).
-    assert "declined" in result.lower() or "cancel" in result.lower()
-
-
-def test_transcribe_page_confirm_prompt_includes_preview_and_page_number(
-    tmp_path,
-):
-    """The confirmation prompt must show the user exactly what's
-    about to land in ``page.text`` — preview + which page — so the
-    approval is informed, not blind."""
-    draft = _image_only_draft(tmp_path)
-    llm = _FakeLLM(reply="Bir gün bir yumurta çatlamış")
-    seen: list[str] = []
-
-    def _confirm(prompt: str) -> bool:
-        seen.append(prompt)
-        return True
-
-    tool = transcribe_page_tool(
-        get_draft=lambda: draft,
-        get_llm=lambda: llm,
-        confirm=_confirm,
-    )
-
-    tool.handler({"page": 1})
-
-    assert seen, "confirm() must be called before writing page.text"
-    assert "Bir gün bir yumurta çatlamış" in seen[0]
-    assert "page 1" in seen[0].lower() or "page=1" in seen[0].lower()
-
-
-def test_transcribe_page_confirm_prompt_warns_when_overwriting_existing_text(
-    tmp_path,
-):
-    """If the user has already transcribed the page manually (per
-    the NOTE in ``read_draft`` from PR #44), a second OCR pass must
-    show both the existing text and the new OCR output so the user
-    doesn't lose work by accident."""
-    img = _tiny_png(tmp_path / "page-01.png")
-    draft = Draft(
-        source_pdf=tmp_path / "x.pdf",
-        title="Book",
-        author="A",
-        pages=[
-            DraftPage(text="the user's manual transcription", image=img),
-        ],
-    )
-    seen: list[str] = []
-
-    def _confirm(prompt):
-        seen.append(prompt)
-        return False  # decline so draft stays as it was
-
-    tool = transcribe_page_tool(
-        get_draft=lambda: draft,
-        get_llm=lambda: _FakeLLM(reply="OCR guess"),
-        confirm=_confirm,
-    )
-
-    tool.handler({"page": 1})
-
-    prompt = seen[0]
-    assert "the user's manual transcription" in prompt
-    assert "OCR guess" in prompt
-    # Some word that signals this is a replacement, not a fresh fill.
-    assert (
-        "overwrite" in prompt.lower()
-        or "replace" in prompt.lower()
-        or "existing" in prompt.lower()
-    )
 
 
 def test_transcribe_page_empty_reply_does_not_overwrite_draft(tmp_path):
@@ -2114,7 +1976,6 @@ def test_transcribe_page_empty_reply_does_not_overwrite_draft(tmp_path):
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: _FakeLLM(reply=""),
-        confirm=lambda _p: True,
     )
 
     result = tool.handler({"page": 1})
@@ -2147,11 +2008,10 @@ def test_transcribe_page_downscales_oversized_images_before_sending(tmp_path):
         author="A",
         pages=[DraftPage(text="", image=big)],
     )
-    llm = _FakeLLM(reply="owls")
+    llm = _FakeLLM(reply="<TEXT>\nowls")
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: llm,
-        confirm=lambda _p: True,
     )
 
     tool.handler({"page": 1})
@@ -2182,31 +2042,32 @@ def test_transcribe_prompt_asks_for_blank_sentinel_on_empty_pages(tmp_path):
     rest reads: …") never triggers the filter.
 
     Pin the prompt so a future rewrite can't silently drop the
-    sentinel instruction (which would regress the whole filter)."""
+    sentinel instructions (which would regress the three-sentinel filter)."""
     draft = _image_only_draft(tmp_path)
-    llm = _FakeLLM(reply="owls")
+    llm = _FakeLLM(reply="<TEXT>\nowls")
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: llm,
-        confirm=lambda _p: True,
     )
 
     tool.handler({"page": 1})
 
     content = llm.calls[0][0]["content"]
     prompt = next(b["text"] for b in content if b.get("type") == "text")
+    # All three sentinels must appear in the prompt.
     assert "<BLANK>" in prompt
+    assert "<TEXT>" in prompt
+    assert "<MIXED>" in prompt
     # The instruction has to read as a command, not a descriptive
     # mention — "exactly", "reply with", or "on empty pages" are
     # representative.
     lowered = prompt.lower()
-    assert "exactly" in lowered or "reply with" in lowered
+    assert "exactly" in lowered or "reply with" in lowered or "must reply" in lowered
 
 
 def test_transcribe_page_rejects_blank_sentinel_reply(tmp_path):
-    """Primary filter: the prompt asks for the ``<BLANK>`` sentinel
-    on empty pages; when the model complies we leave the draft
-    alone and surface a blank-page signal to the agent."""
+    """Primary filter: ``<BLANK>`` sentinel hides the page and
+    leaves text unchanged."""
     img = _tiny_png(tmp_path / "p.png")
     draft = Draft(
         source_pdf=tmp_path / "x.pdf",
@@ -2217,11 +2078,11 @@ def test_transcribe_page_rejects_blank_sentinel_reply(tmp_path):
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
         get_llm=lambda: _FakeLLM(reply="<BLANK>"),
-        confirm=lambda _p: True,
     )
 
     result = tool.handler({"page": 1})
 
+    assert draft.pages[0].hidden is True
     assert draft.pages[0].text == ""
     assert "blank" in result.lower() or "empty" in result.lower()
 
@@ -2241,89 +2102,21 @@ def test_transcribe_page_rejects_wrapped_blank_sentinel(tmp_path):
         tool = transcribe_page_tool(
             get_draft=lambda: draft,
             get_llm=lambda: _FakeLLM(reply=wrapped),
-            confirm=lambda _p: True,
         )
 
         tool.handler({"page": 1})
 
-        assert draft.pages[0].text == "", (
+        assert draft.pages[0].hidden is True, (
             f"Sentinel wrapped as {wrapped!r} must still be recognised "
-            f"as blank, but page.text became {draft.pages[0].text!r}."
+            f"as blank, but page.hidden is {draft.pages[0].hidden!r}."
         )
 
 
-def test_transcribe_page_hedged_transcription_reaches_confirm_gate(tmp_path):
-    """PR #47 review #3 — a hedged but real transcription ("I cannot
-    transcribe the last line with full confidence, but the rest
-    reads: …") must reach the confirm gate rather than getting
-    dropped by an over-eager prose filter. The sentinel-only
-    approach makes this trivially true: anything that isn't the
-    sentinel goes through."""
-    draft = _image_only_draft(tmp_path)
-    hedged = (
-        "I cannot transcribe the last line with full confidence, but "
-        "the rest reads: 'Bir gün bir yumurta çatlamış.'"
-    )
-    seen_prompts: list[str] = []
-
-    def _confirm(prompt):
-        seen_prompts.append(prompt)
-        return True
-
-    tool = transcribe_page_tool(
-        get_draft=lambda: draft,
-        get_llm=lambda: _FakeLLM(reply=hedged),
-        confirm=_confirm,
-    )
-
-    tool.handler({"page": 1})
-
-    # Confirm gate saw the hedged reply (so the user decides), and
-    # approved it lands in page.text — no auto-drop.
-    assert seen_prompts, "confirm gate should have been consulted"
-    assert "cannot transcribe" in seen_prompts[0]
-    assert draft.pages[0].text == hedged
-
-
-def test_transcribe_page_sentinel_approach_is_language_agnostic(tmp_path):
-    """PR #47 review #1, Turkish-coverage angle — the sentinel's
-    whole point is that the filter is language-agnostic. A Turkish
-    blank-page acknowledgement ("Görüntü boş görünüyor.") that
-    **doesn't** contain ``<BLANK>`` doesn't trip the filter, but the
-    confirm gate stops it before it reaches the draft. Documents the
-    intended layered defence: sentinel primary, confirm gate
-    secondary."""
-    draft = _image_only_draft(tmp_path)
-    seen_prompts: list[str] = []
-
-    def _reject(prompt):
-        seen_prompts.append(prompt)
-        return False  # user sees "this looks like a meta-response"
-
-    tool = transcribe_page_tool(
-        get_draft=lambda: draft,
-        get_llm=lambda: _FakeLLM(reply="Görüntü boş görünüyor."),
-        confirm=_reject,
-    )
-
-    tool.handler({"page": 1})
-
-    # Tool-level filter didn't short-circuit (it's only checking the
-    # sentinel), so the confirm gate saw the Turkish meta-reply and
-    # the user rejected it — draft stays clean.
-    assert seen_prompts, "confirm gate must run on non-sentinel replies"
-    assert draft.pages[0].text == ""
-
-
-def test_transcribe_page_clears_image_and_sets_text_only_on_accept(tmp_path):
-    """P1 — Samsung Notes exports put the child's text and the
-    illustration into a single PNG. After ``transcribe_page``
-    accepts a real transcription, leaving ``page.image`` in place
-    makes the renderer print the text twice (once inside the image,
-    once as ``page.text``). On confirmed OCR, drop the source image
-    and set ``page.layout = "text-only"`` so the renderer only
-    prints the clean transcription. Illustrations can be restored
-    later via the deferred ``generate_page_illustration`` tool."""
+def test_transcribe_page_text_sentinel_clears_image_and_sets_text_only(tmp_path):
+    """<TEXT> sentinel: Samsung Notes exports put the child's text and
+    illustration into a single PNG. The <TEXT> sentinel means the image
+    IS the text — clear the image and switch to text-only layout to
+    avoid the duplicate-print bug."""
     img = _tiny_png(tmp_path / "p.png")
     draft = Draft(
         source_pdf=tmp_path / "x.pdf",
@@ -2333,64 +2126,23 @@ def test_transcribe_page_clears_image_and_sets_text_only_on_accept(tmp_path):
     )
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
-        get_llm=lambda: _FakeLLM(reply="Bir gün bir yumurta çatlamış."),
-        confirm=lambda _p: True,
+        get_llm=lambda: _FakeLLM(reply="<TEXT>\nBir gün bir yumurta çatlamış."),
     )
 
     tool.handler({"page": 1})
 
     assert draft.pages[0].text == "Bir gün bir yumurta çatlamış."
     assert draft.pages[0].image is None, (
-        "source image must be cleared after OCR acceptance — otherwise "
+        "<TEXT> sentinel must clear the source image — otherwise "
         "the renderer prints the text both inside the image and as "
         "page.text (the Yavru Dinozor duplicate-text bug)."
     )
     assert draft.pages[0].layout == "text-only"
 
 
-def test_transcribe_page_confirm_prompt_warns_about_image_replacement(
-    tmp_path,
-):
-    """The user must know, before saying y, that approving the OCR
-    also drops the source image — that's a trade-off, not a
-    housekeeping detail. Surface it in the confirm prompt."""
-    draft = _image_only_draft(tmp_path)
-    seen: list[str] = []
-
-    def _confirm(prompt):
-        seen.append(prompt)
-        return True
-
-    tool = transcribe_page_tool(
-        get_draft=lambda: draft,
-        get_llm=lambda: _FakeLLM(reply="owls"),
-        confirm=_confirm,
-    )
-
-    tool.handler({"page": 1})
-
-    prompt = seen[0].lower()
-    # Something that signals image will go away — we don't pin exact
-    # wording, just that the trade-off is communicated.
-    assert (
-        "image" in prompt
-        and ("remove" in prompt or "drop" in prompt or "clear" in prompt or "replace" in prompt)
-    )
-
-
-def test_transcribe_page_keep_image_flag_preserves_mixed_content_page(tmp_path):
-    """PR #48 review #1 — the project targets "scanned handwriting
-    + drawings" too, not just Samsung Notes exports. When the page
-    image carries both text AND a separate drawing the child wants
-    to keep (e.g. the child's typed story next to their sketch of
-    the dragon), clearing the image destroys the drawing.
-
-    Add ``keep_image: bool = False`` to the tool input. Default is
-    False (Samsung-Notes case — the image is a text screenshot,
-    clearing is correct); when the agent learns the image also
-    carries a drawing, it passes ``keep_image=True`` and the tool
-    writes ``page.text`` without touching ``page.image`` or
-    ``page.layout``."""
+def test_transcribe_page_mixed_sentinel_keeps_image_and_layout(tmp_path):
+    """<MIXED> sentinel: the page has both text and a distinct drawing —
+    write the transcription but leave image and layout alone."""
     img = _tiny_png(tmp_path / "p.png")
     draft = Draft(
         source_pdf=tmp_path / "x.pdf",
@@ -2400,88 +2152,34 @@ def test_transcribe_page_keep_image_flag_preserves_mixed_content_page(tmp_path):
     )
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
-        get_llm=lambda: _FakeLLM(reply="once upon a time"),
-        confirm=lambda _p: True,
+        get_llm=lambda: _FakeLLM(reply="<MIXED>\nKüçük dinozor ormana gitti"),
     )
 
-    tool.handler({"page": 1, "keep_image": True})
+    tool.handler({"page": 1})
 
-    assert draft.pages[0].text == "once upon a time"
+    assert draft.pages[0].text == "Küçük dinozor ormana gitti"
     assert draft.pages[0].image == img, (
-        "keep_image=True must preserve the source image so the child's "
-        "drawing on a mixed-content page isn't silently destroyed."
+        "<MIXED> sentinel must preserve the source image."
     )
     assert draft.pages[0].layout == "image-top"
 
 
-def test_transcribe_page_confirm_prompt_warns_about_drawing_destruction(
-    tmp_path,
-):
-    """PR #48 review #1 — the confirm prompt must name the risk in
-    preserve-child-voice terms. The previous wording talked about
-    the "duplicate-print" problem but not about the fact that a
-    drawing on the page would also be lost. Preserve-child-voice
-    extends to the child's artwork (CLAUDE.md), so the prompt
-    needs to say "any drawing on this page will also be removed"
-    or equivalent."""
+def test_transcribe_page_no_sentinel_fallback_writes_text_as_text(tmp_path):
+    """Fallback: model misbehaved and didn't use a sentinel.
+    Treat whole reply as text-only transcription, return a warning prefix
+    in the summary so the agent can surface it, but do NOT raise."""
     draft = _image_only_draft(tmp_path)
-    seen: list[str] = []
-
-    def _confirm(prompt):
-        seen.append(prompt)
-        return True
-
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
-        get_llm=lambda: _FakeLLM(reply="owls"),
-        confirm=_confirm,
+        get_llm=lambda: _FakeLLM(reply="Görüntü boş görünüyor."),
     )
 
-    tool.handler({"page": 1})
+    result = tool.handler({"page": 1})
 
-    prompt = seen[0].lower()
-    # The destruction warning must be unambiguous — a drawing /
-    # illustration / artwork word paired with a loss verb in the
-    # same phrase. A bare "illustration" inside a "future option"
-    # aside doesn't count.
-    assert any(
-        marker in prompt
-        for marker in (
-            "any drawing",
-            "any illustration",
-            "the drawing",
-            "the illustration",
-            "drawing will",
-            "illustration will",
-            "drawing is lost",
-            "drawing will be lost",
-            "drawing on this page will",
-            "illustration on this page will",
-        )
-    )
-
-
-def test_transcribe_page_declined_keeps_image_and_layout_intact(tmp_path):
-    """If the user rejects the OCR reply, page state must stay
-    exactly as it was — image in place, layout unchanged."""
-    img = _tiny_png(tmp_path / "p.png")
-    draft = Draft(
-        source_pdf=tmp_path / "x.pdf",
-        title="Book",
-        author="A",
-        pages=[DraftPage(text="", image=img, layout="image-top")],
-    )
-    tool = transcribe_page_tool(
-        get_draft=lambda: draft,
-        get_llm=lambda: _FakeLLM(reply="owls"),
-        confirm=lambda _p: False,
-    )
-
-    tool.handler({"page": 1})
-
-    assert draft.pages[0].text == ""
-    assert draft.pages[0].image == img
-    assert draft.pages[0].layout == "image-top"
+    # Fallback behaviour: treated as text, written to page.
+    assert draft.pages[0].text == "Görüntü boş görünüyor."
+    # Warning prefix in the summary.
+    assert "warning" in result.lower() or "sentinel" in result.lower()
 
 
 # --- skip_page ---------------------------------------------------------
@@ -2702,13 +2400,11 @@ def test_read_draft_description_names_the_skip_page_tool(tmp_path):
 
 def test_transcribe_page_description_mentions_image_side_effect(tmp_path):
     """PR #48 review #8 — the LLM reads the description first. It
-    must know that approving OCR clears the source image and
-    forces ``text-only`` layout, so it doesn't call this tool on
-    mixed-content pages it wanted to preserve."""
+    must know that the <TEXT> sentinel clears the source image and
+    forces ``text-only`` layout, and the <MIXED> sentinel preserves it."""
     tool = transcribe_page_tool(
         get_draft=lambda: None,
         get_llm=lambda: _FakeLLM(),
-        confirm=lambda _p: True,
     )
 
     desc = tool.description.lower()
@@ -2718,21 +2414,17 @@ def test_transcribe_page_description_mentions_image_side_effect(tmp_path):
 
 
 def test_transcribe_page_does_not_reject_normal_text_with_word_blank(tmp_path):
-    """PR #47 review #2 — the previous version of this test passed
-    for the wrong reason: its fixture didn't contain any of the
-    filter's listed phrases, so the test would have passed even if
-    the filter were "fail on any mention of 'blank'". Under the
-    sentinel approach the filter is exact — only the literal
-    sentinel triggers — so story text that contains ``<BLANK>`` as
-    a substring (not as the entire reply) still transcribes."""
+    """PR #47 review #2 — under the three-sentinel approach the filter
+    is exact — only the literal sentinel on its own line triggers —
+    so story text that contains ``<BLANK>`` as a substring inside a
+    ``<TEXT>``-prefixed reply still transcribes correctly."""
     draft = _image_only_draft(tmp_path)
     # Story text with <BLANK> embedded mid-sentence (the filter's
-    # stripped-exact comparison must not swallow it).
+    # exact-first-line comparison must not swallow it).
     story = "The scroll had <BLANK> carved where a name should be."
     tool = transcribe_page_tool(
         get_draft=lambda: draft,
-        get_llm=lambda: _FakeLLM(reply=story),
-        confirm=lambda _p: True,
+        get_llm=lambda: _FakeLLM(reply=f"<TEXT>\n{story}"),
     )
 
     tool.handler({"page": 1})
@@ -2749,6 +2441,87 @@ def test_read_draft_description_points_agent_at_transcribe_page_tool(tmp_path):
 
     desc = tool.description.lower()
     assert "transcribe_page" in desc
+
+
+# Task 8: four new sentinel-contract regression tests --------------------
+
+
+def test_transcribe_page_blank_sentinel_hides_page(tmp_path):
+    from src.agent_tools import transcribe_page_tool
+    from src.draft import Draft, DraftPage
+
+    class _FakeLLM:
+        def chat(self, *_a, **_kw):
+            return "<BLANK>"
+
+    img = _tiny_png(tmp_path / "p.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        pages=[DraftPage(text="", image=img)],
+    )
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: _FakeLLM(),
+    )
+
+    tool.handler({"page": 1})
+
+    assert draft.pages[0].hidden is True
+    assert draft.pages[0].text == ""
+
+
+def test_transcribe_page_text_sentinel_clears_image(tmp_path):
+    from src.agent_tools import transcribe_page_tool
+    from src.draft import Draft, DraftPage
+
+    class _FakeLLM:
+        def chat(self, *_a, **_kw):
+            return "<TEXT>\nBir gün bir yumurta çatlamış"
+
+    img = _tiny_png(tmp_path / "p.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        pages=[DraftPage(text="", image=img, layout="image-top")],
+    )
+    tool = transcribe_page_tool(get_draft=lambda: draft, get_llm=lambda: _FakeLLM())
+
+    tool.handler({"page": 1})
+
+    assert draft.pages[0].text == "Bir gün bir yumurta çatlamış"
+    assert draft.pages[0].image is None
+    assert draft.pages[0].layout == "text-only"
+
+
+def test_transcribe_page_mixed_sentinel_keeps_image(tmp_path):
+    from src.agent_tools import transcribe_page_tool
+    from src.draft import Draft, DraftPage
+
+    class _FakeLLM:
+        def chat(self, *_a, **_kw):
+            return "<MIXED>\nKüçük dinozor ormana gitti"
+
+    img = _tiny_png(tmp_path / "p.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        pages=[DraftPage(text="", image=img, layout="image-top")],
+    )
+    tool = transcribe_page_tool(get_draft=lambda: draft, get_llm=lambda: _FakeLLM())
+
+    tool.handler({"page": 1})
+
+    assert draft.pages[0].text == "Küçük dinozor ormana gitti"
+    assert draft.pages[0].image == img
+    assert draft.pages[0].layout == "image-top"
+
+
+def test_transcribe_page_does_not_take_confirm_or_keep_image():
+    """Signature regression — both params dropped."""
+    import inspect
+    from src.agent_tools import transcribe_page_tool
+
+    sig = inspect.signature(transcribe_page_tool)
+    assert "confirm" not in sig.parameters
+    assert "keep_image" not in sig.parameters
 
 
 # --- choose_layout -------------------------------------------------------

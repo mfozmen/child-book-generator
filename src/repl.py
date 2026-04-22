@@ -327,7 +327,6 @@ class Repl:
                 transcribe_page_tool(
                     get_draft=get_draft,
                     get_llm=lambda: self._llm,
-                    confirm=self._confirm,
                 )
             )
         # AI cover generation is OpenAI-only for now — don't advertise
