@@ -1096,18 +1096,6 @@ def _build_image_block(image_path: Path) -> dict:
     }
 
 
-def _is_sentinel_reply(reply: str, sentinel: str) -> bool:
-    """Return True when the LLM's reply is exactly ``sentinel``
-    (possibly wrapped in whitespace, quotes, or backticks).
-
-    Exact comparison after stripping wrapping, so a story that
-    happens to contain a sentinel substring inside a longer sentence
-    still passes through to the normal path. Works on all three
-    sentinels: ``<BLANK>``, ``<TEXT>``, ``<MIXED>``."""
-    core = reply.strip().strip("`'\"").strip()
-    return core == sentinel
-
-
 
 def _validate_cover_inputs(draft, style, page_n_raw) -> str | None:
     """Return a rejection string if ``style`` or ``page_n_raw`` don't

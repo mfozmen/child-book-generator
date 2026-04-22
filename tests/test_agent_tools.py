@@ -3377,6 +3377,40 @@ def test_apply_text_correction_preserves_unicode_and_whitespace(tmp_path):
     assert draft.pages[0].text == payload
 
 
+def test_apply_text_correction_reports_no_draft_when_unloaded():
+    """Coverage for the ``_MSG_NO_DRAFT`` branch."""
+    from src.agent_tools import apply_text_correction_tool
+
+    tool = apply_text_correction_tool(get_draft=lambda: None)
+
+    result = tool.handler({"page": 1, "text": "..."})
+
+    assert "no draft" in result.lower()
+
+
+def test_restore_page_reports_no_draft_when_unloaded():
+    """Coverage for the ``_MSG_NO_DRAFT`` branch."""
+    from pathlib import Path as _Path
+    from src.agent_tools import restore_page_tool
+
+    tool = restore_page_tool(
+        get_draft=lambda: None,
+        get_session_root=lambda: _Path("."),
+    )
+
+    result = tool.handler({"page": 1})
+
+    assert "no draft" in result.lower()
+
+
+def test_extract_sentinel_returns_empty_on_empty_or_whitespace_reply():
+    """Coverage for the empty-reply early-return in _extract_sentinel."""
+    from src.agent_tools import _extract_sentinel
+
+    assert _extract_sentinel("") == ("", "")
+    assert _extract_sentinel("   \n  \n\t") == ("", "")
+
+
 def test_apply_text_correction_rejects_out_of_range(tmp_path):
     from src.agent_tools import apply_text_correction_tool
 
