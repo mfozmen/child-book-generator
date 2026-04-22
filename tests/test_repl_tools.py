@@ -128,3 +128,39 @@ def test_transcribe_page_omitted_on_null_provider(tmp_path):
     advertised as available when nothing is there to answer."""
     repl = _repl(tmp_path, provider_name="none", api_key=None)
     assert "transcribe_page" not in _tool_names(repl)
+
+
+def test_confirm_plumbing_only_wired_to_cost_tools():
+    """Regression guard: after the review-based-gate refactor,
+    ``Repl._confirm`` is only passed to the two AI illustration tools.
+    If a future change re-adds confirm to a content tool (propose_typo_fix,
+    propose_layouts, transcribe_page, hide_page), this test fails so the
+    author reconsiders whether they really mean to reintroduce the gate.
+    """
+    import inspect
+    from src.repl import Repl
+
+    source = inspect.getsource(Repl._build_agent)
+
+    # Cost-gated tools still take confirm.
+    assert "generate_cover_illustration_tool" in source
+    assert "generate_page_illustration_tool" in source
+
+    # Content tools are registered but must NOT be passed confirm.
+    # Brittle-but-effective textual check: look for any content-tool
+    # factory call followed by ``confirm=``.
+    for factory in (
+        "propose_typo_fix_tool",
+        "propose_layouts_tool",
+        "transcribe_page_tool",
+        "hide_page_tool",
+    ):
+        assert factory in source, f"{factory} must be registered"
+        # Find the factory call's arg-list and ensure no confirm=.
+        call_start = source.index(factory + "(")
+        call_end = source.index(")", call_start)
+        call_site = source[call_start : call_end + 1]
+        assert "confirm=" not in call_site, (
+            f"{factory} must not be passed confirm after the refactor; "
+            f"found: {call_site}"
+        )

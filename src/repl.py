@@ -354,9 +354,18 @@ class Repl:
         return Agent(llm=self._llm, tools=tools, console=self._console)
 
     def _confirm(self, prompt: str) -> bool:
-        """Ask the user y/n. Default: no on EOF or anything that isn't
-        clearly a yes — preserve-child-voice prefers silence over a
-        wrong 'apply this change'."""
+        """Ask the user y/n.
+
+        NOTE: this confirm is intentionally narrow — after the review-based-
+        gate refactor it gates ONLY cost-incurring AI illustration calls
+        (``generate_cover_illustration``, ``generate_page_illustration``).
+        Content mutations (OCR, typo fix, layout batch, page hide) run
+        without a user gate; the user audits the finished PDF in the
+        post-render review turn and edits via ``apply_text_correction`` /
+        ``restore_page`` / ``hide_page`` if anything's wrong.
+
+        Default: no on EOF or anything that isn't clearly a yes —
+        preserve-child-voice prefers silence over a speculative charge."""
         self._console.print(f"[yellow]{prompt}[/yellow] (y/n)")
         try:
             answer = self._read().strip().lower()
