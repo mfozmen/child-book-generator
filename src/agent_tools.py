@@ -1801,17 +1801,18 @@ def _impose_and_mirror(
 
 def propose_layouts_tool(
     get_draft: Callable[[], Draft | None],
-    confirm: Callable[[str], bool],
 ) -> Tool:
-    """Tool: propose layouts for *every* page at once, show a table,
-    apply all if the user approves.
+    """Tool: propose layouts for *every* page at once and auto-apply.
 
     The earlier per-page ``choose_layout`` tool produces good results
     but is awkward for the "settle on a rhythm" phase of the
     conversation — the agent has to ask the user to approve N tiny
-    decisions. This tool batches them: one prompt, one yes/no, one
-    application. For surgical tweaks afterwards the per-page tool is
-    still the right call.
+    decisions. This tool batches them: one call, immediate application.
+    For surgical tweaks afterwards the per-page tool is still the right
+    call.
+
+    Layouts are auto-applied without a y/n gate; the user catches any
+    bad layout in the post-render review turn instead.
     """
 
     def handler(input_: dict) -> str:
@@ -1827,18 +1828,11 @@ def propose_layouts_tool(
                 "a partial change."
             )
         # Validate every proposed layout first. Partial application
-        # would leave the user with a mix they didn't approve.
+        # would leave the user with a mix they didn't want.
         rejection = _reject_layout_batch(draft, items)
         if rejection is not None:
             return rejection
 
-        prompt = _build_layout_prompt(items)
-        if not confirm(prompt):
-            return (
-                "User declined the proposed rhythm. Ask what they'd "
-                "like to change, then propose again or adjust specific "
-                "pages with choose_layout."
-            )
         for item in items:
             draft.pages[int(item["page"]) - 1].layout = str(item["layout"])
         return f"Applied layouts to all {len(items)} pages."

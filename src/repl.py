@@ -308,7 +308,7 @@ class Repl:
             set_metadata_tool(get_draft=get_draft),
             set_cover_tool(get_draft=get_draft),
             choose_layout_tool(get_draft=get_draft),
-            propose_layouts_tool(get_draft=get_draft, confirm=self._confirm),
+            propose_layouts_tool(get_draft=get_draft),
             render_book_tool(
                 get_draft=get_draft, get_session_root=get_session_root
             ),
