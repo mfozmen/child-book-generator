@@ -40,6 +40,50 @@ def ingest_image_only_pages(
     """OCR every image-only, non-hidden page in ``draft``; apply the
     sentinel outcome; return a summary. Mutates ``draft`` in place.
 
-    This task's body is a stub — Task 3 implements the loop.
+    No-op when ``llm_provider`` is ``None`` or a ``NullProvider``
+    (name ``"none"``); the slash-command transcribe path still
+    handles offline sessions.
     """
-    return IngestReport()
+    report = IngestReport()
+    if llm_provider is None or getattr(llm_provider, "name", "") == "none":
+        return report
+
+    # Import here rather than at module top to avoid a circular
+    # import if src/agent_tools.py ever grows an import back to
+    # src/ingestion.py. These helpers were promoted to public in
+    # the previous commit of this branch.
+    from src.agent_tools import call_vision_for_transcription, apply_sentinel_result
+
+    total = len(draft.pages)
+    for idx, page in enumerate(draft.pages, start=1):
+        # Skip pages that are already processed / out of scope.
+        if page.hidden:
+            continue
+        if page.image is None:
+            continue
+        if page.text.strip():
+            continue
+
+        try:
+            reply, error = call_vision_for_transcription(llm_provider, page.image, idx)
+            if error:
+                report.errors.append((idx, error[:200]))
+                console.print(f"[yellow]OCR page {idx}/{total}: failed — {error}[/yellow]")
+                continue
+        except Exception as e:  # noqa: BLE001 — any vision failure is non-fatal
+            report.errors.append((idx, str(e)[:200]))
+            console.print(f"[yellow]OCR page {idx}/{total}: failed — {e}[/yellow]")
+            continue
+
+        summary = apply_sentinel_result(page, reply, idx, method="vision")
+        # Classify by post-mutation page state, not by the summary
+        # string — the sentinel branch is what the report cares about.
+        if page.hidden:
+            report.blank_pages.append(idx)
+        elif page.image is None:
+            report.text_pages.append(idx)
+        else:
+            report.mixed_pages.append(idx)
+        console.print(f"[dim]OCR page {idx}/{total}: {summary}[/dim]")
+
+    return report

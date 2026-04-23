@@ -54,3 +54,31 @@ def test_ingest_empty_draft_returns_empty_report(tmp_path):
     assert report.blank_pages == []
     assert report.errors == []
     assert llm.calls == []
+
+
+def test_ingest_transcribes_every_image_only_page(tmp_path):
+    """3 pages: #1 has text already (skipped), #2+#3 are image-only
+    (transcribed). Scripted LLM replies ``<TEXT>\\n...`` for both."""
+    from src.ingestion import ingest_image_only_pages
+
+    img2 = _tiny_png(tmp_path / ".book-gen" / "images" / "page-02.png")
+    img3 = _tiny_png(tmp_path / ".book-gen" / "images" / "page-03.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        pages=[
+            DraftPage(text="already has text", image=None),
+            DraftPage(text="", image=img2),
+            DraftPage(text="", image=img3),
+        ],
+    )
+    llm = _ScriptedLLM(["<TEXT>\nPage two text", "<TEXT>\nPage three text"])
+
+    report = ingest_image_only_pages(draft, llm, _console())
+
+    # Only the two image-only pages triggered llm.chat.
+    assert len(llm.calls) == 2
+    assert draft.pages[0].text == "already has text"  # untouched
+    assert draft.pages[1].text == "Page two text"
+    assert draft.pages[2].text == "Page three text"
+    assert report.text_pages == [2, 3]
+    assert report.total_processed == 2
