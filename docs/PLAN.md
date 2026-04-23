@@ -44,6 +44,24 @@ All five PRs from the original plan merged:
 
 Items below came out of the first real end-to-end test (Yavru Dinozor). Listed roughly in "most visible to the user" order.
 
+- **Move ingestion out of the LLM loop entirely.** 2026-04-23 Yavru Dinozor v2 session (OpenAI this time) kept showing pre-refactor behaviour despite PR #60/#62/#63 landing:
+  - Per-page ``Apply this OCR transcription to page N? ... Approve? (y/n)`` prompts still fire.
+  - Confirm body explicitly names ``keep_image=true`` — a parameter that no longer exists in the codebase.
+  - ``skip_page`` confirm with ``drawing: YES — the drawing on this page will also be lost; removal is permanent`` + ``Remaining pages will renumber — page 7 becomes page 6`` — exactly the pre-rename ``skip_page_tool`` body, even though the tool is now ``hide_page`` with flag semantics and no confirm.
+  - Greeting asks ``is this book part of a series?`` — T11 removed the series question from the greeting.
+  - Metadata review checkpoint fires at the end ("I will summarize the metadata for you") — T11 removed that too.
+  - Cover step skipped entirely; agent never offers the three cover options.
+  - Language mismatch: agent mixes English / Turkish mid-flow, doesn't lock on the user's language after the first reply.
+  - Rendered book has no images at all (``<TEXT>`` sentinel cleared them; but the child's source is all Samsung-Notes-style handwriting scans — there's no "separate drawing" to preserve; user reasonably expects the handwriting scans themselves to survive).
+
+  The pattern says either (a) the user's installed binary is running pre-refactor bytecode that our ``pip install -e`` dance didn't fully replace, or (b) the LLM is reconstructing old UI from training memory at a rate stronger than prompt-level fixes can suppress — or most likely both, layered. Prompt engineering hit its limit over PR #61 → PR #63.
+
+  Real fix: **take ingestion off the agent loop**. When ``cli.py`` / ``repl.py`` loads a PDF, the REPL itself iterates image-only pages, calls ``transcribe_page`` deterministically in Python (no agent turn), applies the three-sentinel outcome (TEXT / MIXED / BLANK), auto-hides blanks. The agent only starts talking *after* ingestion is complete: it greets, asks for title / author / cover choice / back-cover blurb, then renders. Image-only-page ceremony vanishes entirely from the chat surface because the agent never sees it. The three-sentinel classifier stays — it just fires from a deterministic Python caller instead of through the LLM's tool-use loop.
+
+  Scope: ``src/cli.py`` (or ``src/repl.py``'s load flow) grows an ``_ingest_image_only_pages`` step. Agent greeting strips the "PROCESS THE DRAFT AUTOMATICALLY" section that instructs the agent to run the pipeline — the pipeline runs *before* the agent. Tests: a scripted-LLM integration that loads an 8-page Samsung-Notes fixture, asserts all OCR happens before the first agent turn, and asserts the agent's first message is "what's the title?" not a transcription batch. Estimated ~200 lines + tests.
+
+  This should be the next PR. Pairs with a session-state diagnostic (the editable install was verified at PR #60 / PR #63 time but keeps producing pre-refactor output for the user — something about the local install is still broken; needs root-cause before declaring the refactor "done").
+
 - **Real-book pagination blanks in the A4 saddle-stitch imposition.** Surfaced alongside the review-based gate refactor (2026-04-22). The maintainer wants output blanks to follow real-book conventions — story starts on a right-hand (recto) page, total page count is padded to a multiple of 4 with blanks in "natural" positions (not tacked onto the end). Today `src/imposition.py` just hits the 4-page booklet requirement; this item formalises where the blanks go. Out of scope for the review-based-gate refactor (separate smaller PR).
 
 - **Spine-wrap cover template.** Five templates ship now (`full-bleed`, `framed`, `portrait-frame`, `title-band-top`, `poster`). The one remaining idea is `spine-wrap` — drawing spans front + spine + back for the A4 imposed booklet. This needs multi-page cover rendering support that the current `draw_cover` (single page) doesn't have; defer until a real user asks for it.
