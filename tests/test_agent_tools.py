@@ -3820,6 +3820,79 @@ def test_transcribe_page_unknown_sentinel_fallback_preserves_image_and_layout(tm
     assert draft.pages[0].layout == "image-top"
 
 
+def test_transcribe_page_responses_never_include_transcribed_text_preview(tmp_path):
+    """Regression for PR #62: the tool response used to include a
+    ``Preview: '<first 80 chars of transcribed text>'`` snippet. The
+    LLM, on seeing the text, defaulted to the old
+    show-text-to-user + ask-for-approval pattern. Responses must be
+    metadata-only across ALL four branches so there's nothing for
+    the agent to theatricalise."""
+    img = _tiny_png(tmp_path / "p.png")
+
+    canary = "CANARY-DO-NOT-ECHO"
+
+    class _FakeBlank:
+        def chat(self, *_a, **_kw):
+            return "<BLANK>"
+
+    class _FakeText:
+        def chat(self, *_a, **_kw):
+            return f"<TEXT>\n{canary}"
+
+    class _FakeMixed:
+        def chat(self, *_a, **_kw):
+            return f"<MIXED>\n{canary}"
+
+    class _FakeNoSentinel:
+        def chat(self, *_a, **_kw):
+            return canary  # model forgot sentinel — raw text
+
+    for fake in (_FakeBlank, _FakeText, _FakeMixed, _FakeNoSentinel):
+        draft = Draft(
+            source_pdf=tmp_path / "x.pdf",
+            pages=[DraftPage(text="", image=img, layout="image-top")],
+        )
+        tool = transcribe_page_tool(
+            get_draft=lambda d=draft: d, get_llm=lambda f=fake(): f
+        )
+
+        result = tool.handler({"page": 1})
+
+        assert canary not in result, (
+            f"{fake.__name__}: transcribed text leaked into tool response: "
+            f"{result!r}"
+        )
+        assert "Preview" not in result, (
+            f"{fake.__name__}: tool response must not include a preview "
+            f"field (got: {result!r})"
+        )
+
+
+def test_propose_typo_fix_response_does_not_echo_full_page_text(tmp_path):
+    """Regression for PR #62 #3: the typo-fix reply used to return
+    ``Applied on page N. New text: '<full page text>'``, echoing the
+    page's entire text back to the LLM. Same failure mode as the
+    transcribe_page Preview — the LLM sees the text and defaults to
+    show-text-to-user + ask-for-approval. Reply must be
+    metadata-only."""
+    from src.agent_tools import propose_typo_fix_tool
+
+    canary = "CANARY-SENTENCE-MUST-NOT-ECHO"
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        pages=[DraftPage(text=f"xxx {canary} yyy")],
+    )
+    tool = propose_typo_fix_tool(get_draft=lambda: draft)
+
+    result = tool.handler(
+        {"page": 1, "before": "xxx", "after": "zzz", "reason": "test"}
+    )
+
+    assert canary not in result, (
+        f"typo-fix reply must not echo page text: {result!r}"
+    )
+
+
 def test_apply_text_correction_auto_unhides_hidden_page(tmp_path):
     """Regression for PR #60 #7: if the user issues 'page N text: ...'
     on a currently-hidden page they almost certainly mean 'bring it
