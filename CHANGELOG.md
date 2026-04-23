@@ -1,7 +1,496 @@
 # CHANGELOG
 
 
+## v1.11.0 (2026-04-23)
+
+### Bug Fixes
+
+- **repl**: Forbid agent from mimicking old confirm UI in greeting
+  ([#61](https://github.com/mfozmen/littlepress-ai/pull/61),
+  [`904dee5`](https://github.com/mfozmen/littlepress-ai/commit/904dee588437cb5390c95f842b55e0c29acd1cac))
+
+* fix(repl): forbid agent from mimicking the old confirm UI in greeting
+
+After PR #60 landed the review-based-gate refactor, real-session testing showed the agent (Sonnet)
+  STILL emitting y/n confirmation-style text between auto-applied tool calls -- e.g. ``Apply this
+  OCR transcription to page 1? ... Approve? (y/n)``, with exact wording from the old pre-refactor
+  UI.
+
+Root cause: the tool side is correct (transcribe_page no longer takes ``confirm`` or ``keep_image``,
+  OCR auto-applies), but the greeting told the LLM "the tools no longer take a confirm callback" --
+  that's about the code surface. The LLM interpreted it narrowly and continued producing
+  conversational pseudo-confirmations it remembered from training data on this repo's earlier
+  versions.
+
+Fix: add an explicit CRITICAL section to the greeting listing the
+
+forbidden UI-mimicking text patterns (``Apply this OCR transcription``, ``Approve? (y/n)``,
+  ``keep_image=True``, etc.) and telling the agent to emit ONE batch status line after all
+  image-only pages are transcribed, then move to metadata + render.
+
+Also updates the keep_image greeting test: the greeting now names ``keep_image`` intentionally (in
+  the forbidden-pattern list), so the old "literal substring absent" check is wrong. Replaced with
+  an intent-based guard that rejects only active directives (``pass keep_image``, ``use
+  keep_image``, ``with keep_image=true``).
+
+Full suite: 633 passing.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(agent): address PR #61 review — English-only greeting + propose_layouts description
+
+Two findings on the greeting-forbid-fake-confirm-ui PR:
+
+1. The new CRITICAL block re-introduced a Turkish sentence (``Onayınızı alınca sonraki sayfaya
+  geçeceğim``) as a "do NOT emit" example. CLAUDE.md's English-only rule applies even to
+  forbidden-pattern examples — same rule that killed yok/tamam in PR #60. Replaced with a
+  language-neutral clause ("any equivalent phrased in the user's language") that instructs the agent
+  to recognise the intent across languages without naming any specific non-English literal.
+
+2. ``propose_layouts`` Tool.description still claimed the batch existed "so the user can approve the
+  whole rhythm with a single yes/no". The ``confirm`` callback was removed from this tool in the
+  review-based-gate refactor (PR #60), but the description continued to nudge the agent toward the
+  old yes/no rhythm — exactly the residual-wording pattern this PR is trying to kill. Rewrote to
+  "Auto-applies — do NOT ask the user for a yes/no; the user audits the finished PDF in the
+  post-render review turn."
+
+Full suite: 633 passing (docs-only changes; no behaviour drift).
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+### Documentation
+
+- **agent_tools**: Audit module docstring against registered tools
+  ([#59](https://github.com/mfozmen/littlepress-ai/pull/59),
+  [`03e63b5`](https://github.com/mfozmen/littlepress-ai/commit/03e63b5e56b7df6dff03fddcc4f73a701028404f))
+
+Follow-up to PR #58 round-1 #5. The module docstring under-listed the confirm-gated tools (missing
+  ``generate_page_illustration``) and misstated the preserve-child-voice contract — it claimed
+  "every page-state mutation is gated", but ``choose_layout`` writes ``page.layout`` directly with
+  no confirm, and ``set_metadata`` / ``set_cover`` land without one too.
+
+Rewrite the contract to match reality: the confirm gate protects mutations of the child's *content*
+  (page text, page image, whole-page removal). Presentation changes (metadata, cover, single-page
+  layout) land directly because they're authoring decisions on top of the content, not the content
+  itself. ``propose_layouts`` is still gated even though layout is presentation — the batch-level
+  approval is useful on its own.
+
+Tool-by-tool lists are now split into three groups (content-gated, batch-approved, not-gated) so a
+  reader can tell at a glance what's what. CLAUDE.md's ``src/agent_tools.py`` bullet gets the same
+  correction and points at the module docstring for the full contract.
+
+No code change, no test change — the registrations and handlers are already correct; only the
+  documentation was drifting.
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+- **plan**: Expand transcribe_page entry with decline-misread failure
+  ([`452a7f8`](https://github.com/mfozmen/littlepress-ai/commit/452a7f8e332f7fa432abe8dfb162df9af1849756))
+
+Same Yavru Dinozor session, second failure mode: after the agent surfaced the wrong keep_image=True
+  confirm and the user said n, the agent punted to "type out the text manually" instead of retrying
+  with keep_image=False. That's the exact workflow the OCR tool exists to avoid. Expand the PLAN
+  entry to cover both the wrong default AND the wrong decline interpretation, and list the
+  regression tests the fix needs to ship with.
+
+- **plan**: Flag wrong keep_image default on Samsung-Notes transcribe
+  ([`4f133b5`](https://github.com/mfozmen/littlepress-ai/commit/4f133b5d8486b38fd797dcf654eb409bed4c044b))
+
+Surfaced by the second Yavru Dinozor run: the agent defaults to keep_image=True when every page has
+  an image, but for Samsung Notes / phone-scan exports the image IS the text and keep_image=False is
+  required to avoid double-printing. Fix lives in the greeting / tool-description rewrite;
+  placeholder entry so it doesn't slip.
+
+- **plan**: Note "same question?" UX nit on transcribe_page confirm
+  ([`c20cc5a`](https://github.com/mfozmen/littlepress-ai/commit/c20cc5a692a6a1885d865bc739ca1d0e31f79f35))
+
+Follow-on from the same Yavru Dinozor session: after declining the keep_image=True branch and
+  retrying with keep_image=False, the user read the re-prompt as identical because the Approve?
+  (y/n) line is byte-for-byte the same across branches -- only the explanation paragraph changes.
+  Cheap UX fix (inline the branch into the question line) noted as part of the broader
+  transcribe_page follow-up so it lands in the same PR.
+
+- **plan**: Relocate preserve-child-voice gate from pre-approval to post-render review
+  ([`81cb051`](https://github.com/mfozmen/littlepress-ai/commit/81cb051c9369f5ef115570e6b7a6ab8da9c11619))
+
+Yavru Dinozor test surfaced that the per-mutation confirm gate has become the UX problem the project
+  is supposed to solve. Direct maintainer feedback: "it's an AI project -- produce the book, then
+  ask me if there are problems."
+
+Replace the narrow transcribe_page keep_image / decline-interp / "same question" items with a single
+  superseding entry that frames the philosophy shift, sketches the new flow (auto-apply OCR,
+  auto-pick keep_image, render, then ask "any issues?"), and enumerates what still keeps a confirm
+  (cost-incurring illustration calls; page-removal when the page carries a drawing).
+
+Design round must precede the first implementation PR; that PR will touch agent_tools, repl
+  (greeting + confirm plumbing), CLAUDE.md, and the preserve-child-voice skill.
+
+- **plan**: Sharpen post-render review into page-number-first question
+  ([`43f8a28`](https://github.com/mfozmen/littlepress-ai/commit/43f8a28b81322b4f7d699703f2dbd8acda0f7b35))
+
+Maintainer refinement: picture books are short, so the review step should lead with a numeric ask
+  ("which page numbers have issues?") rather than a free-form "any issues?". User types a short list
+  like "3, 5" or "none"; agent then drills in per page. Plain-language global asks still work for
+  cross-page requests. Keeps the review loop feeling like a simple app, not an essay prompt.
+
+### Refactoring
+
+- **gate**: Move preserve-child-voice from pre-approval to post-render review
+  ([#60](https://github.com/mfozmen/littlepress-ai/pull/60),
+  [`19acd8d`](https://github.com/mfozmen/littlepress-ai/commit/19acd8ded95f5338e92296c9da5f707910853778))
+
+* docs(spec): review-based preserve-child-voice gate design
+
+Captures the Yavru Dinozor test's fallout: move the confirm gate from "before every write" to "after
+  render". Contract becomes "input is immutable, output is reproducible" -- the child's words still
+  reach the printed page verbatim, but the audit happens on the finished PDF rather than on every
+  intermediate write.
+
+Spec covers: - New contract + where it lands in CLAUDE.md and the preserve-child-voice skill. -
+  Tool-by-tool table of what loses its confirm, what keeps one (cost-only gates for the AI
+  illustration tools), and two new tools (apply_text_correction, restore_page). - End-to-end flow:
+  greet -> auto-ingest -> render -> free-form review message -> re-render -> "none"/"yok" to ship. -
+  Input-preserved guarantee as an explicit contract on .book-gen/input/ and pdf_ingest's page-NN.png
+  outputs. - Test strategy (~25 confirm fixtures drop, 4 new test files), file scope, out-of-scope
+  items, risks.
+
+Also adds the pagination-blank follow-up as a separate smaller entry in docs/PLAN.md so it doesn't
+  get rolled into this refactor.
+
+* docs(plan): implementation plan for review-based preserve-child-voice gate
+
+15 TDD tasks across 5 chunks: - Chunk 1: DraftPage.hidden + to_book filter + memory schema v2 (with
+  v1 backward-compat read) - Chunk 2: apply_text_correction + restore_page (new tools, no confirm) -
+  Chunk 3: drop confirms on propose_typo_fix / propose_layouts / transcribe_page; rename skip_page
+  -> hide_page; swap keep_image for <BLANK>/<TEXT>/<MIXED> sentinel classification - Chunk 4: narrow
+  Repl._confirm to cost-only illustration tools, rewrite _AGENT_GREETING_HINT for auto-ingest +
+  review turn - Chunk 5: end-to-end review-loop integration test, CLAUDE.md Core principle rewrite,
+  preserve-child-voice skill rewrite, README/PLAN sweep, PR
+
+Plan tracks the spec at docs/superpowers/specs/ 2026-04-22-review-based-gate-design.md; if the two
+  disagree the spec wins.
+
+* feat(draft): add hidden field to DraftPage for page visibility control
+
+Adds a `hidden: bool = False` field to the DraftPage dataclass. This is the foundation for Task 1 of
+  the review-based-gate refactor, enabling downstream tools (hide_page, to_book filter, memory
+  schema v2) to mark pages for exclusion from the final book.
+
+Includes two test cases covering the default (visible) state and the hidden=True case.
+
+* feat(draft): exclude hidden pages from book projection
+
+The to_book function now filters out pages where hidden=True, ensuring they don't appear in the
+  rendered book. This is foundational for the review-based gate flow: pages marked hidden by the
+  downstream hide_page tool will be excluded from all rendered outputs.
+
+Task 2 of the review-based-gate refactor.
+
+* feat(memory): persist DraftPage.hidden in draft.json (schema v2)
+
+Bump SCHEMA_VERSION 1 → 2. _to_dict now writes "hidden" per page; _from_dict reads it with a default
+  of False so v1 files load cleanly. _ACCEPTED_VERSIONS = {1, 2} replaces the strict equality check,
+  making old on-disk drafts fully backward-compatible while new saves always write v2.
+
+Two new tests: round-trip of the hidden flag, and v1 legacy file loads with all pages visible.
+
+* feat(agent): add apply_text_correction tool for post-render verbatim text updates
+
+Adds a new agent tool that writes user-provided text verbatim into a page during the post-render
+  review turn. No LLM, no prompt, no heuristics — the tool enforces the user-initiated correction
+  path and rejects out-of-range pages. Includes three tests covering verbatim preservation
+  (including Unicode and whitespace), bounds checking, and draft mutation.
+
+This tool will be wired into the REPL in a later task.
+
+* feat(agent): restore_page tool to undo post-render edits
+
+Implement restore_page_tool factory: clears the hidden flag and re-attaches the child's original
+  drawing from pdf_ingest's per-page output (.book-gen/images/page-NN.png). Concrete realisation of
+  the input-preserved guarantee. Use during post-render review turn when the user says 'page N
+  restore'. For text reset, use apply_text_correction with the original string.
+
+Task 5 of refactor/review-based-gate: sibling to Task 4's apply_text_correction_tool, covering the
+  undo side of the review loop.
+
+* refactor(agent): drop confirm gate from propose_typo_fix
+
+Typo fixes are bounded to 3 words / 30 chars per side, so auto-applying them is safe. Removing the
+  y/n gate simplifies the call-site in repl.py and the factory signature. Bad fixes are caught in
+  the post-render review turn instead.
+
+Deleted tests: test_propose_typo_fix_does_not_change_draft_when_user_declines (tested removed
+  confirm-flow), test_propose_typo_fix_prompt_includes_surrounding_context (tested confirm prompt
+  content, no longer shown), test_agent_typo_fix_eof_at_prompt_treated_as_no (EOF-as-no behaviour
+  gone), test_agent_typo_fix_user_declines_keeps_text_unchanged (user-declines branch removed).
+  Replaced by test_propose_typo_fix_auto_applies_without_confirm and
+  test_agent_typo_fix_auto_applies.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+* refactor(agent): drop confirm gate from propose_layouts
+
+Layout batches are safe to auto-apply — the user reviews the full rhythm after render instead of
+  approving a y/n before apply. Removing the gate simplifies the factory signature and the repl
+  call-site.
+
+Deleted tests: test_propose_layouts_does_not_mutate_when_user_declines (tested removed
+  decline-flow), test_propose_layouts_prompt_lists_every_page_for_user (tested confirm prompt
+  content, no longer shown). Renamed test_propose_layouts_applies_all_on_user_confirmation →
+  test_propose_layouts_applies_all (no confirm needed). Removed confirmed==[] assertions from
+  validation tests (confirm never called). Added test_propose_layouts_auto_applies_batch as the
+  canonical auto-apply regression test.
+
+* refactor(agent): drop confirm gate from transcribe_page, add three-sentinel vision classifier
+
+Replace the y/n confirm gate and keep_image parameter with an autonomous three-sentinel
+  classification prompt. The vision model now replies with <BLANK> (hide page), <TEXT> (pure text —
+  clear image, text-only layout), or <MIXED> (drawing + text — keep image and layout). Tesseract
+  path is treated as <TEXT> behaviour (raw OCR, image cleared).
+
+Removes the Samsung-Notes mis-classification failure mode: the model now self-classifies instead of
+  the agent guessing keep_image. Post-render review turn is the user's catch point for any
+  misclassification.
+
+* fix(agent): _extract_sentinel skips leading blank lines; remove dead alias
+
+_extract_sentinel took lines[0] unconditionally, so a reply like "\n<TEXT>\nhello" (leading blank
+  line, common real-world shape) fell through to the no-sentinel fallback and wrote the raw model
+  output verbatim into page.text with a warning prefix. Fix: scan for the first non-empty line
+  before matching sentinels, matching what the docstring already claimed.
+
+Also removes _is_blank_sentinel_reply, a backward-compat alias with zero callers that was carrying
+  false "compat" weight.
+
+* refactor(agent): rename skip_page_tool to hide_page_tool; set hidden flag instead of popping page
+
+Replaces the destructive list-pop + confirm-gate pattern with a non-destructive flag: hide_page sets
+  draft.pages[n-1].hidden = True and returns immediately — nothing is deleted, no confirm is needed.
+  restore_page reverses it symmetrically.
+
+Deleted tests: confirm-prompt wording, decline-path suggestions, last-page renumber claim, and
+  confirmed-removes-and-renumbers — all tied to the old pop/confirm contract that no longer exists.
+
+Added tests: test_hide_page_does_not_take_confirm (signature regression) and
+  test_hide_page_flips_hidden_flag_without_removing (canonical behaviour).
+
+* refactor(repl): narrow _confirm docstring to clarify cost-only gate
+
+After the review-based-gate refactor (tasks 6-9), ``Repl._confirm`` gates only cost-incurring AI
+  illustration calls (generate_cover_illustration, generate_page_illustration). Content mutations
+  (OCR, typo fix, layout, page hide) run without user gates; the user audits post-render and uses
+  edit tools (apply_text_correction, restore_page, hide_page) if needed.
+
+Add regression test test_confirm_plumbing_only_wired_to_cost_tools to catch any future PR that
+  accidentally re-wires confirm to a content tool.
+
+* refactor(repl): rewrite greeting for auto-ingest + post-render review turn
+
+Replace the old metadata-review-checkpoint greeting (summarise → approve before render) with the new
+  review-based flow:
+
+- PROCESS THE DRAFT AUTOMATICALLY: transcribe_page, propose_typo_fix, propose_layouts all run
+  without per-page confirms. - ASK ONLY FOR THINGS YOU CANNOT INFER: title/author, cover choice
+  (three options explicit), back-cover blurb. - RENDER IMMEDIATELY, then post a single "which page
+  numbers have issues?" prompt that loops until an exit token (none/yok/ok/ship/done/tamam). -
+  Review-turn tools named explicitly: apply_text_correction, restore_page, hide_page. - Removes
+  series/volume questions (subsumed by title metadata). - Removes keep_image references (tool now
+  uses sentinel classification). - Removes skip_page references (renamed to hide_page in T9). - Cost
+  confirm stays only on generate_cover_illustration / generate_page_illustration (money gate, not
+  content gate).
+
+Tests: removed 5 stale assertions (series, volume, metadata-review
+
+checkpoint, review-step ordering regex, summarise-verbatim). Added 5 new Task 11 tests (auto-ingest
+  signal, no metadata checkpoint, review-turn tools present, no skip_page, no keep_image). 13
+  greeting tests all green; full suite 614/614 passes.
+
+* fix(repl): wire apply_text_correction and restore_page into _build_agent
+
+Both tools were implemented in Tasks 4–5 (feat commits 997b6a6 and a65bc8a) but never registered in
+  Repl._build_agent, so the agent loop couldn't dispatch them. Adds the two factory calls and their
+  imports.
+
+Also adds tests/test_review_loop.py — the Task 12 end-to-end integration test that exercises the
+  full render → correction → re-render loop and would have caught this gap had it existed at review
+  time.
+
+* docs: update preserve-child-voice contract to reflect review-based gate
+
+CLAUDE.md "Core principle" section rewritten: replace the old per-mutation y/n gate description with
+  the two-invariant model (immutable input files + verbatim write paths). Architecture bullets
+  updated for agent_tools.py (new tool list, cost-only confirm), draft.py (DraftPage.hidden), and
+  prune.py (input-preserved guarantee / _AI_IMAGE_PATTERN contract).
+
+src/agent_tools.py module docstring rewritten to match: drops the claim that "every mutation is
+  gated behind confirm", introduces the two invariants, and groups tools by confirm behaviour
+  (auto-apply / presentation / cost-gated / review-turn-only).
+
+* docs(skill): rewrite preserve-child-voice for input-immutable/verbatim-prompt contract
+
+Replace the per-mutation allowed/forbidden-edit framing with the two-invariant contract: (1) input
+  files are write-once after pdf_ingest, (2) every write path is verbatim-only. Concrete rules call
+  out the three-sentinel OCR classifier, the apply_text_correction no-strip guarantee, the
+  .book-gen/input/ + page-NN.* immutability boundary, and the propose_typo_fix 3-word/30-char bound.
+  The allowed/forbidden edit tables survive, reframed as tool-level guarantees rather than per-call
+  approval gates. Adds a "when to invoke" section and an updated compliance checklist. Drops all
+  wording that implied a confirm gate.
+
+* docs: update README and PLAN for review-based gate refactor
+
+README: replace per-mutation confirm descriptions with auto-apply +
+
+post-render review loop. Add post-render review turn bullet (names apply_text_correction /
+  restore_page / hide_page). Add input-immutable guarantee bullet. Remove keep_image=true and
+  skip_page references; rewrite transcribe_page bullet for three-sentinel classifier. Update
+  How-it-works step 3 and final-review bullet to match new flow.
+
+PLAN.md: add refactor/review-based-gate row to Shipped table (TBD PR number — updated after PR
+  opens). Remove the "Rework preserve-child-voice" planning entry from Next up (work is done).
+
+* docs(plan): record PR #60 for review-based-gate in Shipped table
+
+* fix(agent): address PR #60 Sonar findings
+
+Two new issues flagged on the PR, both legitimate:
+
+- S1481 (MINOR) propose_typo_fix_tool's ``reason`` local went dead when the confirm gate was dropped
+  in T6 — the old confirm prompt was the only reader. Restored traceability by threading ``reason``
+  into the reply message (``Applied on page N (<reason>). New text: ...``), so the agent's own audit
+  trail surfaces *why* a fix was applied. - S1192 (CRITICAL) ``.book-gen`` was hard-coded 3x in
+  src/agent_tools.py. Extracted to a module-level ``_BOOK_GEN_DIR`` constant. All three call sites
+  (restore_page's original-image path, the AI-illustration output path, render_book's source_dir)
+  now share the constant.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(agent): address PR #60 review findings (9 fixes + regression tests)
+
+Finding 1: read_draft description still referenced skip_page + confirm-with-user — rewrote the
+  BLANK-sentinel sentence to name hide_page / restore_page.
+
+Finding 2: _build_image_only_note mandated 'always confirm the transcription with the user' —
+  replaced with auto-apply + review-turn audit reality.
+
+Finding 3: restore_page hardcoded .png; pdf_ingest can write .jpg (Samsung Notes). — replaced with
+  glob scan, PNG-preferred when both exist.
+
+Finding 4: Turkish tokens yok/tamam in _AGENT_GREETING_HINT violated CLAUDE.md English-only rule —
+  replaced with language-neutral intent-recognition instruction.
+
+Finding 5: unknown-sentinel fallback cleared page.image + forced text-only, destroying the child's
+  drawing — fallback now only writes text, leaves image and layout untouched.
+
+Finding 6: deleted dead confirm-dance helpers (_build_typo_prompt, _TYPO_CONTEXT_CHARS,
+  _build_skip_page_prompt, _skip_preview_line, _skip_drawing_line, _skip_renumber_line,
+  _build_layout_prompt); all confirmed caller-free before deletion.
+
+Finding 7: apply_text_correction silently wrote to hidden pages whose text never reached the
+  rendered PDF — auto-unhides and names the action in reply.
+
+Finding 8: _read_draft_page_lines omitted [hidden] marker; agent couldn't see suppressed pages —
+  added hidden_tag mirroring the existing [image-only] pattern.
+
+Finding 9: load_draft default for missing version key was SCHEMA_VERSION, letting versionless JSON
+  pass validation — changed sentinel to None.
+
+Each finding paired with a regression test (10 new tests, 1 old test updated to match the renamed
+  skip_page → hide_page contract).
+
+* test(agent): close PR #60 coverage gap on new code
+
+Sonar flagged 95.9% coverage on new code (4 missing lines). Added three regression tests and deleted
+  one dead helper:
+
+- apply_text_correction_tool ``_MSG_NO_DRAFT`` branch (line 381) →
+  test_apply_text_correction_reports_no_draft_when_unloaded - restore_page_tool ``_MSG_NO_DRAFT``
+  branch (line 437) → test_restore_page_reports_no_draft_when_unloaded - _extract_sentinel
+  empty-reply early-return (line 946) →
+  test_extract_sentinel_returns_empty_on_empty_or_whitespace_reply - _is_sentinel_reply helper —
+  zero callers in src/ or tests/, removed as dead code rather than testing unused machinery.
+
+Full suite: 628 passed (was 625; +3 new tests, 0 deletions since the removed helper had no test
+  pinning it).
+
+* fix(agent): address PR #60 round-3 doc/robustness review
+
+Three below-threshold findings from the latest review, all cheap enough to fix in-scope:
+
+- restore_page extension allow-list was too narrow — dropped the ``{.png, .jpg, .jpeg}`` filter and
+  now accepts any file pdf_ingest may have written under ``.book-gen/images/page-NN.*``. pdf_ingest
+  controls that directory; PIL returns whatever format the PDF embedded (WebP, GIF, TIFF on exotic
+  exports). Regression test exercises the ``.webp`` case. - restore_page Tool.description said
+  ``page-NN.png`` but the handler globs; corrected the description to ``page-NN.*`` with a note that
+  the extension depends on what the PDF embedded. - apply_text_correction Tool.description didn't
+  mention the auto-unhide side effect added earlier this session; now it does.
+
+Plus two regression tests guarding the description contracts so a future rewrite can't silently
+  drift them back.
+
+Round-3 #4 (``_BOOK_GEN_DIR`` is a third definition of the ``.book-gen`` literal alongside
+  memory.MEMORY_DIR / session.SESSION_DIR) is deferred to a separate consolidation PR — cross-module
+  refactor, out of scope for this PR.
+
+* fix(agent): tighten restore_page extension allow-list + regression guards
+
+Round-4 review on PR #60, both below threshold but real:
+
+- restore_page's F1 fix over-corrected: dropping the extension filter entirely opened a narrow gap
+  where a stray non-image (``page-01.txt``, ``page-01.json``) in ``.book-gen/images/`` would be
+  attached as page.image and crash the renderer. Restored an allow-list, broadened to the PIL-known
+  image formats: {png, jpg, jpeg, webp, gif, tiff, tif, bmp}. Exotic
+
+PDF exports still round-trip; accidental strays don't. Regression:
+  test_restore_page_ignores_non_image_strays.
+
+- Two round-3 regression tests used permissive ``or`` conditions that would pass even if a future
+  refactor silently weakened either half. Tightened restore_page_description test to require BOTH
+  ``page-NN.*`` and ``.jpg`` signals; tightened apply_text_correction_description test to require
+  the canonical ``unhide`` verb (not just ``hidden``).
+
+Full suite: 632 passing (was 631; +1 regression).
+
+* fix(agent): add .jpeg2000 to PIL image allow-list + refresh stale test docstring
+
+PR #60 round-5 review findings, both below threshold:
+
+- _PIL_IMAGE_EXTS missed .jpeg2000. PDFs embedding JPEG2000 via the /JPXDecode filter land as
+  page-NN.jpeg2000 (PIL format name "JPEG2000" → _extension_for returns "jpeg2000"). Narrow but real
+  gap. Regression test_restore_page_accepts_jpeg2000_from_jpxdecode_streams pins the case. -
+  test_restore_page_accepts_exotic_extensions_pdf_ingest_may_write's docstring still claimed "not a
+  hardcoded allow-list" from the round-3 phrasing, but round-4 deliberately re-added one. Refreshed
+  the docstring to describe the current PIL-known-extensions allow-list and the round-4/round-5
+  scope adjustments.
+
+Full suite: 633 passing (was 632; +1 regression).
+
+* docs(agent): inline comment in restore_page mentions JPEG2000
+
+PR #60 round-6 review finding, below threshold: the inline comment above the ``glob`` call in
+  restore_page still listed only ``WebP, GIF, TIFF, BMP`` for exotic PDF embeddings, even though the
+  round-5 commit ``0472e91`` added JPEG2000 to ``_PIL_IMAGE_EXTS`` and its module-level comment.
+  Aligned the inline prose so the three places (module comment, inline comment, allow-list set) all
+  name the same set of formats.
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+
 ## v1.10.0 (2026-04-21)
+
+### Chores
+
+- **release**: 1.10.0 [skip ci]
+  ([`a799600`](https://github.com/mfozmen/littlepress-ai/commit/a799600eec75f75bd999a1a9aab89e94a8579a0b))
 
 ### Features
 
