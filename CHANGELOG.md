@@ -1,6 +1,90 @@
 # CHANGELOG
 
 
+## v1.12.0 (2026-04-23)
+
+### Documentation
+
+- **plan**: Capture Yavru Dinozor v2 failure modes + prescribe ingestion-out-of-LLM refactor
+  ([`183d2c3`](https://github.com/mfozmen/littlepress-ai/commit/183d2c3f442742cda4febba3f5a212ba4c9ffb6e))
+
+Session transcript from 2026-04-23 (OpenAI provider this time) kept producing pre-refactor behaviour
+  despite PR #60/#62/#63 landing: per-page confirm prompts, keep_image=true parameter references,
+  skip_page renumber message, series question in greeting, metadata review checkpoint, missing cover
+  step, language mismatch. Likely a combination of stale local install + LLM training-memory
+  overpowering prompt-level fixes.
+
+Prompt engineering has hit its ceiling. The real fix -- taking ingestion off the agent loop entirely
+  so the LLM doesn't get to speak during transcribe_page calls -- is now the top next-up item.
+  Captured the scope and entry criteria in PLAN so the refactor PR has a clear brief to pick up.
+
+- **plan**: Sharpen "AI only for judgment" scope — back-cover blurb opt-in path
+  ([`f54be23`](https://github.com/mfozmen/littlepress-ai/commit/f54be238fc1b9026a4d8b2afc62b5a0455992a03))
+
+Maintainer's architectural call: deterministic Python collects data (title/author/series/cover
+  menu/metadata review); LLM is for judgment and creativity only. Concrete example added to the
+  ingestion-out-of-LLM plan entry: the back-cover blurb is a plain prompt by default ("type it, or
+  'skip', or 'AI'"); only the 'AI' branch routes to the LLM to draft a blurb the user then approves
+  or edits. Writing verbatim needs no LLM; generating creatively does.
+
+Also enumerates the full split upfront so the refactor's brainstorm has a clear map of what moves to
+  deterministic Python (title / author / series / back-cover default / cover menu / metadata review
+  / OCR ingestion) vs. what stays LLM-driven (vision OCR + classification, AI cover prompt, AI blurb
+  opt-in, review-turn NL parsing).
+
+### Features
+
+- **repl**: Restore series question to greeting
+  ([#64](https://github.com/mfozmen/littlepress-ai/pull/64),
+  [`3a64133`](https://github.com/mfozmen/littlepress-ai/commit/3a6413314fd4546adee5ee6ebc93d73e04973221))
+
+* feat(repl): restore the "is this a series?" greeting question
+
+The series-question feature (shipped previously under the feat/always-ask-series-question banner per
+  docs/PLAN.md) got silently dropped when the T11 greeting rewrite collapsed the upfront-question
+  block under the "ask only what cannot be inferred" heading. The series question qualifies under
+  that rule -- the user is the source of truth; the agent cannot infer "part of a series" from title
+  pattern alone.
+
+Restored the greeting clause: agent ALWAYS asks whether this book is part of a series (every book,
+  regardless of title pattern), follows up with the volume number on yes, and has the user record
+  the answer inside the title (e.g. ``Yavru Dinozor - 1``) so the cover renderer picks it up
+  naturally. No new data field.
+
+Regression: test_greeting_always_asks_series_question locks in
+
+the "series" + "volume" + "always/every book" tokens so a future rewrite can't silently drop the
+  flow again.
+
+Full suite: 636 passing.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(repl): address PR #64 review — English example, tighter test guard, PLAN row
+
+Three review findings:
+
+- #1 (CRITICAL, CLAUDE.md violation): the new series-question bullet used ``Yavru Dinozor - 1`` as
+  the title example baked into the production system prompt. CLAUDE.md's English-only rule applies
+  to greetings (same pattern PR #60, #61, #63 had to clean up). Replaced with ``My Series - 1`` —
+  language-neutral and still conveys the series-plus-volume shape. Also fixed the same leak in the
+  regression test's docstring. - #2 (below threshold, scope): PLAN's row for the series feature
+  still read ``TBD``. Updated to ``#64`` / ``feat/restore-series-question`` so the Shipped table has
+  the right PR number. Other TBD rows flagged by the reviewer are pre-existing drift outside this
+  PR's scope — tracked for a separate docs sweep. - #3 (below threshold): regression test used
+  ``assert "always" in g or "every book" in g``. The ``or`` meant a future rewrite could drop either
+  phrase and the test still passes. Tightened to ``assert "always" in g`` + ``assert "every book" in
+  g`` so both the anti-inference framing tokens are pinned independently.
+
+Full suite: 636 passing (unchanged; fix tightens, does not add).
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+
 ## v1.11.4 (2026-04-23)
 
 ### Bug Fixes
@@ -56,6 +140,11 @@ Full suite: 635 passing (unchanged — this is a wording refactor plus a docstri
 Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 
 Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+### Chores
+
+- **release**: 1.11.4 [skip ci]
+  ([`7b4a245`](https://github.com/mfozmen/littlepress-ai/commit/7b4a245f076fd4cff93dd8febf42626f83e76055))
 
 
 ## v1.11.3 (2026-04-23)
