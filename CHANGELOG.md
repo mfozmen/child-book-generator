@@ -1,7 +1,153 @@
 # CHANGELOG
 
 
+## v1.13.0 (2026-04-23)
+
+### Features
+
+- **ingestion**: Run OCR + sentinel classification before the agent starts
+  ([#65](https://github.com/mfozmen/littlepress-ai/pull/65),
+  [`a781178`](https://github.com/mfozmen/littlepress-ai/commit/a781178349c8528755f5f0c8e5b6ab3a5a78ee81))
+
+* docs(spec): deterministic ingestion — first sub-project of AI-only-for-judgment refactor
+
+Moves OCR + sentinel classification out of the agent tool-use loop and into a pure Python ingestion
+  step that runs between ``from_pdf`` and the first agent turn. The LLM still does the vision work,
+  but from a deterministic caller -- no tool-use ceremony, no chance for the model to reconstruct
+  the old confirm UI from training memory.
+
+Scope is deliberately narrow: only transcribe_page + blank-hide move to Python. propose_typo_fix and
+  propose_layouts stay on the agent side (they're bounded and silent; not the source of the theatre
+  this PR fixes). Deterministic metadata collection is the next sub-project.
+
+Out of scope explicitly listed: metadata, typo batch, layout batch, Tesseract-only mode, parallel
+  OCR. Each can come back as its own sub-PR if a real user need surfaces.
+
+* docs(plan): implementation plan for deterministic ingestion (PR-A)
+
+Eight tasks across five chunks: - Chunk 1: rename 3 agent_tools helpers to module-public so
+  ingestion can import them (pure visibility change) - Chunk 2: src/ingestion.py with IngestReport +
+  6 TDD tests covering TEXT / MIXED / BLANK sentinels, idempotency, NullProvider - Chunk 3: REPL
+  load-hook + integration test that asserts OCR happens before any agent turn - Chunk 4: greeting
+  loses PROCESS THE DRAFT AUTOMATICALLY + BATCH THE INGESTION blocks; regression pins the absence -
+  Chunk 5: full suite + README/PLAN sweep + PR
+
+Spec at docs/superpowers/specs/2026-04-23-deterministic-ingestion-design.md.
+
+* refactor(agent): promote vision/sentinel helpers to module-public
+
+Drop leading underscores from _call_vision_for_transcription, _extract_sentinel, and
+  _apply_sentinel_result to expose them for reuse by the upcoming ingestion module. Pure visibility
+  change — no behavior change, all tests remain passing.
+
+* feat(ingestion): scaffold module with no-op entry point
+
+Adds src/ingestion.py with IngestReport dataclass and ingest_image_only_pages() stub. Task 3
+  implements the OCR loop body. Includes corresponding test that verifies empty draft returns empty
+  report with no LLM calls.
+
+* feat(ingestion): implement deterministic image-only page OCR loop
+
+Iterate image-only pages in draft; call call_vision_for_transcription for each;
+  apply_sentinel_result to classify (blank/text-only/mixed); track per-category in the report.
+  Errors are captured and logged but non-fatal. Matches preserve-child-voice contract: every page
+  mutation goes through the sentinel-enforced vision path.
+
+Implements Task 3 of the deterministic-ingestion plan.
+
+* test(ingestion): add regression tests for sentinel classification
+
+Three tests pin the behavior of each sentinel type (<TEXT>, <MIXED>, <BLANK>) at the ingestion
+  layer. This ensures future refactors of ingest_image_only_pages or apply_sentinel_result cannot
+  silently break a sentinel branch.
+
+- test_ingest_applies_text_sentinel_clears_image_and_sets_text_only -
+  test_ingest_applies_mixed_sentinel_preserves_image_and_layout -
+  test_ingest_applies_blank_sentinel_hides_page
+
+* test(ingestion): add regression tests for idempotence and null provider
+
+Task 5 — sentinel regression tests: 1. test_ingest_is_idempotent_on_already_processed_pages:
+  Re-running ingestion on an already-transcribed draft must not call the LLM, as already-text pages
+  are skipped (matters when reloading memory). 2. test_ingest_no_op_on_null_provider:
+  Offline/NullProvider session ingestion silently does nothing, leaving the draft untouched.
+
+Both behaviors are already implemented in the loop body (Task 3). Tests confirm the contract is met.
+
+* feat(repl): auto-ingest image-only pages on PDF load
+
+Wire ``ingest_image_only_pages`` into both load paths — CLI preload (``_greet_if_draft_loaded``) and
+  the ``/load`` slash command (``_cmd_load``) — via a shared ``_run_ingestion`` helper. Ingestion
+  now runs deterministically before the agent's first turn so the agent always sees a
+  fully-transcribed draft. The call is idempotent: already-text pages are skipped, so
+  memory-restored sessions are unaffected.
+
+* refactor(repl): remove stale ingestion directives from agent greeting
+
+The deterministic-ingestion work (Task 6) moved OCR and sentinel classification to run before the
+  agent's first turn. The greeting still contained two large blocks telling the agent to run these
+  steps itself, which reintroduced the theatre this refactor aimed to eliminate. Replace those
+  blocks with a single short section stating the draft arrives already transcribed.
+
+Add regression tests to prevent these stale directives from leaking back in during future greeting
+  rewrites.
+
+* docs: document deterministic ingestion in README and PLAN
+
+README: add status bullet noting OCR + sentinel classification now runs
+
+before the agent conversation starts (no per-page prompts during load).
+
+PLAN: add feat/deterministic-ingestion to the Shipped table; replace the
+
+"Move ingestion out of the LLM loop entirely" wall-of-text with a trimmed "Continue the
+  AI-only-for-judgment refactor" entry naming the two remaining sub-projects.
+
+* docs(plan): record PR #65 for feat/deterministic-ingestion
+
+* fix(ingestion): address PR #65 review — real NullProvider guard, greeting/NOTE alignment, tighter
+  regression tests
+
+Three findings, all below threshold but all legitimate:
+
+- #2 (real bug): the ``NullProvider`` early-return in ``src/ingestion.py`` used
+  ``getattr(llm_provider, "name", "") == "none"`` which silently returned False for ``NullProvider``
+  (it has no ``.name`` attribute). Execution fell through into the loop, called ``chat()`` → raised
+  NotImplementedError, got caught in the except block, and populated ``report.errors``. Fixed by
+  switching to ``isinstance(llm_provider, NullProvider)`` — guard now short-circuits before any
+  vision call. Regression tightened in ``test_ingest_no_op_on_null_provider`` to assert
+  ``report.errors == []`` (the old assertions passed whether the guard fired or not because the end
+  state of a failed vision call looks identical to a short-circuit).
+
+- #1: ``_build_image_only_note`` in ``src/agent_tools.py`` (surfaced via ``read_draft``) still told
+  the agent "Use the ``transcribe_page`` tool to OCR each flagged page" — directly contradicting the
+  new greeting's "Do NOT call transcribe_page during the metadata phase" directive. Rewrote the note
+  to acknowledge ingestion already ran and point the agent at the post-render review-turn re-OCR
+  path instead. New regression ``test_image_only_note_does_not_tell_agent_to_call_transcribe_page``
+  pins the alignment.
+
+- #3: ``assert "transcribe_page" in g`` in ``test_greeting_drives_auto_ingest_then_review_turn`` was
+  vacuous — the new greeting contains the token in a "do NOT call" directive, so the assertion
+  passed whether the greeting drove auto-apply or told the agent to avoid the tool entirely. Removed
+  the vacuous line with a comment pointing at the companion test that pins the real intent.
+
+Full suite: 647 passing (was 646; +1 regression from #1).
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+
 ## v1.12.0 (2026-04-23)
+
+### Chores
+
+- **release**: 1.12.0 [skip ci]
+  ([`0bcfe81`](https://github.com/mfozmen/littlepress-ai/commit/0bcfe810f6255dbfbdbe203b70477b23231fb85e))
 
 ### Documentation
 
