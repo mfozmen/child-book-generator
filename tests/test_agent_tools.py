@@ -3404,11 +3404,11 @@ def test_restore_page_reports_no_draft_when_unloaded():
 
 
 def test_extract_sentinel_returns_empty_on_empty_or_whitespace_reply():
-    """Coverage for the empty-reply early-return in _extract_sentinel."""
-    from src.agent_tools import _extract_sentinel
+    """Coverage for the empty-reply early-return in extract_sentinel."""
+    from src.agent_tools import extract_sentinel
 
-    assert _extract_sentinel("") == ("", "")
-    assert _extract_sentinel("   \n  \n\t") == ("", "")
+    assert extract_sentinel("") == ("", "")
+    assert extract_sentinel("   \n  \n\t") == ("", "")
 
 
 def test_apply_text_correction_rejects_out_of_range(tmp_path):
@@ -3491,7 +3491,7 @@ def test_restore_page_rejects_out_of_range(tmp_path):
 
 
 def test_extract_sentinel_skips_leading_blank_line_before_sentinel():
-    """``_extract_sentinel`` must skip to the first *non-empty* line.
+    """``extract_sentinel`` must skip to the first *non-empty* line.
 
     A reply of ``"\\n<TEXT>\\nhello"`` has an empty first line; the
     sentinel ``<TEXT>`` is on line 2. Without the fix ``lines[0]`` is
@@ -3500,24 +3500,24 @@ def test_extract_sentinel_skips_leading_blank_line_before_sentinel():
     raw ``"<TEXT>\\nhello"`` string verbatim into ``page.text`` with a
     warning prefix.  After the fix the sentinel is recognised and the
     body is returned cleanly."""
-    from src.agent_tools import _extract_sentinel
+    from src.agent_tools import extract_sentinel
 
-    sentinel, body = _extract_sentinel("\n<TEXT>\nBir gün bir yumurta çatlamış")
+    sentinel, body = extract_sentinel("\n<TEXT>\nBir gün bir yumurta çatlamış")
     assert sentinel == "<TEXT>"
     assert body == "Bir gün bir yumurta çatlamış"
 
 
 def test_extract_sentinel_skips_leading_blank_lines_for_blank_and_mixed():
     """Same tolerance for ``<BLANK>`` (no body) and ``<MIXED>``."""
-    from src.agent_tools import _extract_sentinel
+    from src.agent_tools import extract_sentinel
 
     # Two leading blank lines before <BLANK>.
-    sentinel, body = _extract_sentinel("\n\n<BLANK>")
+    sentinel, body = extract_sentinel("\n\n<BLANK>")
     assert sentinel == "<BLANK>"
     assert body == ""
 
     # One leading blank line before <MIXED>.
-    sentinel, body = _extract_sentinel("\n<MIXED>\nKüçük dinozor")
+    sentinel, body = extract_sentinel("\n<MIXED>\nKüçük dinozor")
     assert sentinel == "<MIXED>"
     assert body == "Küçük dinozor"
 

@@ -125,7 +125,7 @@ _MSG_UNSET = "(unset — ask the user)"
 # Single source of truth for the "don't echo this / don't ask for
 # approval" suffix every auto-applying tool appends to its success
 # reply. Centralised so the four sentinel branches in
-# ``_apply_sentinel_result`` and the ``propose_typo_fix_tool``
+# ``apply_sentinel_result`` and the ``propose_typo_fix_tool``
 # handler stay lockstep — no per-branch wording drift ("this text"
 # vs "this status") for future reviews to catch.
 _NO_DISPLAY_NO_APPROVAL_SUFFIX = (
@@ -715,7 +715,7 @@ def transcribe_page_tool(
         empty_msg = _check_empty_reply(cleaned, page_n, method)
         if empty_msg is not None:
             return empty_msg
-        return _apply_sentinel_result(page, cleaned, page_n, method)
+        return apply_sentinel_result(page, cleaned, page_n, method)
 
     return Tool(
         name="transcribe_page",
@@ -816,7 +816,7 @@ def _parse_transcribe_input(
     return page_n, page, None
 
 
-def _call_vision_for_transcription(
+def call_vision_for_transcription(
     llm: object, image_path: Path, page_n: int
 ) -> tuple[str, str | None]:
     """Send the page image to the active LLM and normalise errors
@@ -875,7 +875,7 @@ def _run_ocr_engine(
         return _call_tesseract_for_transcription(
             Path(page.image), page_n, lang
         )
-    return _call_vision_for_transcription(
+    return call_vision_for_transcription(
         get_llm(), Path(page.image), page_n
     )
 
@@ -983,7 +983,7 @@ def _check_empty_reply(cleaned: str, page_n: int, method: str) -> str | None:
     return None
 
 
-def _extract_sentinel(reply: str) -> tuple[str, str]:
+def extract_sentinel(reply: str) -> tuple[str, str]:
     """Parse the model's reply into ``(sentinel, body)``.
 
     The first *non-empty* line is normalised (whitespace + backtick/quote
@@ -1008,7 +1008,7 @@ def _extract_sentinel(reply: str) -> tuple[str, str]:
     return "", reply.strip()
 
 
-def _apply_sentinel_result(page, reply: str, page_n: int, method: str) -> str:
+def apply_sentinel_result(page, reply: str, page_n: int, method: str) -> str:
     """Parse the OCR reply and apply the appropriate action based on
     which sentinel the model used (or the fallback when it didn't).
 
@@ -1032,7 +1032,7 @@ def _apply_sentinel_result(page, reply: str, page_n: int, method: str) -> str:
             + _NO_DISPLAY_NO_APPROVAL_SUFFIX
         )
 
-    sentinel, body = _extract_sentinel(reply)
+    sentinel, body = extract_sentinel(reply)
 
     if sentinel == _BLANK_SENTINEL:
         page.hidden = True
