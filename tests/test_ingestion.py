@@ -82,3 +82,56 @@ def test_ingest_transcribes_every_image_only_page(tmp_path):
     assert draft.pages[2].text == "Page three text"
     assert report.text_pages == [2, 3]
     assert report.total_processed == 2
+
+
+def test_ingest_applies_text_sentinel_clears_image_and_sets_text_only(tmp_path):
+    from src.ingestion import ingest_image_only_pages
+
+    img = _tiny_png(tmp_path / ".book-gen" / "images" / "page-01.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        pages=[DraftPage(text="", image=img, layout="image-top")],
+    )
+    llm = _ScriptedLLM(["<TEXT>\nHello"])
+
+    report = ingest_image_only_pages(draft, llm, _console())
+
+    assert draft.pages[0].text == "Hello"
+    assert draft.pages[0].image is None
+    assert draft.pages[0].layout == "text-only"
+    assert report.text_pages == [1]
+
+
+def test_ingest_applies_mixed_sentinel_preserves_image_and_layout(tmp_path):
+    from src.ingestion import ingest_image_only_pages
+
+    img = _tiny_png(tmp_path / ".book-gen" / "images" / "page-01.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        pages=[DraftPage(text="", image=img, layout="image-top")],
+    )
+    llm = _ScriptedLLM(["<MIXED>\nHello plus a drawing"])
+
+    report = ingest_image_only_pages(draft, llm, _console())
+
+    assert draft.pages[0].text == "Hello plus a drawing"
+    assert draft.pages[0].image == img
+    assert draft.pages[0].layout == "image-top"
+    assert report.mixed_pages == [1]
+
+
+def test_ingest_applies_blank_sentinel_hides_page(tmp_path):
+    from src.ingestion import ingest_image_only_pages
+
+    img = _tiny_png(tmp_path / ".book-gen" / "images" / "page-01.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        pages=[DraftPage(text="", image=img)],
+    )
+    llm = _ScriptedLLM(["<BLANK>"])
+
+    report = ingest_image_only_pages(draft, llm, _console())
+
+    assert draft.pages[0].hidden is True
+    assert draft.pages[0].text == ""
+    assert report.blank_pages == [1]
