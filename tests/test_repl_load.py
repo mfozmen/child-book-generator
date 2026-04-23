@@ -273,3 +273,96 @@ def test_load_quoted_path_with_spaces(tmp_path):
     # has the same bytes but a hashed filename, not the original path.
     assert repl.draft.source_pdf.is_file()
     assert repl.draft.source_pdf.read_bytes() == pdf.read_bytes()
+
+
+def test_load_pdf_auto_ingests_image_only_pages(tmp_path):
+    """End-to-end: loading an image-only PDF via /load triggers
+    deterministic ingestion (via ``ingest_image_only_pages``) before
+    any agent turn — the agent sees a draft that's already been OCR'd.
+
+    The scripted LLM's ``chat`` method plays the vision-OCR role;
+    ``turn`` must never be called during ingestion (it would mean the
+    agent started before ingestion finished).
+    """
+    import io
+
+    from rich.console import Console
+
+    from src.providers.llm import find
+
+    # Build a 2-page image-only PDF (no text layer, only embedded images).
+    pdf = tmp_path / "draft.pdf"
+    from reportlab.lib.pagesizes import A5
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas as rl_canvas
+
+    c = rl_canvas.Canvas(str(pdf), pagesize=A5)
+    for i in range(2):
+        img_path = tmp_path / f"_src_{i}.png"
+        Image.new("RGB", (120, 160), (200, 200, 200)).save(img_path)
+        c.drawImage(ImageReader(str(img_path)), 50, 200, width=300, height=400)
+        c.showPage()
+    c.save()
+
+    class _LLM:
+        name = "anthropic"
+
+        def __init__(self):
+            self.chat_calls = 0
+            self.turn_calls = 0
+            self.chat_calls_at_first_turn: int | None = None
+
+        def chat(self, *_a, **_kw):
+            self.chat_calls += 1
+            return f"<TEXT>\nPage {self.chat_calls} transcribed"
+
+        def turn(self, *_a, **_kw):
+            # Record how many chat (OCR) calls had already happened
+            # the first time the agent's tool-use loop fires.  Ingestion
+            # must be complete (chat_calls == 2) before this point.
+            if self.chat_calls_at_first_turn is None:
+                self.chat_calls_at_first_turn = self.chat_calls
+            self.turn_calls += 1
+            if self.chat_calls == 0:
+                raise AssertionError(
+                    "agent should not have started yet — ingestion must "
+                    "finish before the first agent turn"
+                )
+            from src.agent import AgentResponse
+
+            return AgentResponse(
+                content=[{"type": "text", "text": "draft looks good"}],
+                stop_reason="end_turn",
+            )
+
+    llm = _LLM()
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=False, width=100, no_color=True)
+    repl = Repl(
+        read_line=_scripted([f"/load {pdf}", "/exit"]),
+        console=console,
+        provider=find("anthropic"),
+        session_root=tmp_path,
+        llm_factory=lambda _spec, _key: llm,
+    )
+    repl.run()
+
+    assert repl.draft is not None, "draft should be loaded"
+    assert llm.chat_calls == 2, (
+        f"expected 2 chat calls (one per image-only page), got {llm.chat_calls}"
+    )
+    # The agent may greet the user after ingestion, but it must not
+    # start its tool-use loop BEFORE ingestion completes.  If
+    # chat_calls_at_first_turn is None the agent never turned (also
+    # fine); if it is set it must equal 2 (all pages already OCR'd).
+    if llm.chat_calls_at_first_turn is not None:
+        assert llm.chat_calls_at_first_turn == 2, (
+            "agent turn fired before ingestion completed: "
+            f"chat_calls at first turn = {llm.chat_calls_at_first_turn}, "
+            "expected 2"
+        )
+    # Both pages should have text populated by the ingestion pass.
+    for i, page in enumerate(repl.draft.pages):
+        assert page.text.strip(), (
+            f"page {i + 1} text is empty — ingestion did not populate it"
+        )

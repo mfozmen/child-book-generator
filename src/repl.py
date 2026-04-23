@@ -52,6 +52,7 @@ from src.providers.validator import (
     ProviderUnavailable,
     TransientValidationError,
 )
+from src.ingestion import ingest_image_only_pages
 
 
 SlashHandler = Callable[["Repl", str], int | None]
@@ -289,6 +290,7 @@ class Repl:
         or when no PDF was pre-loaded by the CLI."""
         if self._draft is None or isinstance(self._llm, NullProvider):
             return
+        self._run_ingestion()
         try:
             self._agent.say(_AGENT_GREETING_HINT)
         except Exception as e:
@@ -317,6 +319,18 @@ class Repl:
             self._persist_draft()
             if exit_code is not None:
                 return exit_code
+
+    def _run_ingestion(self) -> None:
+        """OCR every image-only page in the current draft before the
+        agent's first turn.  No-op when there is no draft, when the
+        provider is offline (NullProvider), or when all pages already
+        have text (idempotent)."""
+        if self._draft is None or isinstance(self._llm, NullProvider):
+            return
+        try:
+            ingest_image_only_pages(self._draft, self._llm, self._console)
+        except Exception as e:  # noqa: BLE001 — keep the load path alive
+            self._console.print(f"[dim]Auto-ingestion failed: {e}[/dim]")
 
     def _persist_draft(self) -> None:
         """Write the current draft to .book-gen/draft.json so the next
@@ -1083,6 +1097,9 @@ def _cmd_load(repl: Repl, args: str) -> None:
         f"[green]Loaded {len(draft.pages)} pages[/green] from {pdf_path.name} "
         f"({with_images} with an embedded illustration)."
     )
+    # OCR image-only pages deterministically before the agent's first
+    # turn — the agent must see a draft that's already been transcribed.
+    repl._run_ingestion()
     # Kick the agent off so the user doesn't stare at silence after the
     # load. Matches the CLI-arg bootstrap path. Offline (NullProvider)
     # stays quiet — there's no agent to greet with.
