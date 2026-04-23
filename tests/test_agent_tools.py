@@ -3611,6 +3611,27 @@ def test_image_only_note_does_not_mandate_user_confirm():
     assert "confirm the transcription with the user" not in note
 
 
+def test_image_only_note_does_not_tell_agent_to_call_transcribe_page():
+    """Regression for PR #65 #1: after deterministic ingestion ships,
+    the ``_build_image_only_note`` text is surfaced (via read_draft)
+    ONLY when ingestion left a page still flagged image-only — i.e.
+    OCR already failed for that page. The note must NOT re-instruct
+    the agent to run ``transcribe_page`` during the metadata phase;
+    that directly contradicts the new greeting and re-opens the
+    per-page confirm theatre this refactor killed. Re-OCR happens
+    on user request in the post-render review turn."""
+    from src.agent_tools import _build_image_only_note
+
+    note = _build_image_only_note([1, 2])
+    # Must NOT contain the old "call transcribe_page" directive.
+    assert "Use the ``transcribe_page`` tool to OCR" not in note
+    # Must acknowledge ingestion already ran and point the agent at
+    # the review-turn re-OCR path instead.
+    lower = note.lower()
+    assert "ingestion" in lower or "already ran" in lower
+    assert "review" in lower
+
+
 def test_restore_page_finds_jpg_extracted_drawing(tmp_path):
     """Regression for PR #60 #3: pdf_ingest writes .jpg for JPEG-embedded
     PDFs (Samsung Notes). restore_page must re-attach them by extension-

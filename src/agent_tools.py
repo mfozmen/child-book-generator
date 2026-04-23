@@ -266,22 +266,23 @@ def _read_draft_page_lines(draft: Draft) -> tuple[list[str], list[int]]:
 
 
 def _build_image_only_note(image_only_pages: list[int]) -> str:
-    """Single summary NOTE telling the agent to OCR flagged pages
-    via ``transcribe_page`` (or ask the user to transcribe by hand)
-    — preserve-child-voice in one place, not per page."""
+    """Single summary NOTE telling the agent why some pages are still
+    flagged image-only after deterministic ingestion ran — and what
+    to do about them (nothing, during the metadata phase)."""
     which = ", ".join(str(n) for n in image_only_pages)
     return (
         f"NOTE: page(s) {which} are image-only — the PDF has no "
         "text layer there, likely a Samsung Notes / phone-scan "
-        "export where the text is rendered inside the image. "
-        "Use the ``transcribe_page`` tool to OCR each flagged "
-        "page via the active LLM's vision capability (Claude 3+, "
-        "GPT-4o, Gemini 1.5+), or ask the user to transcribe "
-        "manually. The ``transcribe_page`` tool auto-applies the "
-        "OCR result; the user audits the rendered PDF later and "
-        "can correct specific pages via ``apply_text_correction`` "
-        "in the review turn. Do not invent, paraphrase, or "
-        "'guess' the child's words — preserve-child-voice."
+        "export. Deterministic ingestion already ran OCR + sentinel "
+        "classification on every image-only page BEFORE your first "
+        "turn; if any remain flagged here it means the OCR call "
+        "failed (offline session, vision error) and the page "
+        "didn't get transcribed automatically. Do NOT call "
+        "``transcribe_page`` during the metadata phase to retry — "
+        "proceed with metadata + render, and the user can ask for "
+        "a re-OCR on the specific page in the post-render review "
+        "turn. Preserve-child-voice: do not invent, paraphrase, or "
+        "'guess' the child's words."
     )
 
 

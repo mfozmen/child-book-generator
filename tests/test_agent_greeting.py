@@ -153,8 +153,13 @@ def test_greeting_drives_auto_ingest_then_review_turn():
     from src.repl import _AGENT_GREETING_HINT
 
     g = _AGENT_GREETING_HINT.lower()
-    # Auto-ingest signals.
-    assert "transcribe_page" in g
+    # Auto-apply signal — the greeting must tell the agent not to
+    # re-run ingestion even though transcribe_page still exists as a
+    # review-turn tool. ``"transcribe_page" in g`` alone is vacuous
+    # (it passes whether the greeting says "call transcribe_page" or
+    # "do NOT call transcribe_page"); the real intent is covered by
+    # test_greeting_tells_agent_the_draft_is_already_processed, which
+    # pins the "already processed" signal separately.
     assert ("auto" in g) or ("without asking" in g) or ("do not ask" in g)
     # Review turn.
     assert "render" in g and ("issues" in g or "review" in g)

@@ -179,3 +179,16 @@ def test_ingest_no_op_on_null_provider(tmp_path):
     assert draft.pages[0].text == ""
     assert draft.pages[0].image == img  # untouched
     assert draft.pages[0].layout == "image-top"
+    # PR #65 #2 regression: ``report.errors`` must also be empty.
+    # The original guard used ``getattr(llm_provider, "name", "")
+    # == "none"`` which silently returned False for NullProvider
+    # (it has no ``.name`` attribute), so execution fell through
+    # into the loop, called ``chat()`` → raised NotImplementedError,
+    # got caught in the except block, and populated ``errors``.
+    # The fixed guard (``isinstance(..., NullProvider)``) short-
+    # circuits before the loop, so ``errors`` stays empty.
+    assert report.errors == [], (
+        f"NullProvider path must short-circuit before the vision "
+        f"call; errors leaking in means the guard regressed: "
+        f"{report.errors!r}"
+    )

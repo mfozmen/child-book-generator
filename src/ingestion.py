@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from src.draft import Draft
+from src.providers.llm import NullProvider
 
 
 @dataclass
@@ -41,11 +42,11 @@ def ingest_image_only_pages(
     sentinel outcome; return a summary. Mutates ``draft`` in place.
 
     No-op when ``llm_provider`` is ``None`` or a ``NullProvider``
-    (name ``"none"``); the slash-command transcribe path still
-    handles offline sessions.
+    instance; the slash-command transcribe path still handles
+    offline sessions.
     """
     report = IngestReport()
-    if llm_provider is None or getattr(llm_provider, "name", "") == "none":
+    if llm_provider is None or isinstance(llm_provider, NullProvider):
         return report
 
     # Import here rather than at module top to avoid a circular
