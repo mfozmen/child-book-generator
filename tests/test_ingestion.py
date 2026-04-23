@@ -135,3 +135,47 @@ def test_ingest_applies_blank_sentinel_hides_page(tmp_path):
     assert draft.pages[0].hidden is True
     assert draft.pages[0].text == ""
     assert report.blank_pages == [1]
+
+
+def test_ingest_is_idempotent_on_already_processed_pages(tmp_path):
+    """Re-running ingestion on an already-transcribed draft must not
+    re-call the LLM (already-text pages are skipped; this matters
+    when the user reloads a memory-restored draft)."""
+    from src.ingestion import ingest_image_only_pages
+
+    img = _tiny_png(tmp_path / ".book-gen" / "images" / "page-01.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        pages=[DraftPage(text="", image=img)],
+    )
+    llm = _ScriptedLLM(["<TEXT>\nHello", "<TEXT>\nShould-not-fire"])
+
+    ingest_image_only_pages(draft, llm, _console())
+    assert len(llm.calls) == 1
+
+    # Second run: page.text is already populated → skipped; image is
+    # already cleared → page is no longer image-only anyway.
+    report2 = ingest_image_only_pages(draft, llm, _console())
+    assert len(llm.calls) == 1  # no new call
+    assert report2.total_processed == 0
+
+
+def test_ingest_no_op_on_null_provider(tmp_path):
+    """Offline / NullProvider session: ingestion silently does nothing,
+    leaving the draft as-is. The manual transcribe_page slash-command
+    path still exists for these users."""
+    from src.ingestion import ingest_image_only_pages
+    from src.providers.llm import NullProvider
+
+    img = _tiny_png(tmp_path / ".book-gen" / "images" / "page-01.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        pages=[DraftPage(text="", image=img, layout="image-top")],
+    )
+
+    report = ingest_image_only_pages(draft, NullProvider(), _console())
+
+    assert report.total_processed == 0
+    assert draft.pages[0].text == ""
+    assert draft.pages[0].image == img  # untouched
+    assert draft.pages[0].layout == "image-top"
