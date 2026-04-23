@@ -1,6 +1,34 @@
 # CHANGELOG
 
 
+## v1.11.3 (2026-04-23)
+
+### Bug Fixes
+
+- **agent**: Drop Preview from transcribe_page tool response + add explicit "do not display"
+  directive ([#62](https://github.com/mfozmen/littlepress-ai/pull/62),
+  [`8050fdd`](https://github.com/mfozmen/littlepress-ai/commit/8050fdd4a52a7b5678e9d8188032bd97c67e20bb))
+
+Real-session test showed the agent STILL emitting per-page "Apply this OCR transcription to page N?
+  ... Approve? (y/n)" pseudo-confirms even after the greeting's forbidden-pattern block was removed.
+  Root cause: the tool return message included a ``Preview: 'YAVRU DİNOZOR 1 Bir gün ...'`` snippet
+  of the transcribed text. The LLM, upon seeing the text in the tool response, defaulted to "show it
+  to the user + ask for approval" -- the exact old-UI behaviour.
+
+Fix: remove the preview from every branch of
+
+``_apply_sentinel_result`` (BLANK / TEXT / MIXED / fallback) and add an explicit instruction in the
+  response itself: "Continue with the next page; do not display this text or ask for approval." The
+  LLM now has neither the text to re-display nor a template to wrap it in.
+
+Full suite: 633 passing (one assertion on "warning" in the fallback message kept intact by restoring
+  that token).
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+
 ## v1.11.2 (2026-04-23)
 
 ### Bug Fixes
@@ -25,6 +53,11 @@ Full suite: 633 passing (one assertion on "warning" in the fallback message kept
   that token).
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+### Chores
+
+- **release**: 1.11.2 [skip ci]
+  ([`245776a`](https://github.com/mfozmen/littlepress-ai/commit/245776a5599ccd37202d1d0269e6582ad553cd00))
 
 
 ## v1.11.1 (2026-04-23)
