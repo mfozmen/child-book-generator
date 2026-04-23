@@ -1,6 +1,63 @@
 # CHANGELOG
 
 
+## v1.11.4 (2026-04-23)
+
+### Bug Fixes
+
+- **agent**: Address PR #62 post-merge review — uniform wording, stop typo_fix text echo, regression
+  guards ([#63](https://github.com/mfozmen/littlepress-ai/pull/63),
+  [`fab05c6`](https://github.com/mfozmen/littlepress-ai/commit/fab05c68ca964803ee97292775dc0a1db58938da))
+
+* fix(agent): address PR #62 review — uniform branch wording, stop echoing page text in
+  propose_typo_fix, add regression guards
+
+Three review findings, all below threshold but all legitimate:
+
+1. BLANK-branch directive in _apply_sentinel_result read "do not display or ask for approval" while
+  the three sibling branches (TEXT / MIXED / fallback) said "do not display this text or ask for
+  approval". Aligned to "do not display this status or ask for approval" so the LLM sees consistent
+  language across all four.
+
+2. PR #62 was a bug fix but had no regression test pinning the absence of the Preview snippet. Added
+  test_transcribe_page_responses_never_include_transcribed_text_preview — a single test that drives
+  all four branches (<BLANK>, <TEXT>, <MIXED>, no-sentinel fallback) with a canary string in the
+  transcription and asserts the canary and "Preview" literal are absent from every reply.
+
+3. propose_typo_fix_tool's handler return still included ``New text: {page.text!r}`` — echoing the
+  entire page content back to the LLM, exactly the trigger PR #62 was meant to kill on
+  transcribe_page. Rewrote the return to metadata-only ("Applied typo fix on page N (reason) (X → Y
+  chars). Continue; do not display this status or ask for approval.") and added
+  test_propose_typo_fix_response_does_not_echo_full_page_text as the regression guard.
+
+Full suite: 635 passing (was 633; +2 regression tests).
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(agent): unify tool-response suffix into a constant, drop Turkish from test docstring
+
+PR #63 round-2 review. Three findings addressed (round-2 #4 is legitimate but unfixable in-place — a
+  future-drift guard, not a RED-first regression, since PR #62 already merged):
+
+- #1 (CRITICAL — CLAUDE.md violation): test docstring contained a Turkish phrase (``Preview: 'YAVRU
+  DİNOZOR 1 Bir gün ...'``). CLAUDE.md's English-only rule exempts test FIXTURES (input data) but
+  not docstrings / comments. Replaced with ``Preview: '<first 80 chars of transcribed text>'``. -
+  #2/#3 (uniform wording): the PR claimed to unify branch wording but swapped one divergence for
+  another — <BLANK> said ``"this status"`` while the other three said ``"this text"``, and
+  propose_typo_fix said ``"this status"`` while the four sentinel branches said ``"this text"``.
+  Extracted the common suffix into ``_NO_DISPLAY_NO_APPROVAL_SUFFIX = "Continue; do not display or
+  ask for approval."`` at module level and threaded it through all five call sites. Single source of
+  truth; no demonstrative ("this X") to drift on.
+
+Full suite: 635 passing (unchanged — this is a wording refactor plus a docstring cleanup).
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+
 ## v1.11.3 (2026-04-23)
 
 ### Bug Fixes
@@ -27,6 +84,11 @@ Full suite: 633 passing (one assertion on "warning" in the fallback message kept
 Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 
 Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+### Chores
+
+- **release**: 1.11.3 [skip ci]
+  ([`df0e792`](https://github.com/mfozmen/littlepress-ai/commit/df0e792b2aabd5ca2315751d7c75e8968652218f))
 
 
 ## v1.11.2 (2026-04-23)
