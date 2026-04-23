@@ -56,7 +56,24 @@ Items below came out of the first real end-to-end test (Yavru Dinozor). Listed r
 
   The pattern says either (a) the user's installed binary is running pre-refactor bytecode that our ``pip install -e`` dance didn't fully replace, or (b) the LLM is reconstructing old UI from training memory at a rate stronger than prompt-level fixes can suppress — or most likely both, layered. Prompt engineering hit its limit over PR #61 → PR #63.
 
-  Real fix: **take ingestion off the agent loop**. When ``cli.py`` / ``repl.py`` loads a PDF, the REPL itself iterates image-only pages, calls ``transcribe_page`` deterministically in Python (no agent turn), applies the three-sentinel outcome (TEXT / MIXED / BLANK), auto-hides blanks. The agent only starts talking *after* ingestion is complete: it greets, asks for title / author / cover choice / back-cover blurb, then renders. Image-only-page ceremony vanishes entirely from the chat surface because the agent never sees it. The three-sentinel classifier stays — it just fires from a deterministic Python caller instead of through the LLM's tool-use loop.
+  Real fix: **take ingestion off the agent loop**. Scoped as a broader principle — *deterministic Python collects data; LLM is for judgment only*. When ``cli.py`` / ``repl.py`` loads a PDF, the REPL itself iterates image-only pages, calls ``transcribe_page`` deterministically in Python (no agent turn), applies the three-sentinel outcome (TEXT / MIXED / BLANK), auto-hides blanks. The agent only starts talking *after* ingestion is complete — or, better, doesn't start talking at all for the questions the app can ask itself.
+
+  **What moves to deterministic Python (no LLM):**
+  - "What is the title?" / "Who is the author?" — plain prompts.
+  - "Is this book part of a series? (y/n) → which volume?" — plain prompts, recorded in the title.
+  - "Back-cover blurb — type it, or 'skip', or 'AI'" — plain prompt. If the user types 'AI' (or equivalent), *then* the LLM is invoked with the story context to draft a blurb, which the user approves / edits. Writing the blurb verbatim needs no LLM; generating one creatively does.
+  - "Cover: [1] use page N's drawing / [2] AI generate / [3] poster" — numbered menu. Only option [2] routes to the LLM (prompt wording + image generation).
+  - Metadata review + confirmation — printed summary + y/n.
+  - OCR ingestion — deterministic call to ``transcribe_page`` per image-only page.
+
+  **What stays LLM-driven (judgment / creativity only):**
+  - Vision OCR itself (image understanding).
+  - Three-sentinel classification ``<BLANK>`` / ``<TEXT>`` / ``<MIXED>`` (judgment on image content).
+  - AI cover prompt generation (creative).
+  - AI back-cover blurb generation when the user opts in (creative).
+  - Post-render review turn free-form parsing ("page 3 text: …", "restore page 5") — natural-language understanding over page-number-indexed user input.
+
+  Image-only-page ceremony vanishes entirely from the chat surface because the agent never sees it. The three-sentinel classifier stays — it just fires from a deterministic Python caller instead of through the LLM's tool-use loop.
 
   Scope: ``src/cli.py`` (or ``src/repl.py``'s load flow) grows an ``_ingest_image_only_pages`` step. Agent greeting strips the "PROCESS THE DRAFT AUTOMATICALLY" section that instructs the agent to run the pipeline — the pipeline runs *before* the agent. Tests: a scripted-LLM integration that loads an 8-page Samsung-Notes fixture, asserts all OCR happens before the first agent turn, and asserts the agent's first message is "what's the title?" not a transcription batch. Estimated ~200 lines + tests.
 
