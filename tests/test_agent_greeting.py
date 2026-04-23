@@ -201,10 +201,26 @@ def test_greeting_no_longer_references_old_skip_page_tool():
     assert "skip_page" not in _AGENT_GREETING_HINT
 
 
-def test_greeting_no_longer_references_keep_image_flag():
+def test_greeting_does_not_instruct_agent_to_pass_keep_image():
+    """The ``keep_image`` parameter was removed from ``transcribe_page``
+    in the review-based-gate refactor. The greeting may NAME the
+    string (to tell the agent to ignore training-data memories of it
+    and to list forbidden UI-mimicking patterns), but must NOT
+    actively instruct the agent to pass it."""
     from src.repl import _AGENT_GREETING_HINT
 
-    assert "keep_image" not in _AGENT_GREETING_HINT
+    g = _AGENT_GREETING_HINT.lower()
+    for directive in (
+        "pass keep_image",
+        "set keep_image",
+        "use keep_image",
+        "call transcribe_page with keep_image",
+        "with keep_image=true",
+    ):
+        assert directive not in g, (
+            f"greeting must not instruct agent to use keep_image "
+            f"(found active directive: {directive!r})"
+        )
 
 
 # ---------------------------------------------------------------------------
