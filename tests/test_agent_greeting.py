@@ -123,25 +123,74 @@ def test_greeting_still_asks_agent_to_read_draft_first():
     assert "read_draft" in lowered
 
 
-def test_greeting_echoes_preserve_child_voice_guard_for_back_cover():
-    """The back cover is child-authored (preserve-child-voice).
-    The greeting must forbid the agent from inventing / paraphrasing
-    the back-cover blurb."""
+def test_greeting_offers_three_back_cover_options():
+    """The back-cover step mirrors the cover step: three explicit
+    options — user writes it / AI drafts from story content / skip.
+    Before the 2026-04-24 update the greeting only allowed option (a)
+    + skip, forcing the user to type the blurb themselves even when
+    they asked the agent to draft one. The AI-draft branch must be
+    named so the agent doesn't default-refuse.
+
+    Assertions are scoped to the back-cover slice of the greeting —
+    a naive ``in lowered`` check would also match the cover bullet
+    (which has its own ``(a)/(b)/(c)`` structure, ``AI``, and
+    ``story's``), so dropping the back-cover addition entirely would
+    still pass. The slice forces the test to actually regress when
+    the back-cover feature regresses."""
     lowered = _AGENT_GREETING_HINT.lower()
 
-    assert "back cover" in lowered or "back-cover" in lowered
-
-    # Guard against inventing or paraphrasing.
-    assert (
-        "do not invent" in lowered
-        or "don't invent" in lowered
-        or "do not paraphrase" in lowered
-        or "don't paraphrase" in lowered
-        or "verbatim" in lowered
+    # Grab the back-cover-specific slice. The greeting's back-cover
+    # bullet begins with "- back-cover blurb" and ends at the
+    # blank-line terminator before the next section ("ask each of
+    # these as its own one-line question").
+    assert "back-cover blurb" in lowered, "back-cover bullet missing entirely"
+    # Explicit delimiter guard — if a future greeting rewrite moves
+    # or rephrases the end-of-section anchor, this assertion fires
+    # loudly BEFORE the slice can silently grow back over the cover
+    # bullet and re-admit the vacuous-pass failure mode (PR #66
+    # round-2 review).
+    assert "ask each of these" in lowered, (
+        "greeting's end-of-section anchor 'ask each of these' has "
+        "moved or been rephrased — update the back-cover test slice "
+        "delimiter to match, or the (a)/(b)/(c) + AI checks below "
+        "will start passing vacuously from the cover bullet"
     )
-    # And "preserve-child-voice" named so the link to CLAUDE.md is
-    # unambiguous.
+    bc = lowered.split("back-cover blurb", 1)[1].split("ask each of these", 1)[0]
+
+    # Three-options pattern matching the cover step, but specifically
+    # inside the back-cover bullet.
+    assert "(a)" in bc and "(b)" in bc and "(c)" in bc, (
+        f"back-cover bullet missing the three-option pattern: {bc!r}"
+    )
+    # (b) must name the AI-generation path explicitly, and the draft
+    # must be grounded in the story's own page content (not generic
+    # theme clichés). Both signals must appear inside the slice.
+    assert "ai" in bc or "generate" in bc, (
+        f"back-cover bullet missing the AI-generation option: {bc!r}"
+    )
+    assert "page text" in bc or "story's" in bc or "story content" in bc, (
+        f"back-cover bullet missing the story-grounding signal: {bc!r}"
+    )
+
+
+def test_greeting_clarifies_preserve_child_voice_scope_for_back_cover():
+    """Preserve-child-voice applies to the book's INTERIOR (page
+    text) — the child's own words must never be rewritten. The
+    back-cover blurb is editor-facing metadata and the AI-draft
+    branch is a legitimate opt-in. The greeting must name both
+    halves so the agent doesn't either (i) refuse an AI-draft
+    request or (ii) take the scope clarification as permission to
+    paraphrase page text."""
+    lowered = _AGENT_GREETING_HINT.lower()
+    # Scope is still named so the link to CLAUDE.md stays unambiguous.
     assert "preserve-child-voice" in lowered
+    # And the clarification: page text / interior is the child's,
+    # NOT the back-cover blurb.
+    assert "interior" in lowered or "page text" in lowered
+    # The AI-draft branch on the back cover must accept the user's
+    # rewrite as the source of truth — "verbatim" must still appear
+    # somewhere in the back-cover section.
+    assert "verbatim" in lowered
 
 
 # ---------------------------------------------------------------------------

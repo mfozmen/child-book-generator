@@ -89,7 +89,7 @@ This project exists so a **child feels like a real author**. Two invariants hold
 
 Per-mutation y/n confirm gates are NOT how this is enforced — those lived through the first year of the project and became the UX problem they were meant to prevent. The single remaining gate is a **cost** confirm on the two AI illustration tools (`generate_cover_illustration`, `generate_page_illustration`) because they spend money. Everything else auto-applies. The user audits the finished PDF in a post-render review turn; any mistake is reversible via `apply_text_correction` or `restore_page`.
 
-Before touching any text that originated from a child author (OCR output, `book.json` page text, cover/back-cover text), Claude MUST invoke the project-level **`preserve-child-voice`** skill (`.claude/skills/preserve-child-voice/`) and follow its rules.
+Before touching any text the child authored — OCR output, `book.json` page text, and cover/back-cover text **when the user has typed or dictated the child's own words into it** — Claude MUST invoke the project-level **`preserve-child-voice`** skill (`.claude/skills/preserve-child-voice/`) and follow its rules. The distinction is authoring source, not field name: page text is always child-authored; a cover subtitle or back-cover blurb typed by the user is child-authored by proxy (verbatim); a back-cover blurb the user explicitly opts into an AI draft for is editor-facing metadata (the user signs off on the draft — that's the editor's role) and is not in scope.
 
 ## Skills used in this project
 

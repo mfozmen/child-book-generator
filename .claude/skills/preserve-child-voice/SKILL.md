@@ -1,6 +1,6 @@
 ---
 name: preserve-child-voice
-description: Guardrail for any edit touching the child's original text (OCR output, book.json page text, cover/back-cover text, transcribed handwriting). Invoke BEFORE adding a tool that touches child content, editing OCR prompts, or writing any code that writes to page.text. The goal is that the child feels like a real author, so their voice must be preserved.
+description: Guardrail for any edit touching text the child authored — OCR output, page text, invented spellings / names / onomatopoeia, and cover or back-cover text the user has typed verbatim on the child's behalf. Out of scope — an AI-drafted back-cover blurb the user explicitly opts into is editor-facing metadata. Invoke BEFORE adding a tool that touches child content, editing OCR prompts, or writing any code that writes to page.text. The goal is that the child feels like a real author, so their voice must be preserved.
 ---
 
 # Preserve the child's voice
@@ -31,10 +31,11 @@ The skill is the documented promise. Any code that violates the invariants above
 
 ## What counts as the child's voice
 
-- Text extracted via OCR / vision from scanned handwriting or Samsung Notes exports.
-- Anything typed or dictated by the child that flows into `book.json` page text, cover subtitle, or back-cover text.
-- Character names, made-up words, onomatopoeia (BOOM, wooosh), exclamations.
-- Invented spelling of creatures and places ("draganosaurus" stays).
+Authoring source matters, not field name:
+
+- **Always child-authored:** text extracted via OCR / vision from scanned handwriting or Samsung Notes exports. Page text in `book.json`. Character names, made-up words, onomatopoeia (BOOM, wooosh), exclamations. Invented spelling of creatures and places ("draganosaurus" stays).
+- **Child-authored by proxy:** anything the user types / dictates into cover subtitle or back-cover text on the child's behalf. Verbatim write path, skill applies.
+- **Editor-facing metadata (out of scope):** a back-cover blurb the user explicitly opts into having the AI draft. The user signs off on the draft — that's the editor's role. Preserve-child-voice does not block the draft; the draft must still be grounded in the story's actual page content, not invented from theme clichés about childhood / imagination.
 
 When in doubt, assume text is the child's and protect it.
 
