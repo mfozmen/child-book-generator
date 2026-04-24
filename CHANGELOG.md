@@ -1,7 +1,289 @@
 # CHANGELOG
 
 
+## v1.16.0 (2026-04-24)
+
+### Documentation
+
+- **plan**: Track historical commit-email rewrite on main
+  ([`e4c31d6`](https://github.com/mfozmen/littlepress-ai/commit/e4c31d67c61dcb82e95fe3f96692ed47bc75190e))
+
+The maintainer's ``~/.gitconfig`` used to carry a work email (``mehmet.fahri@mayadem.com``) and most
+  of ``main``'s history is stamped with it; the personal email (``mehmetfahriozmen@gmail.com``) is
+  the one that should be on an open-source repo going forward.
+
+Current branch (feat/deterministic-metadata-collection) had its 5 commits rewritten pre-merge via
+  ``git rebase --exec 'git commit --amend --author=...'``, which is safe because no other clones of
+  that branch exist. Main's history is the hard case — destructive rewrite affects every SHA from
+  the rewrite point forward, breaks clones and open PRs, and needs force-push against branch
+  protections.
+
+Two paths documented in the PLAN entry:
+
+1. **Rewrite path**: announce a window, use ``git filter-repo`` (not the deprecated
+  ``filter-branch``) with an email-only mailmap so messages and timestamps stay intact, scope to the
+  work-email range, force-push with --force-with-lease, rebase any open PRs onto the new main.
+
+2. **Non-destructive alternative**: ship a ``.mailmap`` file that tells git tooling (and GitHub's
+  commit-list UI) to display the personal email for the old SHAs without rewriting history. Honest
+  ("here's who this was, here's how to contact them"), cheaper, zero blast radius.
+
+Defer the pick until we're ready to spend the maintenance window; the mailmap option is likely the
+  better default unless there's a concrete reason the work email has to vanish from the SHA history
+  itself.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+- **plan**: Trim AI back-cover blurb item (shipped in #66)
+  ([`6759898`](https://github.com/mfozmen/littlepress-ai/commit/67598989d719c3525d27fee2cf8be3fa8fd2714e))
+
+The opt-in AI back-cover blurb generation item sat at the top of Next up with a 2026-04-24 date, but
+  PR #66 (feat/ai-back-cover-blurb) shipped the full opt-in flow: the REPL asks for the blurb with
+  three options (draft your own / AI draft / no blurb), AI-draft routes through the LLM with a
+  preserve-child-voice prompt that grounds on the story's own page text, and the user signs off on
+  the draft before it's written. Removing the stale Next up entry so the remaining items
+  (AI-only-for-judgment sub-project 2, spine-wrap cover template, more image providers) are easier
+  to read.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- **metadata**: Deterministic title/author/series/cover/back-cover prompts
+  ([#69](https://github.com/mfozmen/littlepress-ai/pull/69),
+  [`d10aab7`](https://github.com/mfozmen/littlepress-ai/commit/d10aab7f2fb9ffc854fd71bc61121aaef6169ea1))
+
+* feat(metadata): pure-function helpers for title / author / series prompts
+
+First slice of Sub-project 2 of the "AI-only-for-judgment" refactor. The agent greeting currently
+  tells the LLM to walk the user through a block of upfront questions (title, author, series, cover
+  choice, back-cover blurb). Every one of those is pure data collection — no judgment — and burning
+  an LLM round trip per answer is wasteful, nondeterministic, and gives the model latitude to
+  restructure the flow, skip questions, or add prose the user has to dismiss.
+
+``src/metadata_prompts.py`` introduces the deterministic replacements as pure functions:
+
+- ``collect_title``: prompt + re-prompt on empty, write verbatim - ``collect_author``: same shape -
+  ``collect_series``: y/n prompt with Turkish token support (``evet`` / ``hayır`` as well as
+  ``y``/``n``); on yes, append volume as ``<title> - <n>`` so the cover renderer picks it up
+  naturally — no separate data field
+
+Design notes (memory-backed): - Every session is fresh. Prompts do NOT check for an existing draft
+  value and skip; ask unconditionally. See memory feedback ``fresh_session_per_book``. -
+  preserve-child-voice applies. User-typed strings write verbatim; only outer whitespace stripped
+  (paste trails), no smart-casing, no Unicode normalisation.
+
+Tests pin each shape: verbatim non-ASCII round-trip, outer-whitespace strip, empty re-prompt, yes/no
+  token acceptance (including Turkish), volume integer validation.
+
+Cover / back-cover helpers and REPL wiring follow in the next slices of this branch.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* feat(metadata): cover + back-cover helpers (3-way menus w/ AI opt-in)
+
+Second slice of Sub-project 2. Adds two more pure-function prompt helpers to
+  ``src/metadata_prompts.py``:
+
+- ``collect_cover_choice`` — 3-way menu: (a) use a page drawing, (b) generate with AI, (c) poster.
+  Deterministic branches mutate the draft directly: (a) picks the first non-hidden page with an
+  attached drawing and falls back to poster when nothing's available (100%-text Samsung Notes
+  exports would otherwise silently pick a hidden page); (c) sets style=poster and clears
+  cover_image. (b) leaves the draft untouched and returns ``"ai"`` so the caller can hand off to the
+  agent — drafting a cover prompt from the story's themes is the judgment part that warrants the
+  LLM.
+
+- ``collect_back_cover`` — 3-way menu: (a) none, (b) I'll write it, (c) draft with AI. (a) clears
+  ``back_cover_text``; (b) prompts for a blurb and writes it verbatim (preserve-child-voice — user
+  is typing on the child's behalf); (c) returns ``"ai-draft"`` for agent handoff.
+
+Both helpers re-prompt on unclear answers rather than defaulting silently. The AI-branch return tags
+  (``"ai"`` / ``"ai-draft"``) are the contract with the REPL wiring (slice 3): when an AI branch is
+  chosen, the caller leaves the draft field unset and the agent's first turn handles prompt drafting
+  + user confirm + tool dispatch.
+
+Full metadata_prompts suite: 21 passing.
+
+* feat(repl): wire deterministic metadata prompts + trim agent greeting
+
+Third slice of Sub-project 2, the one where the REPL actually stops asking the LLM to walk the user
+  through 5 upfront questions. Two connected changes:
+
+REPL WIRING - ``_greet_if_draft_loaded`` now runs ``collect_metadata`` (the orchestrator from slices
+  1+2) between OCR ingestion and the agent's first turn. - ``_cmd_load`` does the same when the user
+  drops a PDF mid- session. Offline mode (NullProvider) still short-circuits — the prompts require a
+  real provider because the AI-cover and AI-back-cover branches hand off to the agent.
+
+GREETING REFACTOR - ``_AGENT_GREETING_HINT`` was a module-level string; it's now a default-branch
+  snapshot of a new ``_build_agent_greeting( cover_choice, back_cover_choice)`` function that
+  assembles the greeting from four composable blocks: * ``_GREETING_OPENING`` — greet, language
+  matching, slash- literal rule, pre-transcribed note, and the NEW "metadata is already set by the
+  REPL" paragraph * ``_GREETING_AI_COVER_BRANCH`` — only appended when cover_choice == "ai";
+  instructs the agent to draft a prompt from the story's THEMES (not page text), confirm, and call
+  generate_cover_illustration (OpenAI-only gate still flagged) * ``_GREETING_AI_BACK_COVER_BRANCH``
+  — only appended when back_cover_choice == "ai-draft"; instructs the agent to draft a blurb
+  grounded on actual page content (explicit anti-cliché guard) and save the user-accepted text
+  verbatim * ``_GREETING_RENDER_AND_REVIEW`` — render_book + the post- render review-turn block
+  (unchanged) The four obsolete "ask the user for ..." paragraphs from the old greeting (title,
+  author, series, cover menu, back-cover menu) are gone entirely — the REPL handles all of that
+  deterministically now. - ``_AGENT_GREETING_HINT = _build_agent_greeting()`` shim kept for the
+  large number of tests that read it as a string; new AI-branch tests call the builder directly.
+
+TEST REHABILITATION Four greeting tests deleted (they checked for metadata-collection directives in
+  the greeting that moved to metadata_prompts): -
+  test_greeting_mentions_cover_step_and_its_three_options -
+  test_greeting_option_a_points_at_select_cover_template -
+  test_greeting_offers_three_back_cover_options - test_greeting_always_asks_series_question
+
+Four AI-branch tests reshaped to call ``_build_agent_greeting`` with the explicit AI tag instead of
+  relying on the default: - test_ai_cover_branch_injects_block_naming_the_tool -
+  test_ai_cover_branch_flags_openai_only_and_model_switch -
+  test_ai_back_cover_branch_grounds_draft_in_page_content -
+  test_ai_back_cover_branch_preserves_editor_metadata_scope
+
+Three new positive-assertion tests: - test_default_greeting_does_not_ask_for_metadata_anymore -
+  test_default_greeting_omits_ai_cover_branch - test_default_greeting_omits_ai_back_cover_branch
+
+REPL integration tests (load path, drag-drop, cli_agent, memory, review-loop) had their read_line
+  scripts extended with the five metadata answers so the flow reaches the agent turn. A
+  ``_METADATA_ANSWERS`` tuple was added in two test files where the pattern repeats.
+
+Full suite: 681 passing (was 658 on main; +23).
+
+* docs(metadata): README + PLAN updates for Sub-project 2
+
+User-facing README updated to describe the new deterministic metadata flow:
+
+* Explicit bullet explaining the five prompts (title / author / series / cover / back-cover) with
+  their three-way menus and the preserve-child-voice verbatim write contract. * Paired "the agent
+  runs judgment, not data collection" bullet naming the narrowed agent role: AI-branch execution,
+  render, review loop. * Removed the two stale bullets that described the old agent- driven
+  upfront-question flow (always-asks-series, back-cover-blurb-ask).
+
+docs/PLAN.md: * Sub-project 2 moved out of Next up into the Shipped table (PR number will be filled
+  in post-merge). * Remaining work is now just Sub-project 3 (optional review- turn polish, deferred
+  until user test shows the free-form review turn is too loose).
+
+Plus one new integration test, test_load_prints_deterministic_metadata_prompts_before_agent_turn,
+  that pins the user-visible behaviour: after ``/load`` with a real provider, the Title / Author /
+  series / Cover / Back-cover prompts appear in the console BEFORE the agent's first turn runs. If
+  the wiring regresses (e.g. somebody reverts collect_metadata in _cmd_load), this test fires.
+
+Full suite: 682 passing.
+
+* feat(metadata): collect_metadata orchestrator (completes slice 2)
+
+Missed from the slice-2 commit (``feat(metadata): cover + back-cover helpers``) — the orchestrator
+  that runs the five prompts in their canonical order and returns a ``MetadataChoices(cover,
+  back_cover)`` tuple for the REPL to branch on.
+
+``MetadataChoices`` is a frozen dataclass with two string fields: ``cover`` (one of ``page-drawing``
+  / ``ai`` / ``poster``) and ``back_cover`` (``none`` / ``self-written`` / ``ai-draft``).
+  Deterministic branches already mutated the draft inside the per-field helpers; the REPL uses the
+  returned tags to decide whether to inject the AI-cover / AI-back-cover blocks into the agent
+  greeting.
+
+Covers two cases:
+
+- All-deterministic flow: ``collect_metadata`` returns ``MetadataChoices("page-drawing", "none")``
+  (or similar); the greeting skips both AI blocks and the agent goes straight to render + review. -
+  AI opt-in: user picks ``b`` at the cover prompt and/or ``c`` at the back-cover prompt;
+  orchestrator returns the tags without mutating the corresponding draft fields; agent greeting gets
+  the matching judgment-instruction block and drives the user through prompt drafting + confirm +
+  tool call.
+
+Two new tests pin both shapes end-to-end.
+
+* fix(metadata): address PR #69 review — English-only tokens, loud poster fallback, offline notice
+
+Four of five review findings addressed.
+
+1. (score 100, above threshold) Turkish tokens ``evet`` / ``hayır`` / ``hayir`` plus the
+  single-letter shortcuts ``e`` / ``h`` (aliases for the Turkish forms) were in the ``_YES_TOKENS``
+  / ``_NO_TOKENS`` frozensets in ``src/metadata_prompts.py`` — a production module constant, not a
+  test fixture. CLAUDE.md forbids non-English strings anywhere except test fixture input data. Same
+  class of breach flagged across PRs #60–#67 (``yok`` / ``tamam``, ``YAVRU DİNOZOR``, ``Yavru
+  Dinozor``, ``sen yaz``, ``Yavru Dinozor v3``). Narrowed the frozensets to ``{"y", "yes"}`` /
+  ``{"n", "no"}``.
+
+2. (score 50) Single-letter ``e`` / ``h`` were undocumented Turkish shortcuts, not natural English
+  abbreviations. Rolled up with fix #1 — removed.
+
+3. (score 50) ``_apply_page_drawing_cover`` fell back to poster silently when no non-hidden page had
+  an image (100% text Samsung Notes exports). A user who picked ``(a) use a page drawing`` only
+  discovered the poster result when the rendered PDF opened. Added a yellow ``[yellow]No page
+  drawing available — falling back to poster.[/yellow]`` warning. Helper signature grew a
+  ``console`` parameter; call-site updated.
+
+5. (score 50) Offline ``/load`` (NullProvider) silently skipped the metadata prompts — user saw
+  ``Loaded N pages`` and then silence, and a subsequent ``/render`` would build a book with empty
+  title / default cover. Now prints a dim explanatory notice:
+
+Offline mode (no LLM provider active) — skipping the title / author / series / cover / back-cover
+  prompts because their AI-branch options need a provider. Use /title, /author, /render to set
+  metadata and build the book by hand, or switch providers with /model.
+
+New ``_print_offline_metadata_skip_notice`` helper centralises the wording; called from both
+  ``_greet_if_draft_loaded`` (CLI- arg bootstrap path) and ``_cmd_load`` (mid-session path). The
+  restructured guards are clearer: each path has an explicit ``if NullProvider: notice + return``
+  branch.
+
+Finding #4 (fresh-session unconditional re-prompt; score 50) not addressed — it's the maintainer's
+  explicit documented design choice, captured in feedback memory ``fresh_session_per_book``: "every
+  session is fresh, memory-restore UX adds cognitive load without solving a real problem for this
+  workflow." The reviewer's scenario (quit mid-session → re-run → re-answer metadata) is real but
+  not actually the common workflow: the post-render review loop handles iterative fixes without
+  quitting. If real-user friction emerges around the re-run-to-fix case, an escape hatch (flag or
+  ``draft.json``-backed skip) can ship as a follow-up. Staying consistent with the stated design for
+  now.
+
+Tests: - ``test_collect_series_accepts_full_words_as_well_as_short_letters`` replaces the old
+  Turkish-accepting test — pins that ``y`` / ``yes`` / ``n`` / ``no`` all work. -
+  ``test_collect_series_rejects_non_english_tokens_and_reprompts`` regression test: ``evet`` /
+  ``hayır`` are now gibberish and re-prompt, the flow only settles on the trailing ``no``. -
+  ``test_collect_cover_choice_page_drawing_falls_back_to_poster_when_no_drawing`` extended to assert
+  the warning wording appears in console output. -
+  ``test_offline_load_explains_why_metadata_prompts_skipped`` new regression: offline load prints an
+  ``offline`` + ``skip`` notice naming at least one escape-hatch slash command.
+
+Full suite: 684 passing (+2).
+
+* docs(metadata): address PR #69 round-2 — stale docstrings + load-path symmetry
+
+Three round-2 follow-ups, all below the 80 confidence threshold, all addressed.
+
+1. (score 50) ``collect_cover_choice`` docstring still read "it silently falls back to poster" after
+  the round-1 F3 fix made the fallback loud (yellow warning). Updated to "falls back and prints a
+  warning" so the docstring matches reality.
+
+2. (score 25) ``test_load_is_quiet_on_offline_provider`` docstring said "stay silent" — but the
+  round-1 F5 fix added a deliberate dim notice on offline /load. The test's actual assertion (no
+  ``Agent error: ...`` line) still passes, but the name + docstring misled future readers into
+  thinking silence is the contract. Renamed to
+  ``test_load_does_not_surface_agent_errors_on_offline_provider`` and rewrote the docstring to point
+  at the sibling test ``test_offline_load_explains_why_metadata_prompts_skipped`` that pins the dim
+  notice as the expected behaviour.
+
+3. (score 25) Asymmetry between the two NullProvider load paths. ``_greet_if_draft_loaded``
+  short-circuits BEFORE ``_run_ingestion`` on NullProvider; ``_cmd_load`` was calling
+  ``_run_ingestion`` first and only then short-circuiting (the ingestion itself no-ops for
+  NullProvider, so the asymmetry was invisible to the user but real in the source). Reordered
+  ``_cmd_load`` to put the NullProvider check first, matching ``_greet_if_draft_loaded``. Comment
+  names the symmetry explicitly so the next refactor doesn't re-introduce the divergence.
+
+Full suite: 684 passing.
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+
 ## v1.15.0 (2026-04-24)
+
+### Chores
+
+- **release**: 1.15.0 [skip ci]
+  ([`65a204c`](https://github.com/mfozmen/littlepress-ai/commit/65a204cf70a9610fcea2144b41bad0059514c05b))
 
 ### Documentation
 
