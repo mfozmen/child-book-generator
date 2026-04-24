@@ -202,6 +202,59 @@ def test_load_kicks_the_agent_off_when_a_real_provider_is_active(tmp_path):
     assert "I see 1 page" in buf.getvalue()
 
 
+def test_load_prints_deterministic_metadata_prompts_before_agent_turn(tmp_path):
+    """User-visible behaviour regression: after ``/load`` with a real
+    provider, the REPL must print the deterministic metadata prompts
+    (Title / Author / series / Cover / Back-cover) to the console
+    BEFORE the agent's first turn runs. This pins the core Sub-
+    project 2 user experience — asking these via plain Python is
+    what the refactor exists to do. If the wiring regresses (e.g.
+    someone reverts ``collect_metadata`` in ``_cmd_load``), this
+    test fires."""
+    import io
+
+    from rich.console import Console
+
+    from src.agent import AgentResponse
+    from src.providers.llm import find
+
+    pdf = _write_pdf(tmp_path, [{"text": "hi"}])
+
+    class _StubLLM:
+        def turn(self, _messages, _tools):
+            return AgentResponse(
+                content=[{"type": "text", "text": "ok"}],
+                stop_reason="end_turn",
+            )
+
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=False, width=100, no_color=True)
+    repl = Repl(
+        read_line=_scripted(
+            [f"/load {pdf}", "The Brave Owl", "Ece", "n", "c", "a", "/exit"]
+        ),
+        console=console,
+        provider=find("anthropic"),
+        session_root=tmp_path,
+        llm_factory=lambda _spec, _key: _StubLLM(),
+    )
+    repl.run()
+
+    out = buf.getvalue()
+    # All five prompt labels appeared (case-sensitive on the first
+    # word since Rich bolds them but doesn't touch the text).
+    assert "Title?" in out
+    assert "Author?" in out
+    assert "series" in out.lower()
+    assert "Cover?" in out
+    assert "Back-cover" in out
+    # The deterministic writes happened.
+    assert repl.draft is not None
+    assert repl.draft.title == "The Brave Owl"
+    assert repl.draft.author == "Ece"
+    assert repl.draft.cover_style == "poster"
+
+
 def test_load_is_quiet_on_offline_provider(tmp_path):
     """Offline (NullProvider) — /load should NOT try to talk to the
     agent. Just load and stay silent."""
