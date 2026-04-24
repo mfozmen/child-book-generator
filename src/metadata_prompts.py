@@ -57,8 +57,8 @@ class MetadataChoices:
     back_cover: str
 
 
-_YES_TOKENS = frozenset({"y", "yes", "e", "evet"})
-_NO_TOKENS = frozenset({"n", "no", "h", "hayır", "hayir"})
+_YES_TOKENS = frozenset({"y", "yes"})
+_NO_TOKENS = frozenset({"n", "no"})
 
 
 def _prompt_nonempty(prompt: str, read_line: ReadLine, console: Console) -> str:
@@ -141,7 +141,7 @@ def collect_cover_choice(
         console.print(_COVER_MENU)
         answer = read_line().strip().lower()
         if answer == "a":
-            return _apply_page_drawing_cover(draft)
+            return _apply_page_drawing_cover(draft, console)
         if answer == "b":
             return "ai"
         if answer == "c":
@@ -150,12 +150,19 @@ def collect_cover_choice(
             return "poster"
 
 
-def _apply_page_drawing_cover(draft: Draft) -> str:
+def _apply_page_drawing_cover(draft: Draft, console: Console) -> str:
     first_drawing = next(
         (p.image for p in draft.pages if not p.hidden and p.image is not None),
         None,
     )
     if first_drawing is None:
+        # Surface the fallback loudly — the user asked for a drawing
+        # cover and would otherwise discover the poster result only
+        # when the rendered PDF opens. PR #69 review finding #3.
+        console.print(
+            "[yellow]No page drawing available — falling back to "
+            "poster.[/yellow]"
+        )
         draft.cover_image = None
         draft.cover_style = "poster"
         return "poster"

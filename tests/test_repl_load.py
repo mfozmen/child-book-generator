@@ -255,6 +255,29 @@ def test_load_prints_deterministic_metadata_prompts_before_agent_turn(tmp_path):
     assert repl.draft.cover_style == "poster"
 
 
+def test_offline_load_explains_why_metadata_prompts_skipped(tmp_path):
+    """PR #69 review finding #5: an offline user dragging a PDF onto
+    the REPL used to get no metadata prompts AND no explanation —
+    just "Loaded N pages" and then silence. A subsequent /render
+    would build a book with an empty title / default cover, which
+    looks like a bug. The REPL now prints a dim notice that names
+    the three remaining escape hatches (/title, /author, /render
+    for manual flow; /model to go online)."""
+    pdf = _write_pdf(tmp_path, [{"text": "hi"}])
+
+    repl, buf = _make(tmp_path, [f"/load {pdf}", "/exit"])
+    repl.run()
+
+    assert repl.draft is not None
+    out = buf.getvalue().lower()
+    # Explains the skip.
+    assert "offline" in out
+    assert "skipping" in out or "skip" in out
+    # Points at the escape hatches — at least one slash command
+    # name the user can reach for.
+    assert "/title" in out or "/model" in out
+
+
 def test_load_is_quiet_on_offline_provider(tmp_path):
     """Offline (NullProvider) — /load should NOT try to talk to the
     agent. Just load and stay silent."""

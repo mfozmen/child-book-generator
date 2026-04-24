@@ -241,6 +241,23 @@ def _build_agent_greeting(
 _AGENT_GREETING_HINT = _build_agent_greeting()
 
 
+def _print_offline_metadata_skip_notice(console: Console) -> None:
+    """Tell the offline user why the metadata prompts didn't fire
+    after a PDF load, and point them at the slash-command escape
+    hatch. Without this notice the user sees "Loaded N pages" then
+    silence — and a subsequent ``/render`` would write a book with
+    an empty title / default cover, which looks like a bug.
+
+    PR #69 review finding #5."""
+    console.print(
+        "[dim]Offline mode (no LLM provider active) — skipping the "
+        "title / author / series / cover / back-cover prompts "
+        "because their AI-branch options need a provider. Use "
+        "/title, /author, /render to set metadata and build the "
+        "book by hand, or switch providers with /model.[/dim]"
+    )
+
+
 class Repl:
     """A Read-Eval-Print loop with injectable I/O so it can be unit-tested.
 
@@ -328,8 +345,11 @@ class Repl:
 
     def _greet_if_draft_loaded(self) -> None:
         """Kick off the agent with the pre-loaded draft so the user
-        sees an immediate response. No-op when offline (NullProvider)
-        or when no PDF was pre-loaded by the CLI.
+        sees an immediate response. No-op when no PDF was pre-
+        loaded by the CLI. Offline (NullProvider) prints a heads-up
+        and falls back to slash commands — the metadata prompts
+        can't run because their cover and back-cover menus include
+        AI branches that require an active provider.
 
         The flow between ingestion and the first agent turn has three
         steps now: (1) deterministic OCR ingestion, (2) deterministic
@@ -337,7 +357,10 @@ class Repl:
         — via ``src/metadata_prompts.py``), (3) the agent's first
         turn with a dynamically-built greeting that reflects whether
         the user opted into AI cover / AI back-cover branches."""
-        if self._draft is None or isinstance(self._llm, NullProvider):
+        if self._draft is None:
+            return
+        if isinstance(self._llm, NullProvider):
+            _print_offline_metadata_skip_notice(self._console)
             return
         self._run_ingestion()
         choices = collect_metadata(self._draft, self._read, self._console)
@@ -1156,18 +1179,21 @@ def _cmd_load(repl: Repl, args: str) -> None:
     repl._run_ingestion()
     # Kick the agent off so the user doesn't stare at silence after the
     # load. Matches the CLI-arg bootstrap path. Offline (NullProvider)
-    # stays quiet — there's no agent to greet with, and the metadata
-    # prompts are skipped (offline users fall back to slash commands).
-    if not isinstance(repl._llm, NullProvider):
-        choices = collect_metadata(repl._draft, repl._read, repl._console)
-        greeting = _build_agent_greeting(
-            cover_choice=choices.cover,
-            back_cover_choice=choices.back_cover,
-        )
-        try:
-            repl._agent.say(greeting)
-        except Exception as e:
-            repl._console.print(f"[red]Agent error:[/red] {e}")
+    # prints a heads-up and falls back to slash commands — the
+    # metadata prompts can't run because their cover and back-cover
+    # menus include AI branches that require an active provider.
+    if isinstance(repl._llm, NullProvider):
+        _print_offline_metadata_skip_notice(repl._console)
+        return None
+    choices = collect_metadata(repl._draft, repl._read, repl._console)
+    greeting = _build_agent_greeting(
+        cover_choice=choices.cover,
+        back_cover_choice=choices.back_cover,
+    )
+    try:
+        repl._agent.say(greeting)
+    except Exception as e:
+        repl._console.print(f"[red]Agent error:[/red] {e}")
     return None
 
 

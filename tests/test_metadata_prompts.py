@@ -146,10 +146,9 @@ def test_collect_series_yes_appends_volume_to_title(tmp_path):
     assert draft.title == "Yavru Dinozor - 1"
 
 
-def test_collect_series_accepts_natural_language_affirmative(tmp_path):
-    """The series prompt should accept common yes/no shapes, not
-    just 'y' / 'n'. Users type full words, and Turkish speakers type
-    'evet' / 'hayır'."""
+def test_collect_series_accepts_full_words_as_well_as_short_letters(tmp_path):
+    """The series prompt should accept both the single-letter shape
+    (``y`` / ``n``) and the full word (``yes`` / ``no``)."""
     from src.metadata_prompts import collect_series
 
     # "yes"
@@ -158,17 +157,33 @@ def test_collect_series_accepts_natural_language_affirmative(tmp_path):
     collect_series(draft1, _scripted(["yes", "2"]), _console())
     assert draft1.title == "A - 2"
 
-    # "evet" (Turkish yes)
+    # "no"
     draft2 = _empty_draft(tmp_path)
     draft2.title = "B"
-    collect_series(draft2, _scripted(["evet", "3"]), _console())
-    assert draft2.title == "B - 3"
+    collect_series(draft2, _scripted(["no"]), _console())
+    assert draft2.title == "B"
 
-    # "hayır" (Turkish no)
-    draft3 = _empty_draft(tmp_path)
-    draft3.title = "C"
-    collect_series(draft3, _scripted(["hayır"]), _console())
-    assert draft3.title == "C"
+
+def test_collect_series_rejects_non_english_tokens_and_reprompts(tmp_path):
+    """CLAUDE.md forbids non-English tokens in production code (PR
+    #69 review #1). The Turkish ``evet`` / ``hayır`` shortcuts were
+    removed from the frozensets, so a Turkish-speaking user now has
+    to type ``yes`` or ``y``. Prove the token tables don't silently
+    accept the old Turkish shortcuts — a fresh re-prompt happens,
+    and the flow only advances when the user supplies an English
+    affirmative/negative."""
+    from src.metadata_prompts import collect_series
+
+    draft = _empty_draft(tmp_path)
+    draft.title = "A"
+    # ``evet`` and ``hayır`` must re-prompt (as any gibberish would);
+    # the flow only settles on the final ``no``.
+    collect_series(
+        draft,
+        _scripted(["evet", "hayır", "no"]),
+        _console(),
+    )
+    assert draft.title == "A"
 
 
 def test_collect_series_reprompts_on_unclear_answer(tmp_path):
@@ -265,19 +280,38 @@ def test_collect_cover_choice_page_drawing_picks_first_available_drawing(tmp_pat
 def test_collect_cover_choice_page_drawing_falls_back_to_poster_when_no_drawing(tmp_path):
     """Samsung Notes exports can be 100% text pages. Option (a) has
     nothing to reuse in that case — fall back to poster rather than
-    silently picking a hidden or text-only page."""
+    silently picking a hidden or text-only page.
+
+    PR #69 review finding #3: the fallback used to be silent, so the
+    user who picked (a) would only discover they got poster when
+    the rendered PDF opened. Assert the fallback prints a warning
+    so the surprise is eliminated."""
+    from io import StringIO
+
+    from rich.console import Console as _Console
+
     from src.metadata_prompts import collect_cover_choice
 
     draft = _draft_with_pages(
         tmp_path,
         [(None, False), (None, True), (None, False)],
     )
+    buf = StringIO()
+    loud_console = _Console(
+        file=buf, force_terminal=False, width=100, no_color=True
+    )
 
-    result = collect_cover_choice(draft, _scripted(["a"]), _console())
+    result = collect_cover_choice(draft, _scripted(["a"]), loud_console)
 
     assert result == "poster"
     assert draft.cover_image is None
     assert draft.cover_style == "poster"
+    # The user must see a message explaining why they got poster
+    # after picking (a). The wording can evolve; the test pins the
+    # core information content.
+    out = buf.getvalue().lower()
+    assert "no page drawing" in out or "no drawing" in out
+    assert "poster" in out
 
 
 def test_collect_cover_choice_ai_leaves_draft_untouched_for_agent(tmp_path):
