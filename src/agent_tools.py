@@ -1053,10 +1053,24 @@ def apply_sentinel_result(page, reply: str, page_n: int, method: str) -> str:
         )
 
     if sentinel == _MIXED_SENTINEL:
+        # Safe-default flip after the Samsung Notes duplicate-text
+        # regression: vision often labels handwriting + margin doodles
+        # as <MIXED>, but rendering the image (with the handwritten
+        # text baked in) alongside the transcription prints the same
+        # content twice. Keep ``page.image`` attached so the user can
+        # opt back into the drawing via ``choose_layout(page, layout)``
+        # in the review turn, but force the layout to ``text-only`` so
+        # the renderer skips the image by default
+        # (``src/pages.py::draw_page`` respects explicit text-only
+        # layouts even when image is present).
         page.text = body
+        page.layout = "text-only"
         return (
             f"Page {page_n} transcribed ({len(body)} chars, "
-            f"drawing preserved, image and layout unchanged). "
+            f"drawing kept on disk but layout defaulted to "
+            f"text-only to avoid duplicate print; user can opt "
+            f"the drawing back in via choose_layout in the "
+            f"review turn). "
             + _NO_DISPLAY_NO_APPROVAL_SUFFIX
         )
 
@@ -1099,9 +1113,20 @@ _TRANSCRIBE_PROMPT = (
     "Samsung Notes screenshot or scanned typed page). Follow it "
     "with the verbatim transcription.\n\n"
     "<MIXED>\n"
-    "  Use this sentinel when the image contains a distinct drawing "
-    "alongside text. Follow it with the verbatim transcription of "
-    "the TEXT ONLY — do not describe or mention the drawing.\n\n"
+    "  Use this sentinel ONLY when the image has a clearly separate "
+    "illustration occupying its own region alongside the text — "
+    "e.g. a storybook page with a typed caption block in one area "
+    "and a drawing of a dragon in another area, or a picture-book "
+    "spread with text in one half and an illustration in the other "
+    "half. Do NOT use <MIXED> for handwriting with margin doodles, "
+    "decorations around words, underlined letters, or stylistic "
+    "flourish on the text itself — those cases are <TEXT>. When "
+    "unsure between <TEXT> and <MIXED>, prefer <TEXT>: a wrongly-"
+    "classified <TEXT> page can be fixed by the user opting the "
+    "drawing back in, but a wrongly-classified <MIXED> page prints "
+    "its text twice. Follow the sentinel with the verbatim "
+    "transcription of the TEXT ONLY — do not describe or mention "
+    "the drawing.\n\n"
     "Reply format: sentinel on line 1, transcription on remaining "
     "lines (or nothing after <BLANK>). No preamble, no quotes, no "
     "commentary — only the sentinel line and the transcription."

@@ -2065,6 +2065,37 @@ def test_transcribe_prompt_asks_for_blank_sentinel_on_empty_pages(tmp_path):
     assert "exactly" in lowered or "reply with" in lowered or "must reply" in lowered
 
 
+def test_transcribe_prompt_scopes_mixed_to_separate_illustration(tmp_path):
+    """Regression for the Yavru Dinozor v3 duplicate-text bug: vision
+    kept classifying handwriting + margin doodles as ``<MIXED>``,
+    which (after the v3 fix) still keeps the image on disk for later
+    opt-in but is the wrong default for Samsung-Notes-style pages.
+    The prompt must scope ``<MIXED>`` narrowly to pages with a
+    clearly separate illustration region, and explicitly steer the
+    model away from ``<MIXED>`` for handwriting decoration /
+    stylistic flourish."""
+    draft = _image_only_draft(tmp_path)
+    llm = _FakeLLM(reply="<TEXT>\nowls")
+    tool = transcribe_page_tool(
+        get_draft=lambda: draft,
+        get_llm=lambda: llm,
+    )
+
+    tool.handler({"page": 1})
+
+    content = llm.calls[0][0]["content"]
+    prompt = next(b["text"] for b in content if b.get("type") == "text")
+    lowered = prompt.lower()
+    # MIXED must be scoped narrowly: a clearly-separate illustration
+    # / distinct region, not any image that has a drawing + text.
+    assert "separate illustration" in lowered or "own region" in lowered
+    # The prompt must explicitly steer the model AWAY from <MIXED>
+    # for handwriting + decoration — name the common failure shape.
+    assert "margin" in lowered or "decoration" in lowered or "doodle" in lowered
+    # And the explicit tie-breaker: when unsure, prefer <TEXT>.
+    assert "prefer <text>" in lowered or "prefer text" in lowered
+
+
 def test_transcribe_page_rejects_blank_sentinel_reply(tmp_path):
     """Primary filter: ``<BLANK>`` sentinel hides the page and
     leaves text unchanged."""
@@ -2140,9 +2171,14 @@ def test_transcribe_page_text_sentinel_clears_image_and_sets_text_only(tmp_path)
     assert draft.pages[0].layout == "text-only"
 
 
-def test_transcribe_page_mixed_sentinel_keeps_image_and_layout(tmp_path):
-    """<MIXED> sentinel: the page has both text and a distinct drawing —
-    write the transcription but leave image and layout alone."""
+def test_transcribe_page_mixed_sentinel_keeps_image_defaults_layout_text_only(tmp_path):
+    """<MIXED> sentinel after the Yavru Dinozor v3 duplicate-text fix:
+    transcription is written, ``page.image`` is kept on disk (so the
+    user can opt back into the drawing via ``choose_layout`` in the
+    review turn), and layout is forced to ``text-only`` so the
+    renderer skips the image by default. This prevents the
+    double-print that happens when the image has the handwritten
+    text baked in AND the transcription is drawn alongside it."""
     img = _tiny_png(tmp_path / "p.png")
     draft = Draft(
         source_pdf=tmp_path / "x.pdf",
@@ -2159,9 +2195,10 @@ def test_transcribe_page_mixed_sentinel_keeps_image_and_layout(tmp_path):
 
     assert draft.pages[0].text == "Küçük dinozor ormana gitti"
     assert draft.pages[0].image == img, (
-        "<MIXED> sentinel must preserve the source image."
+        "<MIXED> sentinel must preserve the source image on disk "
+        "so the user can opt back in via choose_layout."
     )
-    assert draft.pages[0].layout == "image-top"
+    assert draft.pages[0].layout == "text-only"
 
 
 def test_transcribe_page_no_sentinel_fallback_writes_text_as_text(tmp_path):
@@ -2375,8 +2412,11 @@ def test_transcribe_page_mixed_sentinel_keeps_image(tmp_path):
     tool.handler({"page": 1})
 
     assert draft.pages[0].text == "Küçük dinozor ormana gitti"
+    # Yavru Dinozor v3 fix: image preserved on disk, but layout
+    # flipped to text-only so the renderer skips the baked-in
+    # handwriting duplicate. User opts back in via choose_layout.
     assert draft.pages[0].image == img
-    assert draft.pages[0].layout == "image-top"
+    assert draft.pages[0].layout == "text-only"
 
 
 def test_transcribe_page_does_not_take_confirm_or_keep_image():
@@ -3582,8 +3622,12 @@ def test_transcribe_page_tolerates_leading_blank_lines_for_blank_and_mixed(tmp_p
         get_draft=lambda: mixed_draft, get_llm=lambda: _MixedLLM()
     ).handler({"page": 1})
     assert mixed_draft.pages[0].text == "Küçük dinozor"
+    # Yavru Dinozor v3 fix: image preserved on disk; layout
+    # defaulted to text-only so the handwritten text baked into the
+    # image doesn't print twice at render time. User opts the
+    # drawing back in via choose_layout in the review turn.
     assert mixed_draft.pages[0].image == img
-    assert mixed_draft.pages[0].layout == "image-top"
+    assert mixed_draft.pages[0].layout == "text-only"
 
 
 # ---------------------------------------------------------------------------

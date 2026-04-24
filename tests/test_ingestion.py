@@ -102,7 +102,16 @@ def test_ingest_applies_text_sentinel_clears_image_and_sets_text_only(tmp_path):
     assert report.text_pages == [1]
 
 
-def test_ingest_applies_mixed_sentinel_preserves_image_and_layout(tmp_path):
+def test_ingest_applies_mixed_sentinel_defaults_to_text_only_preserves_image(tmp_path):
+    """Regression for the duplicate-text bug surfaced in Yavru Dinozor v3:
+    when vision classifies a page as <MIXED> (text + separate drawing),
+    the draft keeps page.image (so the user can opt back into the
+    drawing via choose_layout in the review turn) BUT sets layout to
+    ``text-only`` so the renderer doesn't print both the image (with
+    handwritten text baked in) and the transcription below. Vision
+    misclassifies a lot of Samsung-Notes handwriting + margin doodles
+    as MIXED, so the safe default is text-only and the user explicitly
+    opts in when they want the drawing drawn."""
     from src.ingestion import ingest_image_only_pages
 
     img = _tiny_png(tmp_path / ".book-gen" / "images" / "page-01.png")
@@ -115,8 +124,14 @@ def test_ingest_applies_mixed_sentinel_preserves_image_and_layout(tmp_path):
     report = ingest_image_only_pages(draft, llm, _console())
 
     assert draft.pages[0].text == "Hello plus a drawing"
+    # Image preserved so ``choose_layout(page=1, layout="image-top")``
+    # in the review turn can opt the drawing back in without needing
+    # a re-OCR.
     assert draft.pages[0].image == img
-    assert draft.pages[0].layout == "image-top"
+    # But layout is forced to text-only as the safe default; the
+    # render pipeline respects layout=text-only even when image is
+    # attached (``src/pages.py::draw_page``).
+    assert draft.pages[0].layout == "text-only"
     assert report.mixed_pages == [1]
 
 
