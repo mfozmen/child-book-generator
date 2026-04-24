@@ -240,12 +240,70 @@ def test_greeting_no_longer_has_metadata_review_checkpoint():
 
 def test_greeting_mentions_review_turn_tools_explicitly():
     """The new flow depends on the agent knowing to use
-    apply_text_correction / restore_page / hide_page during review."""
+    apply_text_correction / restore_page / hide_page / choose_layout
+    during review. choose_layout joined the set after the Yavru
+    Dinozor v3 MIXED-default fix — users need a way to opt the
+    drawing back in on pages where ingestion defaulted to text-only."""
     from src.repl import _AGENT_GREETING_HINT
 
     g = _AGENT_GREETING_HINT
-    for tool in ("apply_text_correction", "restore_page", "hide_page"):
+    for tool in (
+        "apply_text_correction",
+        "restore_page",
+        "hide_page",
+        "choose_layout",
+    ):
         assert tool in g, f"review-turn tool {tool!r} missing from greeting"
+
+
+def test_greeting_surfaces_show_drawing_review_command():
+    """Regression for the Yavru Dinozor v3 MIXED fix: the greeting
+    must tell the agent that when the user asks to 'show the drawing
+    on page N' (or layout-adjustment equivalents), the right call
+    is choose_layout, not apply_text_correction / restore_page /
+    hide_page. Without this hint the agent might refuse or call the
+    wrong tool, leaving the user stuck with text-only pages they
+    want to see the drawing on."""
+    from src.repl import _AGENT_GREETING_HINT
+
+    lowered = _AGENT_GREETING_HINT.lower()
+    # The review-turn bullet must name choose_layout + at least one
+    # natural-language trigger the user would type.
+    assert "choose_layout" in lowered
+    assert (
+        "show drawing" in lowered
+        or "show the drawing" in lowered
+        or "layout image-top" in lowered
+        or "show the picture" in lowered
+    )
+
+
+def test_greeting_show_drawing_hint_is_scoped_to_mixed_pages():
+    """Review-round-2 finding on PR #67: the show-drawing bullet
+    originally said "The image is still on disk — this command opts
+    the drawing back in" unconditionally. That was only true for
+    <MIXED>-classified pages. <TEXT> pages clear ``page.image``
+    entirely during deterministic ingestion, so ``choose_layout(N,
+    "image-top")`` on a text-classified page fails (no image to
+    lay out) — leaving the user confused about why their request
+    was rejected. The greeting must scope the hint to MIXED pages
+    AND give the agent a useful fallback to mention for TEXT pages
+    (generate_page_illustration, the cost-gated AI tool)."""
+    from src.repl import _AGENT_GREETING_HINT
+
+    lowered = _AGENT_GREETING_HINT.lower()
+    # Still names choose_layout + a natural-language trigger.
+    assert "choose_layout" in lowered
+    # MIXED-scoping is explicit: the bullet must mention that it
+    # only works where an image is still attached.
+    assert (
+        "still have an image attached" in lowered
+        or "pages that still have an image" in lowered
+        or "only works on pages that still have" in lowered
+    )
+    # TEXT fallback: agent should know to point at the AI tool
+    # rather than refuse silently.
+    assert "generate_page_illustration" in lowered
 
 
 def test_greeting_no_longer_references_old_skip_page_tool():
