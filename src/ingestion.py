@@ -76,7 +76,10 @@ def _ocr_one_page(
     recorded as a non-fatal error and the page is left untouched."""
     # Late import so ``src/agent_tools.py`` can freely import back
     # from ``src/ingestion.py`` in the future without a cycle.
-    from src.agent_tools import call_vision_for_transcription, apply_sentinel_result
+    # ``_vision_reply_or_record_error`` does its own late import of
+    # ``call_vision_for_transcription``; this one only needs
+    # ``apply_sentinel_result``.
+    from src.agent_tools import apply_sentinel_result
 
     reply = _vision_reply_or_record_error(
         llm_provider, page.image, idx, total, console, report

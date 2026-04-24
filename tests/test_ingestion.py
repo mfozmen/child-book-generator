@@ -175,6 +175,51 @@ def test_ingest_is_idempotent_on_already_processed_pages(tmp_path):
     assert report2.total_processed == 0
 
 
+def test_ingest_records_error_when_vision_call_raises_exception(tmp_path):
+    """PR #71 review finding #3: the exception branch of
+    ``_vision_reply_or_record_error`` (``call_vision_for_transcription``
+    raising any ``Exception``) must record a non-fatal error in
+    ``report.errors``, print a yellow warning, and leave the page
+    untouched so the user can re-try via slash commands post-load.
+
+    The scripted LLM stub used by every other test in this module
+    returns canned strings; it never raises. This test plugs in a
+    ``_RaisingLLM`` stub so the exception path actually fires."""
+    from src.ingestion import ingest_image_only_pages
+
+    class _RaisingLLM:
+        """Mimics a provider whose vision call blows up — any
+        exception, doesn't matter which, must be swallowed as a
+        non-fatal error."""
+
+        def chat(self, *_a, **_kw):
+            raise RuntimeError("rate limited / network down / whatever")
+
+    img = _tiny_png(tmp_path / ".book-gen" / "images" / "page-01.png")
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        pages=[DraftPage(text="", image=img, layout="image-top")],
+    )
+
+    report = ingest_image_only_pages(draft, _RaisingLLM(), _console())
+
+    # The failure went into report.errors, not up the stack — the
+    # ingestion keeps running for the remaining pages (here there's
+    # only one, but the contract still holds).
+    assert len(report.errors) == 1
+    assert report.errors[0][0] == 1
+    assert "rate limited" in report.errors[0][1] or "network" in report.errors[0][1]
+    # No sentinel applied — page left exactly as it arrived so the
+    # user can re-try later without state corruption.
+    assert draft.pages[0].text == ""
+    assert draft.pages[0].image == img
+    assert draft.pages[0].layout == "image-top"
+    # And nothing got mis-classified into the success buckets.
+    assert report.text_pages == []
+    assert report.mixed_pages == []
+    assert report.blank_pages == []
+
+
 def test_ingest_no_op_on_null_provider(tmp_path):
     """Offline / NullProvider session: ingestion silently does nothing,
     leaving the draft as-is. The manual transcribe_page slash-command
