@@ -1,6 +1,91 @@
 # CHANGELOG
 
 
+## v1.15.0 (2026-04-24)
+
+### Documentation
+
+- **plan**: Move MIXED double-print fix to Shipped
+  ([#67](https://github.com/mfozmen/littlepress-ai/pull/67),
+  [`406aa10`](https://github.com/mfozmen/littlepress-ai/commit/406aa100ce524ade1e5cef48e01263184c1abf3b))
+
+PR #67 shipped both halves of the fix surfaced in the v3 Samsung-Notes session — the tightened
+  vision prompt (option A from the design note) and the text-only default (option B). The "next up"
+  entry called out that a design pass was needed between the two; combining them turned out to be
+  the right call (cheap tightening of classification + a safe default for misclassifications still
+  routes through a single review-turn opt-in). Removing the "next up" entry and adding the #67 row
+  to the Shipped table.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- **imposition**: Real-book pagination blanks
+  ([#68](https://github.com/mfozmen/littlepress-ai/pull/68),
+  [`c6507c7`](https://github.com/mfozmen/littlepress-ai/commit/c6507c79a47864591430d2d3eaed484e8c25a876))
+
+* feat(imposition): real-book pagination — back cover on outside-back, story on recto
+
+The A4 saddle-stitch imposition padded with blanks at the END of the source page list, which buried
+  the back cover on an interior recto and left the booklet's outside-back face blank when folded.
+  Surfaced the first time a real booklet was folded from the A4 output.
+
+New ``_reader_sequence(n_pages)`` helper in ``src/imposition.py`` builds the reader-order list with
+  padding blanks in real-book natural positions:
+
+* If no padding needed (n % 4 == 0): no change — story lands on the verso of the cover. The
+  alternative (forcing a recto with four extra blanks) would waste an entire A4 sheet for
+  aesthetics, and the rendered A5 PDF still reads correctly. * If padding needed (pad >= 1): exactly
+  one blank goes immediately after the cover (moving story 1 onto a recto), and the remaining (pad -
+  1) blanks go immediately before the back cover (so the back cover still lands on the booklet's
+  outside-back face).
+
+The classic children's-book shape with n=6, pad=2 comes out as: ``[cover, BLANK, S1, S2, S3, S4,
+  BLANK, back_cover]`` — one inside-front blank, one inside-back blank, story sandwiched in between
+  with recto start.
+
+``_booklet_order`` now delegates to ``_reader_sequence`` for the pad shape, then applies the same
+  outer-first / inner-nested interleave as before. The interleave logic was already correct; only
+  the pad-placement was wrong. Existing tests for n=4 / n=3 / n=8 all stay green under the new rule.
+
+Tests (7 new): - Four ``_reader_sequence`` unit tests pinning each pad class (0 / 1 / 2 / 3). - A
+  range invariant test (n=2..20) asserting three shape rules: total is a multiple of 4, source page
+  1 is on reader position 1, source page n is on the last reader position. - Two ``_booklet_order``
+  integration tests for n=6 verifying the outer sheet's front pair is (back_cover, cover) and back
+  pair is (None, None).
+
+Full suite: 658 passing.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(imposition): address PR #68 review — guard n<2 in _reader_sequence, update PLAN row
+
+Two of the three review findings addressed.
+
+1. (score 25) ``_reader_sequence(1)`` silently returned ``[1, None, None, None, 1]`` — length 5 (not
+  a multiple of 4) and source page 1 duplicated in the back-cover slot. Unreachable from the normal
+  flow (``build_pdf`` always emits cover + back cover, so the minimum source PDF is 2 pages), but a
+  future caller should fail loudly rather than get nonsensical imposition output. Added a ValueError
+  guard + a regression test that pins the rejection for n=0 and n=1.
+
+2. (score 50) ``docs/PLAN.md`` row read ``| TBD |`` for the feat/imposition-real-book-blanks entry.
+  Updated to ``| #68 |`` now that the PR number is known. Other TBD rows in the same table are
+  pre-existing gaps — not in scope for this PR.
+
+Finding 3 (commit-type ``feat`` vs ``fix``, score 75) not addressed — it's a judgment call and this
+  PR legitimately introduces a new pagination convention (recto-start + outside-back cover) on top
+  of correcting the existing pad-at-end behaviour. Reviewer's own note acknowledges "not a clear
+  violation".
+
+Full suite: 659 passing (+1).
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+
 ## v1.14.1 (2026-04-24)
 
 ### Bug Fixes
@@ -84,6 +169,11 @@ Full suite: 651 passing (+1 new regression).
 Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
 
 Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+### Chores
+
+- **release**: 1.14.1 [skip ci]
+  ([`6fbc109`](https://github.com/mfozmen/littlepress-ai/commit/6fbc1098e480620ab978e47010c93d5c344ad302))
 
 
 ## v1.14.0 (2026-04-24)
