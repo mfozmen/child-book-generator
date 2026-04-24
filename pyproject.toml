@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "littlepress-ai"
-version = "1.13.0"
+version = "1.14.0"
 description = "Littlepress turns a child's picture-book draft PDF into a print-ready A5 book and A4 booklet. An AI agent walks the conversation; the child's voice is preserved end-to-end."
 readme = "README.md"
 license = { file = "LICENSE" }

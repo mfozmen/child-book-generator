@@ -1,7 +1,115 @@
 # CHANGELOG
 
 
+## v1.14.0 (2026-04-24)
+
+### Documentation
+
+- **plan**: Two real-session bugs from Yavru Dinozor v3 + note on shadow-install cause
+  ([`e6638e3`](https://github.com/mfozmen/littlepress-ai/commit/e6638e374ae66fdbfd3c47ebaba0de677b91d569))
+
+First successful end-to-end run after clearing a stale ``child-book-generator`` editable install
+  (pre-PR-#19 clone) that was shadowing every push — that was the actual cause of the ingestion
+  failures the v1 and v2 sessions saw, not LLM training memory. Diagnostic: ``pip show`` listed two
+  editable installs registering the ``littlepress`` entry point; the alphabetically-first one
+  (``child-book-generator-0.6.0``) won, so all our refactor commits never reached the running
+  binary. ``pip uninstall child-book-generator -y`` fixed it.
+
+Two real bugs surfaced on the clean run:
+
+- Back-cover blurb prompt rejects "sen yaz" because the greeting forbids agent-invented text.
+  Maintainer's mental model is editor-driven, not child-only — agent should offer an opt-in AI draft
+  path (draft from story content, user approves / edits / overwrites verbatim). Small PR.
+
+- ``<MIXED>`` pages render text twice: the image contains the handwritten text baked in, AND
+  ``page.text`` adds the transcription as normal body copy. Vision classifies too many Samsung-Notes
+  pages as ``<MIXED>`` because of margin doodles. Either tighten the vision prompt or flip the
+  default to text-only with an explicit review-turn opt-in. Needs design.
+
+### Features
+
+- **repl**: Offer AI-draft option for the back-cover blurb
+  ([#66](https://github.com/mfozmen/littlepress-ai/pull/66),
+  [`e05fff1`](https://github.com/mfozmen/littlepress-ai/commit/e05fff1f476024e44bb896f8cdf166a9b5fc63b4))
+
+* feat(repl): offer AI-draft option for the back-cover blurb
+
+Yavru Dinozor v3 session (2026-04-24): the user replied "sen yaz" (you write it) to the back-cover
+  prompt; the agent refused, citing preserve-child-voice. Maintainer's mental model is
+  editor-driven, not child-only: the agent SHOULD offer an AI-draft path here, parallel to the cover
+  step's (a)/(b)/(c) three-option format.
+
+Greeting change: the back-cover bullet now names three options the agent must surface explicitly —
+  (a) user writes it verbatim, (b) AI drafts a one-line blurb from the story's own page text (draft
+  in chat, wait for approval / edit / overwrite before calling set_metadata), (c) skip.
+  Preserve-child-voice scope clarified: it applies to the book's INTERIOR (page text — the
+
+child's words, untouched); the back-cover blurb is editor-facing metadata and the AI-draft branch is
+  a legitimate opt-in. The draft is grounded in page content, not theme clichés.
+
+Replaced the narrow ``test_greeting_echoes_preserve_child_voice_guard_for_back_cover`` regression
+  with two tighter ones: - ``test_greeting_offers_three_back_cover_options`` pins the (a)/(b)/(c)
+  structure + the AI / story-grounding tokens. -
+  ``test_greeting_clarifies_preserve_child_voice_scope_for_back_cover`` pins the scope split
+  (interior vs metadata) and the "verbatim" anchor on the accept path.
+
+Full suite: 648 passing (was 647; net +1 from the split).
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(repl): align CLAUDE.md + skill with back-cover carve-out; scope the regression test
+
+Two findings on PR #66 review:
+
+1. Contract drift: the PR narrowed preserve-child-voice to exclude AI-drafted back-cover blurbs, but
+  CLAUDE.md and .claude/skills/preserve-child-voice/SKILL.md both still listed back-cover text
+  flatly as in-scope. Canonical docs and production prompt now say opposite things.
+
+Reframed both around authoring source, not field name: - Always child-authored — OCR output, page
+  text, invented names / spellings / onomatopoeia. - Child-authored by proxy — cover subtitle or
+  back-cover text the user types on the child's behalf. Skill applies. - Editor-facing metadata — a
+  back-cover blurb the user opts into having AI draft. Skill does not block; the draft must stay
+  grounded in the story's actual page content, and the user signs off.
+
+2. Vacuous regression: the (a)/(b)/(c) + AI + story-grounding tokens all appear in the cover bullet
+  already, so removing the entire back-cover addition left the test green. Scoped the assertions to
+  a substring slice of the greeting starting at "back-cover blurb" and ending at the next section
+  boundary ("ask each of these") — the test now actually regresses when the back-cover feature
+  regresses.
+
+Full suite: 648 passing (unchanged; this is a doc-alignment + test-tightening commit, no code
+  behaviour drift).
+
+* fix: PR #66 round-2 — align skill YAML description, harden test slice delimiter
+
+Two residual findings:
+
+- SKILL.md YAML front-matter ``description:`` field still listed cover/back-cover text flatly,
+  contradicting the body's new carve-out for AI-drafted back-cover blurbs. Skill pickers and any
+  description-indexed consumer read the front-matter. Updated to match the body: child-authored
+  in-scope + explicit out-of- scope note for the AI-drafted opt-in blurb.
+
+- The back-cover test slice used ``"ask each of these"`` as a free-text end delimiter with no guard.
+  A future greeting rewrite rephrasing that sentence would silently grow the slice and re-admit the
+  vacuous-pass failure mode. Added an explicit ``assert "ask each of these" in lowered`` guard
+  before the slice with a loud error message naming the fix (update the delimiter to match). Now the
+  test fails noisily if the anchor drifts, instead of silently passing from the cover bullet.
+
+Full suite: 648 passing (unchanged; doc + test hardening).
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+
 ## v1.13.0 (2026-04-23)
+
+### Chores
+
+- **release**: 1.13.0 [skip ci]
+  ([`9010d1e`](https://github.com/mfozmen/littlepress-ai/commit/9010d1edbc5f6d8cf32de1a2fe7fdfe8be4f0cd5))
 
 ### Features
 
