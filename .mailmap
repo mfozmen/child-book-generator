@@ -1,0 +1,23 @@
+# git-mailmap(5) — canonicalise historical author identities.
+#
+# Format: <canonical-email> <commit-email>  (name-only forms also supported)
+#
+# The maintainer's ``~/.gitconfig`` used to carry a work email
+# (mehmet.fahri@mayadem.com). That email stamped most of main's
+# early history. ``mehmetfahriozmen@gmail.com`` is the canonical
+# identity for this open-source project going forward.
+#
+# Mailmap is a read-time display rewrite — ``git log``,
+# ``git shortlog``, and GitHub's commit-list UI all apply it, but
+# the commit SHAs themselves are not changed. Chose this over a
+# ``git filter-repo`` rewrite because the non-destructive path is
+# honest ("here's who this was, here's how to reach them now") and
+# has zero blast radius for clones, forks, and open PRs. See
+# docs/PLAN.md for the decision context.
+#
+# The GitHub-noreply identity (39158545+mfozmen@users.noreply.github.com)
+# appears on squash-merge commits and is intentionally left alone —
+# it's how GitHub identifies the user on their platform and keeping
+# it preserves the signal "this came in via a GitHub merge UI".
+
+Mehmet Fahri Özmen <mehmetfahriozmen@gmail.com> <mehmet.fahri@mayadem.com>
