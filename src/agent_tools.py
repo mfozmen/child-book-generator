@@ -1053,10 +1053,10 @@ def apply_sentinel_result(page, reply: str, page_n: int, method: str) -> str:
         )
 
     if sentinel == _MIXED_SENTINEL:
-        # Safe-default flip after the Yavru Dinozor v3 duplicate-text
-        # bug: vision often labels handwriting + margin doodles as
-        # <MIXED>, but rendering the image (with the handwritten text
-        # baked in) alongside the transcription prints the same
+        # Safe-default flip after the Samsung Notes duplicate-text
+        # regression: vision often labels handwriting + margin doodles
+        # as <MIXED>, but rendering the image (with the handwritten
+        # text baked in) alongside the transcription prints the same
         # content twice. Keep ``page.image`` attached so the user can
         # opt back into the drawing via ``choose_layout(page, layout)``
         # in the review turn, but force the layout to ``text-only`` so

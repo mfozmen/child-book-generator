@@ -278,6 +278,34 @@ def test_greeting_surfaces_show_drawing_review_command():
     )
 
 
+def test_greeting_show_drawing_hint_is_scoped_to_mixed_pages():
+    """Review-round-2 finding on PR #67: the show-drawing bullet
+    originally said "The image is still on disk — this command opts
+    the drawing back in" unconditionally. That was only true for
+    <MIXED>-classified pages. <TEXT> pages clear ``page.image``
+    entirely during deterministic ingestion, so ``choose_layout(N,
+    "image-top")`` on a text-classified page fails (no image to
+    lay out) — leaving the user confused about why their request
+    was rejected. The greeting must scope the hint to MIXED pages
+    AND give the agent a useful fallback to mention for TEXT pages
+    (generate_page_illustration, the cost-gated AI tool)."""
+    from src.repl import _AGENT_GREETING_HINT
+
+    lowered = _AGENT_GREETING_HINT.lower()
+    # Still names choose_layout + a natural-language trigger.
+    assert "choose_layout" in lowered
+    # MIXED-scoping is explicit: the bullet must mention that it
+    # only works where an image is still attached.
+    assert (
+        "still have an image attached" in lowered
+        or "pages that still have an image" in lowered
+        or "only works on pages that still have" in lowered
+    )
+    # TEXT fallback: agent should know to point at the AI tool
+    # rather than refuse silently.
+    assert "generate_page_illustration" in lowered
+
+
 def test_greeting_no_longer_references_old_skip_page_tool():
     from src.repl import _AGENT_GREETING_HINT
 
