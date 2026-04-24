@@ -1,7 +1,97 @@
 # CHANGELOG
 
 
+## v1.14.1 (2026-04-24)
+
+### Bug Fixes
+
+- **agent-tools**: Flip <MIXED> default to text-only layout; tighten vision prompt
+  ([#67](https://github.com/mfozmen/littlepress-ai/pull/67),
+  [`00b6109`](https://github.com/mfozmen/littlepress-ai/commit/00b610962cd2c49b96e7369fbadd194efdfde735))
+
+* fix(ingestion): flip <MIXED> default to text-only layout; tighten vision prompt
+
+The Yavru Dinozor v3 render session produced pages with the text printed twice — once baked into the
+  preserved image (Samsung-Notes handwriting is pixel-text, not a separate illustration) and once as
+  the transcribed ``page.text`` drawn alongside it. Root cause: vision happily labelled handwriting
+  + margin doodles as ``<MIXED>``, and the ingestion's <MIXED> branch kept ``layout`` untouched — so
+  the renderer drew the image AND the text block.
+
+Two-part fix, approach A + B from the PLAN entry:
+
+A. Tighten the vision prompt. ``<MIXED>`` is now scoped to pages with a clearly separate
+  illustration in its own region (storybook caption + drawing side-by-side shape). Handwriting
+  decoration, margin doodles, underlines, stylistic flourish around words are explicitly listed as
+  ``<TEXT>``. Tie-breaker: when unsure, prefer ``<TEXT>`` — a wrong <TEXT> is fixable via
+  choose_layout; a wrong <MIXED> prints text twice.
+
+B. Flip the <MIXED> default in ``_apply_sentinel_result``: keep ``page.image`` on disk so the user
+  can opt back in, but force ``page.layout = "text-only"`` so the renderer skips the image by
+  default (``src/pages.py::draw_page`` respects explicit text-only layouts even when image is
+  present). No new data field, no new tool — opt-in uses the existing choose_layout.
+
+Greeting review-turn bullet names the opt-in path: "page N show drawing" / "page N layout image-top"
+  → ``choose_layout(N, "image-top")``. Agent now knows the right tool for the common fix-up request.
+
+Tests: - test_ingest_applies_mixed_sentinel_defaults_to_text_only_preserves_image (rewritten from
+  the old image-top-preserving regression — new contract is image kept + layout text-only). - Two
+  existing transcribe_page MIXED tests updated to the new contract (image kept, layout flipped). -
+  test_transcribe_prompt_scopes_mixed_to_separate_illustration — the vision prompt must scope MIXED
+  narrowly, name the decoration failure shape, and include the "prefer <TEXT> when unsure"
+  tie-breaker. - test_greeting_mentions_review_turn_tools_explicitly extended to include
+  choose_layout in the review-turn tool set. - test_greeting_surfaces_show_drawing_review_command
+  pins the NL triggers the user would actually type ("show drawing", "layout image-top", "show the
+  picture").
+
+Full suite: 650 passing (was 648; +2 new regressions).
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(agent-tools): address PR #67 review — English-only comment, README, scoped greeting hint
+
+Four findings from code review; all four addressed in this commit.
+
+1. (score 100, above threshold) Turkish place-name in a code comment: "Yavru Dinozor v3
+  duplicate-text bug" violates the English-only rule in CLAUDE.md. Rephrased generically as "Samsung
+  Notes duplicate-text regression" — same meaning, no local identifier leaking into the repo. Same
+  class of breach flagged repeatedly across recent PRs; pattern remains: Turkish tokens are fine in
+  test fixture input data, never in code, comments, docs, or user-visible strings.
+
+2. (score 75) README not updated despite a user-visible behaviour change. <MIXED>-classified pages
+  used to render with the drawing by default; after PR #67 they default to text-only and the user
+  must opt in via "page N show drawing" in the review turn. Added one sentence to the classifier
+  bullet in README (Status section) that names the new default + the opt-in path + the fact that the
+  drawing is still on disk.
+
+3. (score 75) Conventional-Commits scope mislabel. PR #67 was titled ``fix(ingestion): ...`` but the
+  production logic change lived entirely in ``src/agent_tools.py`` (the ``_apply_sentinel_result``
+  MIXED branch + ``_TRANSCRIBE_PROMPT`` wording). ``src/ingestion.py`` was untouched. Correcting the
+  scope via this follow-up commit and the PR title update.
+
+4. (score 50) Greeting bullet overstated universality. Original wording "The image is still on disk
+  — this command opts the drawing back in" was only true for <MIXED>-classified pages;
+  <TEXT>-classified pages clear page.image entirely during deterministic ingestion, so
+  choose_layout(N, "image-top") would fail on them with no useful error for the user. New wording
+  scopes the opt-in to MIXED pages explicitly AND tells the agent that the right fallback for TEXT
+  pages is ``generate_page_illustration`` (the cost-gated AI tool on OpenAI sessions). New
+  regression test test_greeting_show_drawing_hint_is_scoped_to_mixed_pages pins both halves — the
+  MIXED-scoping language and the TEXT-page fallback pointer.
+
+Full suite: 651 passing (+1 new regression).
+
+---------
+
+Co-authored-by: Mehmet Fahri Özmen <mehmet.fahri@mayadem.com>
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+
 ## v1.14.0 (2026-04-24)
+
+### Chores
+
+- **release**: 1.14.0 [skip ci]
+  ([`3f193d2`](https://github.com/mfozmen/littlepress-ai/commit/3f193d2253840944b45396f8358497ea200faab8))
 
 ### Documentation
 
