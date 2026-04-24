@@ -25,6 +25,13 @@ def _scripted(lines):
     return read
 
 
+# Minimum accepted answers to the deterministic metadata prompts
+# that run after a pre-loaded draft (title / author / series / cover /
+# back-cover). Tests exercising the run()-with-set_draft path need
+# these scripted before any post-greeting user inputs.
+_METADATA_ANSWERS = ("T", "A", "n", "c", "a")
+
+
 def _write_pdf(tmp_path):
     pdf = tmp_path / "draft.pdf"
     c = rl_canvas.Canvas(str(pdf), pagesize=A5)
@@ -82,7 +89,9 @@ def test_agent_reads_draft_and_greets_when_pdf_preloaded(tmp_path):
     buf = io.StringIO()
     console = Console(file=buf, force_terminal=False, width=100, no_color=True)
     repl = Repl(
-        read_line=_scripted([]),  # EOF right after greeting
+        # Answer the deterministic metadata prompts, then EOF so the
+        # greeting fires and the read_loop exits cleanly.
+        read_line=_scripted(list(_METADATA_ANSWERS)),
         console=console,
         provider=find("anthropic"),
         session_root=tmp_path,
@@ -135,7 +144,7 @@ def test_agent_greeting_failure_does_not_crash_repl(tmp_path):
     buf = io.StringIO()
     console = Console(file=buf, force_terminal=False, width=100, no_color=True)
     repl = Repl(
-        read_line=_scripted([]),
+        read_line=_scripted(list(_METADATA_ANSWERS)),
         console=console,
         provider=find("anthropic"),
         session_root=tmp_path,
@@ -184,7 +193,7 @@ def test_agent_typo_fix_auto_applies(tmp_path):
     buf = io.StringIO()
     console = Console(file=buf, force_terminal=False, width=100, no_color=True)
     repl = Repl(
-        read_line=_scripted(["/exit"]),
+        read_line=_scripted([*_METADATA_ANSWERS, "/exit"]),
         console=console,
         provider=find("anthropic"),
         session_root=tmp_path,
@@ -204,8 +213,11 @@ def test_agent_render_tool_produces_pdf_and_booklet(tmp_path):
 
     pdf = _write_pdf(tmp_path)
     draft = draft_mod.from_pdf(pdf, tmp_path / ".book-gen" / "images")
-    draft.title = "My Book"
-    draft.cover_image = draft.pages[0].image
+    # Title and cover are now collected by the deterministic metadata
+    # prompts (title/author/series/cover/back-cover), not by pre-
+    # seeding the draft — the pre-set values would be overwritten on
+    # run() anyway (fresh-session-per-book design; no memory-restore
+    # skip-already-set branching). So script the answers instead.
 
     llm = _StubLLM(
         [
@@ -230,7 +242,10 @@ def test_agent_render_tool_produces_pdf_and_booklet(tmp_path):
     buf = io.StringIO()
     console = Console(file=buf, force_terminal=False, width=100, no_color=True)
     repl = Repl(
-        read_line=_scripted([]),
+        # "My Book" as title + page-drawing cover (option "a") so the
+        # rendered filename ends up ``my_book.pdf`` and the cover
+        # renderer has the page drawing to lay out.
+        read_line=_scripted(["My Book", "A", "n", "a", "a"]),
         console=console,
         provider=find("anthropic"),
         session_root=tmp_path,

@@ -3,86 +3,155 @@ it's the single most load-bearing prompt in the project, because
 the agent never re-reads it and builds the whole conversation on
 top of it. These tests pin the invariants we want the hint to carry
 so future tightening / rewording can't silently drop one.
+
+After Sub-project 2 of the "AI-only-for-judgment" refactor
+(feat/deterministic-metadata-collection), the greeting is no longer
+a single constant — it's built by ``_build_agent_greeting(cover,
+back_cover)`` based on which AI branches (if any) the user opted
+into at the REPL's deterministic metadata prompts. The default
+``_AGENT_GREETING_HINT`` constant is retained as the no-AI-branch
+greeting for backwards-compat with the many tests below that read
+it; AI-branch tests call ``_build_agent_greeting`` directly.
 """
 
 from __future__ import annotations
 
-from src.repl import _AGENT_GREETING_HINT
+from src.repl import _AGENT_GREETING_HINT, _build_agent_greeting
 
 
-def test_greeting_mentions_cover_step_and_its_three_options():
-    """PR #48 follow-up (P3): a Claude session in the Yavru Dinozor
-    run quietly defaulted to "which page's drawing do you want for
-    the cover?" without surfacing the AI-generation or poster
-    options. The greeting must spell out the three alternatives so
-    the agent never forgets to offer them."""
-    lowered = _AGENT_GREETING_HINT.lower()
-
-    assert "cover" in lowered
-    # Option (a) — page drawing. Check for the exact enumeration
-    # label so the test fails if a rewrite deletes the whole bullet
-    # (keywords like "page" / "drawing" appear elsewhere too).
-    assert "(a)" in lowered
-    # Option (b) — AI generation. Check the tool name, not just a
-    # vague "generate" keyword.
-    assert "(b)" in lowered
-    assert "generate_cover_illustration" in lowered
-    # Option (c) — poster (type-only).
-    assert "(c)" in lowered
-    assert "poster" in lowered
+# ---------------------------------------------------------------------------
+# What the greeting no longer does (moved to src/metadata_prompts.py)
+# ---------------------------------------------------------------------------
 
 
-def test_greeting_flags_openai_only_gate_for_ai_cover():
-    """``generate_cover_illustration`` is registered only on OpenAI
-    (PR #41). When the active provider is different, the agent must
-    know to direct the user to ``/model`` rather than pretend the
-    tool exists. PR #49 review #4: split the substring check — the
-    old `"openai" in lowered or "/model" in lowered` passed for any
-    rewrite that kept one of the two words. Both must appear."""
-    lowered = _AGENT_GREETING_HINT.lower()
-    assert "openai" in lowered
-    assert "/model" in lowered
+def test_default_greeting_does_not_ask_for_metadata_anymore():
+    """Title / author / series / cover choice / back-cover choice
+    are all collected by plain Python prompts in the REPL before
+    the agent's first turn. The default greeting (no AI branches)
+    must NOT instruct the agent to ask for any of these — doing so
+    would double up on the REPL prompts.
+
+    The AI cover and AI back-cover branches are conditional blocks
+    that ARE allowed to mention cover / back-cover work, but only
+    under the AI-specific heading. The default greeting skips both
+    of those blocks."""
+    g = _build_agent_greeting().lower()
+    # No directives telling the agent to collect these fields.
+    for forbidden in (
+        "ask the user for a title",
+        "ask for a title",
+        "ask for the title",
+        "ask the user for an author",
+        "ask whether this book is part of a series",
+        "always ask whether",
+        "collect from the user",
+        "ask only for things you cannot infer",
+    ):
+        assert forbidden not in g, (
+            f"default greeting must not instruct the agent to "
+            f"collect metadata — found directive {forbidden!r}"
+        )
+    # And a positive signal: the greeting tells the agent metadata
+    # is already set.
+    assert "metadata is already set" in g or "already set by the repl" in g
 
 
-def test_greeting_echoes_preserve_child_voice_guard_for_ai_cover():
-    """PR #49 review #1 (critical): on non-OpenAI sessions the
-    ``generate_cover_illustration`` tool description is invisible
-    (the tool isn't registered). The greeting is the only surface
-    that names the AI cover path there. Without the guard, an
-    agent following the greeting could switch to OpenAI via
-    ``/model`` and prompt the image API with paraphrased child
-    text — exactly what PR #41's final review round was meant to
-    prevent. The guard has to live on every surface that mentions
-    the AI cover tool."""
-    lowered = _AGENT_GREETING_HINT.lower()
-    # A destruction-adjacent phrase — "own words" or
-    # "don't paraphrase" or "do not paraphrase".
-    assert (
-        "own words" in lowered
-        or "do not paraphrase" in lowered
-        or "don't paraphrase" in lowered
-        or "not paraphrase" in lowered
+# ---------------------------------------------------------------------------
+# AI cover branch — only appears when the REPL tagged cover="ai"
+# ---------------------------------------------------------------------------
+
+
+def test_default_greeting_omits_ai_cover_branch():
+    """When the user picks the non-AI cover options (page-drawing /
+    poster), the greeting must NOT contain the AI cover instructions
+    — every section an agent sees competes for attention, and
+    dead-branch instructions cost tokens and invite confusion."""
+    g = _build_agent_greeting(cover_choice="page-drawing").lower()
+    assert "generate_cover_illustration" not in g, (
+        "default cover path (page-drawing) must not surface the "
+        "AI cover tool in the greeting — that branch is conditional"
     )
-    # And the "child" anchor, so the guard is tied to the child's
-    # text specifically (not a generic "prompt carefully" line).
-    assert "child" in lowered
+    g_poster = _build_agent_greeting(cover_choice="poster").lower()
+    assert "generate_cover_illustration" not in g_poster
 
 
-def test_greeting_warns_about_openai_key_prompt_on_model_switch():
-    """PR #49 review #2: switching from Anthropic / Gemini / Ollama
-    to OpenAI triggers an interactive API-key prompt if no key is
-    stored. The greeting advertises ``/model`` as a simple switch;
-    the user surprise is avoidable if the hint names the prompt."""
-    lowered = _AGENT_GREETING_HINT.lower()
-    assert "key" in lowered
-    # The key-prompt context — "stored", "prompted", "prompt for",
-    # "asked", "enter".
-    assert (
-        "prompt" in lowered
-        or "stored" in lowered
-        or "asked" in lowered
-        or "enter" in lowered
+def test_ai_cover_branch_injects_block_naming_the_tool():
+    """When the user picks AI at the cover prompt, the greeting
+    must include the block that instructs the agent to draft a
+    cover prompt, confirm with the user, and call
+    ``generate_cover_illustration`` (the cost confirm is the only
+    surviving gate and it's about money, not content)."""
+    g = _build_agent_greeting(cover_choice="ai").lower()
+    assert "generate_cover_illustration" in g
+    # The judgment-signal: the agent drafts a prompt in its OWN
+    # words (preserve-child-voice for the image prompt specifically —
+    # do not funnel child text into the image API).
+    assert "own words" in g
+    assert "child" in g
+
+
+def test_ai_cover_branch_flags_openai_only_and_model_switch():
+    """generate_cover_illustration is OpenAI-only (PR #41). The
+    AI-cover block must tell the agent to direct non-OpenAI users
+    to ``/model``, and must warn about the interactive API-key
+    prompt so a user switching mid-session isn't surprised."""
+    g = _build_agent_greeting(cover_choice="ai").lower()
+    assert "openai" in g
+    assert "/model" in g
+    assert "key" in g
+
+
+# ---------------------------------------------------------------------------
+# AI back-cover branch — only appears when REPL tagged back_cover="ai-draft"
+# ---------------------------------------------------------------------------
+
+
+def test_default_greeting_omits_ai_back_cover_branch():
+    g = _build_agent_greeting(back_cover_choice="none").lower()
+    # The greeting must not mention the back-cover AI path when it
+    # wasn't picked (the "none" / "self-written" branches are
+    # handled deterministically; no LLM work needed).
+    assert "ai back-cover branch" not in g
+    assert "ai-draft branch" not in g
+    g_self = _build_agent_greeting(back_cover_choice="self-written").lower()
+    assert "ai back-cover branch" not in g_self
+
+
+def test_ai_back_cover_branch_grounds_draft_in_page_content():
+    """When the user picks AI-draft at the back-cover prompt, the
+    greeting must tell the agent to draft a one-line blurb grounded
+    on the story's actual page content — NOT invented from theme
+    clichés about childhood / imagination. This is the key
+    preserve-child-voice guardrail for the back-cover AI branch."""
+    g = _build_agent_greeting(back_cover_choice="ai-draft").lower()
+    # Signal the agent must ground its draft in the story's actual text.
+    assert "page" in g and (
+        "story" in g or "actual page content" in g
     )
+    # The explicit anti-cliché guard.
+    assert "cliché" in g or "cliche" in g or "clichés" in g or "cliches" in g
+
+
+def test_ai_back_cover_branch_preserves_editor_metadata_scope():
+    """The back-cover blurb is editor-facing metadata — the user
+    acting as editor approves the draft, which is why the AI path
+    is a legitimate opt-in even under preserve-child-voice. The
+    greeting must name this scope so the agent doesn't either (i)
+    refuse an AI draft citing preserve-child-voice, or (ii) take
+    the scope clarification as permission to paraphrase the page
+    text itself."""
+    g = _build_agent_greeting(back_cover_choice="ai-draft").lower()
+    assert "editor" in g
+    assert "preserve-child-voice" in g
+    # And the verbatim contract on final write: whatever text the
+    # user accepts is what gets saved to back_cover_text, no more
+    # post-processing by the LLM.
+    assert "verbatim" in g
+
+
+# ---------------------------------------------------------------------------
+# Responsibilities the greeting still owns (unchanged by Sub-project 2)
+# ---------------------------------------------------------------------------
 
 
 def test_greeting_marks_slash_commands_as_non_translatable():
@@ -92,8 +161,6 @@ def test_greeting_marks_slash_commands_as_non_translatable():
     language renders it as, and the REPL won't recognise the
     translated token. Flag slash commands as literal."""
     lowered = _AGENT_GREETING_HINT.lower()
-    # Some phrase that names slash commands + a literal/untranslated
-    # marker.
     assert "slash" in lowered or "/" in _AGENT_GREETING_HINT
     assert (
         "literal" in lowered
@@ -105,17 +172,6 @@ def test_greeting_marks_slash_commands_as_non_translatable():
     )
 
 
-def test_greeting_option_a_points_at_select_cover_template():
-    """PR #49 review #5: poster is framed as one of three top-level
-    cover paths, but semantically poster is a *template* (alongside
-    full-bleed / framed / portrait-frame / title-band-top). Option
-    (a) should point at the ``select-cover-template`` skill so an
-    LLM biased toward the greeting doesn't skip the middle three
-    templates."""
-    lowered = _AGENT_GREETING_HINT.lower()
-    assert "select-cover-template" in lowered
-
-
 def test_greeting_still_asks_agent_to_read_draft_first():
     """Pre-PR-#48 invariant that shouldn't regress: the first action
     is ``read_draft``. Pinned so a future rewrite doesn't strip it."""
@@ -123,84 +179,7 @@ def test_greeting_still_asks_agent_to_read_draft_first():
     assert "read_draft" in lowered
 
 
-def test_greeting_offers_three_back_cover_options():
-    """The back-cover step mirrors the cover step: three explicit
-    options — user writes it / AI drafts from story content / skip.
-    Before the 2026-04-24 update the greeting only allowed option (a)
-    + skip, forcing the user to type the blurb themselves even when
-    they asked the agent to draft one. The AI-draft branch must be
-    named so the agent doesn't default-refuse.
-
-    Assertions are scoped to the back-cover slice of the greeting —
-    a naive ``in lowered`` check would also match the cover bullet
-    (which has its own ``(a)/(b)/(c)`` structure, ``AI``, and
-    ``story's``), so dropping the back-cover addition entirely would
-    still pass. The slice forces the test to actually regress when
-    the back-cover feature regresses."""
-    lowered = _AGENT_GREETING_HINT.lower()
-
-    # Grab the back-cover-specific slice. The greeting's back-cover
-    # bullet begins with "- back-cover blurb" and ends at the
-    # blank-line terminator before the next section ("ask each of
-    # these as its own one-line question").
-    assert "back-cover blurb" in lowered, "back-cover bullet missing entirely"
-    # Explicit delimiter guard — if a future greeting rewrite moves
-    # or rephrases the end-of-section anchor, this assertion fires
-    # loudly BEFORE the slice can silently grow back over the cover
-    # bullet and re-admit the vacuous-pass failure mode (PR #66
-    # round-2 review).
-    assert "ask each of these" in lowered, (
-        "greeting's end-of-section anchor 'ask each of these' has "
-        "moved or been rephrased — update the back-cover test slice "
-        "delimiter to match, or the (a)/(b)/(c) + AI checks below "
-        "will start passing vacuously from the cover bullet"
-    )
-    bc = lowered.split("back-cover blurb", 1)[1].split("ask each of these", 1)[0]
-
-    # Three-options pattern matching the cover step, but specifically
-    # inside the back-cover bullet.
-    assert "(a)" in bc and "(b)" in bc and "(c)" in bc, (
-        f"back-cover bullet missing the three-option pattern: {bc!r}"
-    )
-    # (b) must name the AI-generation path explicitly, and the draft
-    # must be grounded in the story's own page content (not generic
-    # theme clichés). Both signals must appear inside the slice.
-    assert "ai" in bc or "generate" in bc, (
-        f"back-cover bullet missing the AI-generation option: {bc!r}"
-    )
-    assert "page text" in bc or "story's" in bc or "story content" in bc, (
-        f"back-cover bullet missing the story-grounding signal: {bc!r}"
-    )
-
-
-def test_greeting_clarifies_preserve_child_voice_scope_for_back_cover():
-    """Preserve-child-voice applies to the book's INTERIOR (page
-    text) — the child's own words must never be rewritten. The
-    back-cover blurb is editor-facing metadata and the AI-draft
-    branch is a legitimate opt-in. The greeting must name both
-    halves so the agent doesn't either (i) refuse an AI-draft
-    request or (ii) take the scope clarification as permission to
-    paraphrase page text."""
-    lowered = _AGENT_GREETING_HINT.lower()
-    # Scope is still named so the link to CLAUDE.md stays unambiguous.
-    assert "preserve-child-voice" in lowered
-    # And the clarification: page text / interior is the child's,
-    # NOT the back-cover blurb.
-    assert "interior" in lowered or "page text" in lowered
-    # The AI-draft branch on the back cover must accept the user's
-    # rewrite as the source of truth — "verbatim" must still appear
-    # somewhere in the back-cover section.
-    assert "verbatim" in lowered
-
-
-# ---------------------------------------------------------------------------
-# Task 11 — new tests for the review-based flow
-# ---------------------------------------------------------------------------
-
-
 def test_greeting_drives_auto_ingest_then_review_turn():
-    from src.repl import _AGENT_GREETING_HINT
-
     g = _AGENT_GREETING_HINT.lower()
     # Auto-apply signal — the greeting must tell the agent not to
     # re-run ingestion even though transcribe_page still exists as a
@@ -226,8 +205,6 @@ def test_greeting_drives_auto_ingest_then_review_turn():
 def test_greeting_no_longer_has_metadata_review_checkpoint():
     """P5's 'summarise the metadata back before render_book' paragraph
     is subsumed by the review turn."""
-    from src.repl import _AGENT_GREETING_HINT
-
     forbidden = [
         "summarise the metadata",
         "approve or correct any of it before rendering",
@@ -244,8 +221,6 @@ def test_greeting_mentions_review_turn_tools_explicitly():
     during review. choose_layout joined the set after the Yavru
     Dinozor v3 MIXED-default fix — users need a way to opt the
     drawing back in on pages where ingestion defaulted to text-only."""
-    from src.repl import _AGENT_GREETING_HINT
-
     g = _AGENT_GREETING_HINT
     for tool in (
         "apply_text_correction",
@@ -261,14 +236,8 @@ def test_greeting_surfaces_show_drawing_review_command():
     must tell the agent that when the user asks to 'show the drawing
     on page N' (or layout-adjustment equivalents), the right call
     is choose_layout, not apply_text_correction / restore_page /
-    hide_page. Without this hint the agent might refuse or call the
-    wrong tool, leaving the user stuck with text-only pages they
-    want to see the drawing on."""
-    from src.repl import _AGENT_GREETING_HINT
-
+    hide_page."""
     lowered = _AGENT_GREETING_HINT.lower()
-    # The review-turn bullet must name choose_layout + at least one
-    # natural-language trigger the user would type.
     assert "choose_layout" in lowered
     assert (
         "show drawing" in lowered
@@ -280,71 +249,28 @@ def test_greeting_surfaces_show_drawing_review_command():
 
 def test_greeting_show_drawing_hint_is_scoped_to_mixed_pages():
     """Review-round-2 finding on PR #67: the show-drawing bullet
-    originally said "The image is still on disk — this command opts
-    the drawing back in" unconditionally. That was only true for
-    <MIXED>-classified pages. <TEXT> pages clear ``page.image``
-    entirely during deterministic ingestion, so ``choose_layout(N,
-    "image-top")`` on a text-classified page fails (no image to
-    lay out) — leaving the user confused about why their request
-    was rejected. The greeting must scope the hint to MIXED pages
-    AND give the agent a useful fallback to mention for TEXT pages
-    (generate_page_illustration, the cost-gated AI tool)."""
-    from src.repl import _AGENT_GREETING_HINT
-
+    must scope the ``choose_layout`` opt-in to MIXED pages (where
+    an image is still attached) AND point at
+    ``generate_page_illustration`` as the fallback for TEXT pages."""
     lowered = _AGENT_GREETING_HINT.lower()
-    # Still names choose_layout + a natural-language trigger.
     assert "choose_layout" in lowered
-    # MIXED-scoping is explicit: the bullet must mention that it
-    # only works where an image is still attached.
     assert (
         "still have an image attached" in lowered
         or "pages that still have an image" in lowered
         or "only works on pages that still have" in lowered
     )
-    # TEXT fallback: agent should know to point at the AI tool
-    # rather than refuse silently.
     assert "generate_page_illustration" in lowered
 
 
 def test_greeting_no_longer_references_old_skip_page_tool():
-    from src.repl import _AGENT_GREETING_HINT
-
     # Old name gone (the tool was renamed to hide_page).
     assert "skip_page" not in _AGENT_GREETING_HINT
 
 
-def test_greeting_always_asks_series_question():
-    """Regression: the series question was shipped pre-refactor (PLAN's
-    feat/always-ask-series-question) and silently dropped during the
-    T11 greeting rewrite. The user uses the answer to record the
-    volume inside the title (e.g. ``My Series - 1``) so the cover
-    renderer picks it up naturally. Greeting must explicitly
-    instruct the agent to ALWAYS ask — every book, regardless of
-    what the title pattern looks like — and to follow up with the
-    volume number on a yes."""
-    from src.repl import _AGENT_GREETING_HINT
-
-    g = _AGENT_GREETING_HINT.lower()
-    # Core signals the greeting must carry so the agent runs the flow.
-    assert "series" in g
-    assert "volume" in g
-    # Explicit "always ask" AND "every book" framing — the old
-    # feature's whole point was not letting the agent infer 'yes'
-    # from title shape. Both must appear (not ``or``): a future
-    # rewrite that keeps only one token would silently drop the
-    # anti-inference framing this test exists to pin.
-    assert "always" in g
-    assert "every book" in g
-
-
 def test_greeting_does_not_instruct_agent_to_pass_keep_image():
-    """The ``keep_image`` parameter was removed from ``transcribe_page``
-    in the review-based-gate refactor. The greeting may NAME the
-    string (to tell the agent to ignore training-data memories of it
-    and to list forbidden UI-mimicking patterns), but must NOT
-    actively instruct the agent to pass it."""
-    from src.repl import _AGENT_GREETING_HINT
-
+    """The ``keep_image`` parameter was removed from
+    ``transcribe_page`` in the review-based-gate refactor. The
+    greeting must NOT actively instruct the agent to pass it."""
     g = _AGENT_GREETING_HINT.lower()
     for directive in (
         "pass keep_image",
@@ -360,44 +286,46 @@ def test_greeting_does_not_instruct_agent_to_pass_keep_image():
 
 
 # ---------------------------------------------------------------------------
-# PR #60 review-findings regression tests
+# PR #60 review-findings regression tests (still relevant)
 # ---------------------------------------------------------------------------
 
 
 def test_greeting_does_not_contain_turkish_tokens():
-    """Regression for PR #60 #4: per CLAUDE.md, nothing Turkish in the
-    repo outside test fixtures. The greeting is an agent system prompt,
-    not a fixture. Exit-token recognition must be language-neutral
-    (agent infers intent), not a hard-coded Turkish literal."""
-    from src.repl import _AGENT_GREETING_HINT
-
-    # Case-insensitive word-ish check.
-    lower = _AGENT_GREETING_HINT.lower()
-    forbidden_tr = (" yok", "yok ", "'yok'", '"yok"', "``yok``", "tamam")
-    for tok in forbidden_tr:
-        assert tok not in lower, f"Turkish token {tok!r} leaked into greeting"
+    """Regression for PR #60 #4: per CLAUDE.md, nothing Turkish in
+    the repo outside test fixtures. The greeting is an agent system
+    prompt, not a fixture. Checking both the default and the full
+    all-AI-branches variant so a Turkish token can't hide in a
+    conditional block."""
+    for variant_name, g in (
+        ("default", _AGENT_GREETING_HINT.lower()),
+        (
+            "both-AI-branches",
+            _build_agent_greeting(
+                cover_choice="ai", back_cover_choice="ai-draft"
+            ).lower(),
+        ),
+    ):
+        forbidden_tr = (" yok", "yok ", "'yok'", '"yok"', "``yok``", "tamam")
+        for tok in forbidden_tr:
+            assert tok not in g, (
+                f"Turkish token {tok!r} leaked into greeting variant "
+                f"{variant_name!r}"
+            )
 
 
 def test_greeting_instructs_language_neutral_exit_recognition():
     """The greeting must tell the agent to recognise intent in
     whatever language the user types, not match English tokens
-    verbatim. Regression for the fix to #4."""
-    from src.repl import _AGENT_GREETING_HINT
-
+    verbatim. Regression for the fix to PR #60 #4."""
     g = _AGENT_GREETING_HINT.lower()
-    # The instruction names intent-recognition rather than a fixed
-    # multilingual token list.
     assert "language" in g or "any language" in g or "intent" in g
 
 
 def test_greeting_no_longer_tells_agent_to_process_the_draft_itself():
-    """After the deterministic-ingestion PR, ``littlepress`` does the
-    OCR + sentinel work before the agent's first turn. The greeting
-    must NOT still tell the agent to run transcribe_page in a batch
-    — that was the old flow and those phrases invited the LLM to
-    reconstruct the pre-refactor UI from training memory."""
-    from src.repl import _AGENT_GREETING_HINT
-
+    """After the deterministic-ingestion PR, ``littlepress`` does
+    the OCR + sentinel work before the agent's first turn. The
+    greeting must NOT still tell the agent to run transcribe_page
+    in a batch."""
     forbidden = [
         "PROCESS THE DRAFT AUTOMATICALLY",
         "BATCH THE INGESTION",
@@ -412,11 +340,9 @@ def test_greeting_no_longer_tells_agent_to_process_the_draft_itself():
 
 def test_greeting_tells_agent_the_draft_is_already_processed():
     """Conversely, the new hint should tell the agent the draft
-    arrives already transcribed so it doesn't try to redo the work."""
-    from src.repl import _AGENT_GREETING_HINT
-
+    arrives already transcribed so it doesn't try to redo the
+    work."""
     g = _AGENT_GREETING_HINT.lower()
-    # Any of these phrasings signals "ingestion already happened".
     assert (
         "already transcribed" in g
         or "already processed" in g

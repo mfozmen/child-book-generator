@@ -177,7 +177,13 @@ def test_load_kicks_the_agent_off_when_a_real_provider_is_active(tmp_path):
     buf = io.StringIO()
     console = Console(file=buf, force_terminal=False, width=100, no_color=True)
     repl = Repl(
-        read_line=_scripted([f"/load {pdf}", "/exit"]),
+        # After ``/load`` the REPL runs the deterministic metadata
+        # prompts (title → author → series → cover → back-cover)
+        # before handing to the agent. Script the minimum accepted
+        # answers so the flow reaches the agent greeting.
+        read_line=_scripted(
+            [f"/load {pdf}", "T", "A", "n", "c", "a", "/exit"]
+        ),
         console=console,
         provider=find("anthropic"),
         session_root=tmp_path,
@@ -339,7 +345,11 @@ def test_load_pdf_auto_ingests_image_only_pages(tmp_path):
     buf = io.StringIO()
     console = Console(file=buf, force_terminal=False, width=100, no_color=True)
     repl = Repl(
-        read_line=_scripted([f"/load {pdf}", "/exit"]),
+        # After ``/load`` the REPL runs deterministic metadata prompts
+        # before the agent turn — script minimum answers.
+        read_line=_scripted(
+            [f"/load {pdf}", "T", "A", "n", "c", "a", "/exit"]
+        ),
         console=console,
         provider=find("anthropic"),
         session_root=tmp_path,

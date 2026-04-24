@@ -70,11 +70,18 @@ def _make(tmp_path, lines):
     return repl, buf, llm
 
 
+# Minimum accepted answers to the deterministic metadata prompts that
+# run after a successful load: title / author / series / cover /
+# back-cover. Tests that exercise the load path need these inputs
+# scripted between the load line and the next REPL action.
+_METADATA_ANSWERS = ("T", "A", "n", "c", "a")
+
+
 def test_dragging_pdf_onto_terminal_loads_draft(tmp_path):
     pdf = tmp_path / "dragged.pdf"
     _write_pdf(pdf)
 
-    repl, buf, llm = _make(tmp_path, [str(pdf), "/exit"])
+    repl, buf, llm = _make(tmp_path, [str(pdf), *_METADATA_ANSWERS, "/exit"])
     repl.run()
 
     assert repl.draft is not None
@@ -94,7 +101,7 @@ def test_quoted_drag_drop_path_also_loads(tmp_path):
     pdf = tmp_path / "with space.pdf"
     _write_pdf(pdf)
 
-    repl, _, llm = _make(tmp_path, [f'"{pdf}"', "/exit"])
+    repl, _, llm = _make(tmp_path, [f'"{pdf}"', *_METADATA_ANSWERS, "/exit"])
     repl.run()
 
     assert repl.draft is not None
@@ -137,7 +144,7 @@ def test_pdf_case_insensitive_extension(tmp_path):
     pdf = tmp_path / "UPPER.PDF"
     _write_pdf(pdf)
 
-    repl, _, llm = _make(tmp_path, [str(pdf), "/exit"])
+    repl, _, llm = _make(tmp_path, [str(pdf), *_METADATA_ANSWERS, "/exit"])
     repl.run()
 
     assert repl.draft is not None
@@ -157,7 +164,7 @@ def test_home_expansion_in_drag_drop_path(tmp_path, monkeypatch):
     pdf = fake_home / "draft.pdf"
     _write_pdf(pdf)
 
-    repl, _, _ = _make(tmp_path, ["~/draft.pdf", "/exit"])
+    repl, _, _ = _make(tmp_path, ["~/draft.pdf", *_METADATA_ANSWERS, "/exit"])
     repl.run()
 
     assert repl.draft is not None
@@ -227,7 +234,7 @@ def test_slash_load_still_works_alongside_drag_drop(tmp_path):
     pdf = tmp_path / "a.pdf"
     _write_pdf(pdf)
 
-    repl, _, _ = _make(tmp_path, [f"/load {pdf}", "/exit"])
+    repl, _, _ = _make(tmp_path, [f"/load {pdf}", *_METADATA_ANSWERS, "/exit"])
     repl.run()
 
     assert repl.draft is not None

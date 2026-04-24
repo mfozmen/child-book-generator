@@ -53,6 +53,7 @@ from src.providers.validator import (
     TransientValidationError,
 )
 from src.ingestion import ingest_image_only_pages
+from src.metadata_prompts import collect_metadata
 
 
 SlashHandler = Callable[["Repl", str], int | None]
@@ -106,7 +107,7 @@ def _looks_like_pdf_path(line: str) -> bool:
         return False
 
 
-_AGENT_GREETING_HINT = (
+_GREETING_OPENING = (
     "The user just gave you a PDF draft. Call read_draft to see "
     "what's in it, greet them in the same language they will use "
     "(they haven't spoken yet — default to English but switch once "
@@ -120,51 +121,51 @@ _AGENT_GREETING_HINT = (
     "``transcribe_page`` during the metadata phase; the tool stays "
     "registered only so the user can request a re-OCR on a "
     "specific page during the post-render review turn.\n\n"
-    "ASK ONLY FOR THINGS YOU CANNOT INFER. Before the first render, "
-    "collect from the user only:\n"
-    "  - title (and author) — required, the child is the source of "
-    "truth;\n"
-    "  - series question — ALWAYS ask whether this book is part of a "
-    "series (every book, regardless of what the title looks like — do "
-    "not try to infer 'yes' from a number already in the title; the "
-    "user is the source of truth). On a 'yes', follow up with the "
-    "volume number ('which book in the series is this?'). Have the "
-    "user record the series + volume inside the title when they set "
-    "it (e.g. ``My Series - 1``) so the cover renderer picks it up "
-    "naturally — no separate data field;\n"
-    "  - cover choice — offer the three options explicitly: (a) "
-    "reuse a page drawing (consult the select-cover-template skill), "
-    "(b) generate an AI cover illustration via "
-    "generate_cover_illustration (OpenAI-only; if the user is on "
-    "another provider tell them to switch via /model, and warn them "
-    "they'll be prompted for an OpenAI API key on first switch if "
-    "one isn't already stored in the OS keychain; a tiny cost confirm "
-    "stays on this tool — that's the only surviving gate and it is "
-    "about money, not content), or (c) poster style via set_cover "
-    "with style='poster'. PRESERVE-CHILD-VOICE still applies on "
-    "option (b): describe the cover scene in your OWN words from "
-    "the story's themes — do NOT quote or paraphrase the child's "
-    "page text into the image prompt;\n"
-    "  - back-cover blurb — offer the three options explicitly, same "
-    "shape as the cover question: (a) user writes the blurb (one "
-    "short line, saved verbatim — their words win); (b) AI generates "
-    "a one-line blurb from the story's own page text (draft it, show "
-    "it in chat, wait for the user to approve, edit, or overwrite — "
-    "only call ``set_metadata`` with ``field='back_cover_text'`` "
-    "after the user has accepted or rewritten the draft; the accepted "
-    "text is what gets saved verbatim); (c) skip (leave the field "
-    "empty — do not call ``set_metadata`` for back_cover_text). "
-    "PRESERVE-CHILD-VOICE scope: it applies to the book's INTERIOR "
-    "(page text — the child's own words, untouched) — the back-cover "
-    "blurb is editor-facing metadata and the AI-draft branch is a "
-    "legitimate opt-in here. The draft must be grounded in the "
-    "story's actual page content (a one-line distillation of what "
-    "the story is about), NOT invented from theme clichés about "
-    "childhood, imagination, etc.\n"
-    "Ask each of these as its own one-line question — do not "
-    "bundle them into a list the user has to read and parse.\n\n"
-    "RENDER IMMEDIATELY after the above. Call render_book; the PDF "
-    "opens in the user's viewer automatically.\n\n"
+    "METADATA IS ALREADY SET BY THE REPL. ``littlepress`` collected "
+    "title, author, series (if any), cover choice, and back-cover "
+    "blurb via plain Python prompts before handing control to you. "
+    "Do NOT ask for any of those — they are either already on the "
+    "draft or flagged for AI-branch handling below. Your role is "
+    "to execute any AI branches the user opted into, call "
+    "``render_book`` once, and then drive the post-render review "
+    "turn.\n\n"
+)
+
+_GREETING_AI_COVER_BRANCH = (
+    "AI COVER BRANCH (the user picked 'generate with AI' at the "
+    "cover prompt). Draft a one-line cover-illustration prompt in "
+    "your own words from the story's themes — do NOT quote or "
+    "paraphrase the child's page text into the image prompt. Show "
+    "the prompt + price tier (low ≈ $0.02, medium ≈ $0.06, high ≈ "
+    "$0.25 on OpenAI gpt-image-1 portrait) to the user for "
+    "approval, then call ``generate_cover_illustration`` — the "
+    "tool's built-in cost confirm is the only surviving gate and "
+    "it is about money, not content. If the user is on a non-"
+    "OpenAI provider, tell them to switch via /model and warn "
+    "that they'll be prompted for an OpenAI API key on first "
+    "switch if one isn't already stored in the OS keychain.\n\n"
+)
+
+_GREETING_AI_BACK_COVER_BRANCH = (
+    "AI BACK-COVER BRANCH (the user picked 'draft with AI' at the "
+    "back-cover prompt). Draft a one-line blurb grounded on the "
+    "story's actual page content — a distillation of what the "
+    "story is about, NOT invented from theme clichés about "
+    "childhood / imagination. Show the draft in chat, wait for "
+    "the user to approve, edit, or overwrite. Only after the user "
+    "has accepted a version, call ``set_metadata`` with "
+    "``field='back_cover_text'`` and the accepted text (verbatim). "
+    "PRESERVE-CHILD-VOICE scope: the back-cover blurb is editor-"
+    "facing metadata (the user acting as editor approves the "
+    "draft), not child-authored text, so the AI-draft branch is "
+    "a legitimate opt-in here — but the draft must still be "
+    "grounded in the story's actual pages.\n\n"
+)
+
+_GREETING_RENDER_AND_REVIEW = (
+    "RENDER IMMEDIATELY after any AI branches complete (or "
+    "immediately if there are none). Call ``render_book``; the "
+    "PDF opens in the user's viewer automatically.\n\n"
     "POST-RENDER REVIEW TURN. Post exactly one prompt to the user "
     "after a successful render:\n"
     "  'PDF ready. Which page numbers have issues? "
@@ -206,6 +207,38 @@ _AGENT_GREETING_HINT = (
     "under .book-gen/images/page-NN.png are NEVER deleted or "
     "rewritten by any tool."
 )
+
+
+_AI_COVER_TAG = "ai"
+_AI_BACK_COVER_TAG = "ai-draft"
+
+
+def _build_agent_greeting(
+    cover_choice: str = "page-drawing",
+    back_cover_choice: str = "none",
+) -> str:
+    """Build the agent's first-turn greeting from the REPL's metadata
+    choices. Deterministic branches (``page-drawing`` / ``poster`` /
+    ``none`` / ``self-written``) mean the corresponding AI-branch
+    block is OMITTED from the greeting — the agent is told metadata
+    is set and goes straight to render + review. Only the AI
+    branches (``cover == "ai"``, ``back_cover == "ai-draft"``) inject
+    their block, so the agent only sees instructions for work it
+    actually has to do."""
+    parts = [_GREETING_OPENING]
+    if cover_choice == _AI_COVER_TAG:
+        parts.append(_GREETING_AI_COVER_BRANCH)
+    if back_cover_choice == _AI_BACK_COVER_TAG:
+        parts.append(_GREETING_AI_BACK_COVER_BRANCH)
+    parts.append(_GREETING_RENDER_AND_REVIEW)
+    return "".join(parts)
+
+
+# Backward-compat shim: many existing tests import the old string
+# constant directly. The default (no AI branches) is equivalent to
+# the fully-deterministic metadata path and keeps those tests
+# readable as "what does the greeting look like in the common case".
+_AGENT_GREETING_HINT = _build_agent_greeting()
 
 
 class Repl:
@@ -296,12 +329,24 @@ class Repl:
     def _greet_if_draft_loaded(self) -> None:
         """Kick off the agent with the pre-loaded draft so the user
         sees an immediate response. No-op when offline (NullProvider)
-        or when no PDF was pre-loaded by the CLI."""
+        or when no PDF was pre-loaded by the CLI.
+
+        The flow between ingestion and the first agent turn has three
+        steps now: (1) deterministic OCR ingestion, (2) deterministic
+        metadata prompts (title / author / series / cover / back-cover
+        — via ``src/metadata_prompts.py``), (3) the agent's first
+        turn with a dynamically-built greeting that reflects whether
+        the user opted into AI cover / AI back-cover branches."""
         if self._draft is None or isinstance(self._llm, NullProvider):
             return
         self._run_ingestion()
+        choices = collect_metadata(self._draft, self._read, self._console)
+        greeting = _build_agent_greeting(
+            cover_choice=choices.cover,
+            back_cover_choice=choices.back_cover,
+        )
         try:
-            self._agent.say(_AGENT_GREETING_HINT)
+            self._agent.say(greeting)
         except Exception as e:
             self._console.print(f"[red]Agent error:[/red] {e}")
         self._persist_draft()
@@ -1111,10 +1156,16 @@ def _cmd_load(repl: Repl, args: str) -> None:
     repl._run_ingestion()
     # Kick the agent off so the user doesn't stare at silence after the
     # load. Matches the CLI-arg bootstrap path. Offline (NullProvider)
-    # stays quiet — there's no agent to greet with.
+    # stays quiet — there's no agent to greet with, and the metadata
+    # prompts are skipped (offline users fall back to slash commands).
     if not isinstance(repl._llm, NullProvider):
+        choices = collect_metadata(repl._draft, repl._read, repl._console)
+        greeting = _build_agent_greeting(
+            cover_choice=choices.cover,
+            back_cover_choice=choices.back_cover,
+        )
         try:
-            repl._agent.say(_AGENT_GREETING_HINT)
+            repl._agent.say(greeting)
         except Exception as e:
             repl._console.print(f"[red]Agent error:[/red] {e}")
     return None

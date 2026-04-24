@@ -133,7 +133,15 @@ def test_memory_persists_after_agent_tool_call(tmp_path):
     )
 
     repl, _ = _make(
-        tmp_path, [], llm=llm, provider=find("anthropic"), draft=draft
+        # Deterministic metadata prompts run before the agent turn —
+        # script minimum answers (title/author/series/cover/back-cover).
+        # The agent's subsequent set_metadata tool call then overrides
+        # ``title`` to "Agent Picked", which is what the assertion pins.
+        tmp_path,
+        ["T", "A", "n", "c", "a"],
+        llm=llm,
+        provider=find("anthropic"),
+        draft=draft,
     )
     repl.run()
 
