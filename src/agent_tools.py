@@ -1838,7 +1838,17 @@ def propose_layouts_tool(
             "Use this right after metadata is settled. For surgical "
             "tweaks afterwards, use choose_layout. Valid layouts: "
             "image-top, image-bottom, image-full, text-only. Pages "
-            "without a drawing must be text-only. "
+            "without a drawing must be text-only. ALSO: pages that "
+            "ingestion has placed in the (layout=text-only AND image "
+            "is not None) shape are MIXED-default pages (Samsung "
+            "Notes / phone scans where text and drawing are baked on "
+            "the same pixel canvas) and MUST stay text-only in this "
+            "batch — flipping them to image-* would print the "
+            "handwritten text twice (once inside the image, once as "
+            "the transcribed text block). The whole batch is "
+            "rejected if any of those pages is flipped. Use "
+            "choose_layout per-page if the user explicitly asks to "
+            "see the drawing on a MIXED page. "
             + _RHYTHM_RULES_FOR_TOOL_DESC
             + " Since you see every page at once here, use that view "
             "to make the cadence feel varied on paper."
@@ -1872,6 +1882,7 @@ def _reject_layout_batch(draft: Draft, items: list[dict]) -> str | None:
     """Return a rejection message if ``items`` can't be applied to
     ``draft`` as a whole, or ``None`` if the batch is clean."""
     seen_pages: set[int] = set()
+    protected_flipping: list[int] = []
     for item in items:
         page_n = int(item.get("page", 0))
         layout = str(item.get("layout", ""))
@@ -1894,6 +1905,35 @@ def _reject_layout_batch(draft: Draft, items: list[dict]) -> str | None:
                 f"Page {page_n} has no drawing — it must be text-only. "
                 "Can't apply image-* layouts to an imageless page."
             )
+        # MIXED-default protection: a page in the
+        # ``layout=text-only AND image is not None`` shape was
+        # placed there by the ingestion's ``<MIXED>`` branch (the
+        # PR #67 fix to the duplicate-text bug — Samsung Notes pages
+        # have text baked into the image, so showing the image AND
+        # the transcribed text would print the content twice). The
+        # only way to hit this shape is via MIXED ingestion; a
+        # non-MIXED text-only page has no image attached. Refuse to
+        # silently flip it back to image-* — the user has to
+        # explicitly opt the drawing back in via choose_layout.
+        if (
+            page.layout == "text-only"
+            and page.image is not None
+            and layout != "text-only"
+        ):
+            protected_flipping.append(page_n)
+    if protected_flipping:
+        listed = ", ".join(str(p) for p in protected_flipping)
+        return (
+            f"Refusing to flip page(s) {listed} away from text-only — "
+            f"these are MIXED-classified pages (text + image baked "
+            f"on the same canvas). Promoting them to image-* would "
+            f"print the handwritten text twice (once inside the "
+            f"image, once as the transcribed text block). If the "
+            f"user explicitly asks to see the drawing on those pages, "
+            f"call choose_layout(page=N, layout='image-top') per "
+            f"page rather than batching them — the per-page tool "
+            f"isn't gated by this protection."
+        )
     return None
 
 

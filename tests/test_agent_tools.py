@@ -2728,6 +2728,109 @@ def test_propose_layouts_enforces_text_only_for_imageless_pages():
 
 
 
+def test_propose_layouts_protects_mixed_default_text_only_pages(tmp_path):
+    """Regression for the Yavru Dinozor v3 finding: ingestion
+    correctly classified Samsung-Notes pages as ``<MIXED>`` and set
+    ``layout=text-only`` while keeping ``page.image`` attached (the
+    PR #67 fix to the duplicate-text bug). The agent then proactively
+    called ``propose_layouts`` after the greeting; ``propose_layouts``
+    saw image-attached pages and promoted them to ``image-*``
+    layouts, undoing the MIXED default. The rendered book duplicated
+    the handwritten text — once baked into the image, once as the
+    transcribed text block under it.
+
+    Fix: ``propose_layouts`` treats ``layout=text-only AND image is
+    not None`` as a protected MIXED-default signature (uniquely so —
+    a non-MIXED text-only page has no image attached, so this shape
+    only ever appears after a MIXED ingestion). Any batch that tries
+    to flip a protected page to a non-text-only layout is rejected
+    with a message naming the protected pages so the agent knows to
+    either keep them text-only or call ``choose_layout`` per-page
+    when the user explicitly wants the drawing back in.
+    """
+    from src.agent_tools import propose_layouts_tool
+    from src.draft import Draft, DraftPage
+
+    img1 = tmp_path / "page-01.png"
+    img1.write_bytes(b"x")
+    img2 = tmp_path / "page-02.png"
+    img2.write_bytes(b"x")
+
+    # Two pages in the MIXED-default shape (text-only layout +
+    # image attached) and one page in image-top with image.
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        pages=[
+            DraftPage(text="Story 1", image=img1, layout="text-only"),
+            DraftPage(text="Story 2", image=img2, layout="text-only"),
+            DraftPage(text="Cover", image=img1, layout="image-top"),
+        ],
+    )
+    tool = propose_layouts_tool(get_draft=lambda: draft)
+
+    result = tool.handler(
+        {
+            "layouts": [
+                # Trying to flip both protected pages to image-*.
+                {"page": 1, "layout": "image-top", "reason": "rhythm"},
+                {"page": 2, "layout": "image-bottom", "reason": "rhythm"},
+                {"page": 3, "layout": "image-top", "reason": "rhythm"},
+            ],
+        }
+    )
+
+    # Whole batch rejected — no page mutated.
+    assert draft.pages[0].layout == "text-only"
+    assert draft.pages[1].layout == "text-only"
+    assert draft.pages[2].layout == "image-top"
+    # Rejection message names the protected pages.
+    assert "1" in result and "2" in result
+    assert (
+        "mixed" in result.lower()
+        or "text-only" in result.lower()
+        or "protected" in result.lower()
+    )
+    # And points at choose_layout as the explicit-override escape
+    # hatch so the agent knows what to do next.
+    assert "choose_layout" in result
+
+
+def test_propose_layouts_allows_keeping_mixed_default_pages_as_text_only(tmp_path):
+    """Counterpart to the protection: when the proposal explicitly
+    keeps a MIXED-default page as text-only, the batch must apply
+    cleanly. The protection only fires on attempts to FLIP the
+    layout, not on legitimate batches that respect the default."""
+    from src.agent_tools import propose_layouts_tool
+    from src.draft import Draft, DraftPage
+
+    img1 = tmp_path / "page-01.png"
+    img1.write_bytes(b"x")
+    img2 = tmp_path / "page-02.png"
+    img2.write_bytes(b"x")
+
+    draft = Draft(
+        source_pdf=tmp_path / "x.pdf",
+        pages=[
+            DraftPage(text="Story 1", image=img1, layout="text-only"),
+            DraftPage(text="Story 2", image=img2, layout="text-only"),
+        ],
+    )
+    tool = propose_layouts_tool(get_draft=lambda: draft)
+
+    result = tool.handler(
+        {
+            "layouts": [
+                {"page": 1, "layout": "text-only", "reason": "mixed default"},
+                {"page": 2, "layout": "text-only", "reason": "mixed default"},
+            ],
+        }
+    )
+
+    assert draft.pages[0].layout == "text-only"
+    assert draft.pages[1].layout == "text-only"
+    assert "applied" in result.lower()
+
+
 def test_propose_layouts_rejects_out_of_range_page():
     """Count matches, but a page number is past the end — reject
     before applying (and don't mutate)."""
