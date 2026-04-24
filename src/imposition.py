@@ -33,6 +33,13 @@ def _reader_sequence(n_pages: int) -> list[int | None]:
     come out blank — a bug surfaced the first time a real booklet was
     folded.
     """
+    if n_pages < 2:
+        raise ValueError(
+            f"saddle-stitch imposition needs at least 2 source pages "
+            f"(cover + back cover); got n_pages={n_pages!r}. "
+            f"``build_pdf`` always emits cover + back cover, so this "
+            f"path is unreachable from the normal flow."
+        )
     pad = (4 - n_pages % 4) % 4
     if pad == 0:
         return list(range(1, n_pages + 1))

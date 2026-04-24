@@ -67,6 +67,22 @@ def test_reader_sequence_puts_extra_blanks_before_back_cover_for_pad_three():
     assert _reader_sequence(5) == [1, None, 2, 3, 4, None, None, 5]
 
 
+def test_reader_sequence_rejects_n_less_than_two():
+    """PR #68 review-finding regression: the old implementation
+    silently returned ``[1, None, None, None, 1]`` for n_pages=1
+    (length 5, duplicated source page 1). Unreachable from the
+    normal flow — ``build_pdf`` always emits cover + back cover,
+    so the minimum source PDF is 2 pages — but a future caller
+    should fail loudly rather than get nonsensical imposition
+    output."""
+    import pytest
+
+    with pytest.raises(ValueError, match="at least 2 source pages"):
+        _reader_sequence(1)
+    with pytest.raises(ValueError, match="at least 2 source pages"):
+        _reader_sequence(0)
+
+
 def test_reader_sequence_keeps_back_cover_on_outside_back_for_all_sizes():
     """The invariant that matters most: whatever padding rule we
     use, source page n (the back cover) must always land on the
