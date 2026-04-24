@@ -129,16 +129,37 @@ def test_greeting_offers_three_back_cover_options():
     Before the 2026-04-24 update the greeting only allowed option (a)
     + skip, forcing the user to type the blurb themselves even when
     they asked the agent to draft one. The AI-draft branch must be
-    named so the agent doesn't default-refuse."""
+    named so the agent doesn't default-refuse.
+
+    Assertions are scoped to the back-cover slice of the greeting —
+    a naive ``in lowered`` check would also match the cover bullet
+    (which has its own ``(a)/(b)/(c)`` structure, ``AI``, and
+    ``story's``), so dropping the back-cover addition entirely would
+    still pass. The slice forces the test to actually regress when
+    the back-cover feature regresses."""
     lowered = _AGENT_GREETING_HINT.lower()
 
-    assert "back cover" in lowered or "back-cover" in lowered
-    # Three-options pattern matching the cover step.
-    assert "(a)" in lowered and "(b)" in lowered and "(c)" in lowered
-    # (b) must name the AI-generation path explicitly and ground it
-    # in the story's own page text (not generic theme clichés).
-    assert "ai" in lowered or "generate" in lowered
-    assert "page text" in lowered or "story's" in lowered or "story content" in lowered
+    # Grab the back-cover-specific slice. The greeting's back-cover
+    # bullet begins with "- back-cover blurb" and ends at the
+    # blank-line terminator before the next section ("ask each of
+    # these as its own one-line question").
+    assert "back-cover blurb" in lowered, "back-cover bullet missing entirely"
+    bc = lowered.split("back-cover blurb", 1)[1].split("ask each of these", 1)[0]
+
+    # Three-options pattern matching the cover step, but specifically
+    # inside the back-cover bullet.
+    assert "(a)" in bc and "(b)" in bc and "(c)" in bc, (
+        f"back-cover bullet missing the three-option pattern: {bc!r}"
+    )
+    # (b) must name the AI-generation path explicitly, and the draft
+    # must be grounded in the story's own page content (not generic
+    # theme clichés). Both signals must appear inside the slice.
+    assert "ai" in bc or "generate" in bc, (
+        f"back-cover bullet missing the AI-generation option: {bc!r}"
+    )
+    assert "page text" in bc or "story's" in bc or "story content" in bc, (
+        f"back-cover bullet missing the story-grounding signal: {bc!r}"
+    )
 
 
 def test_greeting_clarifies_preserve_child_voice_scope_for_back_cover():
