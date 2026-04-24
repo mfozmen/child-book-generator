@@ -1174,17 +1174,17 @@ def _cmd_load(repl: Repl, args: str) -> None:
         f"[green]Loaded {len(draft.pages)} pages[/green] from {pdf_path.name} "
         f"({with_images} with an embedded illustration)."
     )
-    # OCR image-only pages deterministically before the agent's first
-    # turn — the agent must see a draft that's already been transcribed.
-    repl._run_ingestion()
-    # Kick the agent off so the user doesn't stare at silence after the
-    # load. Matches the CLI-arg bootstrap path. Offline (NullProvider)
-    # prints a heads-up and falls back to slash commands — the
-    # metadata prompts can't run because their cover and back-cover
-    # menus include AI branches that require an active provider.
+    # Offline (NullProvider) — short-circuit before ingestion (which
+    # would no-op anyway) and before the metadata prompts. Print a
+    # heads-up so the user knows the prompts won't fire, and points
+    # at the slash-command escape hatches. Symmetric with
+    # ``_greet_if_draft_loaded``'s NullProvider branch.
     if isinstance(repl._llm, NullProvider):
         _print_offline_metadata_skip_notice(repl._console)
         return None
+    # OCR image-only pages deterministically before the agent's first
+    # turn — the agent must see a draft that's already been transcribed.
+    repl._run_ingestion()
     choices = collect_metadata(repl._draft, repl._read, repl._console)
     greeting = _build_agent_greeting(
         cover_choice=choices.cover,

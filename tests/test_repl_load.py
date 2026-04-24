@@ -278,9 +278,12 @@ def test_offline_load_explains_why_metadata_prompts_skipped(tmp_path):
     assert "/title" in out or "/model" in out
 
 
-def test_load_is_quiet_on_offline_provider(tmp_path):
-    """Offline (NullProvider) — /load should NOT try to talk to the
-    agent. Just load and stay silent."""
+def test_load_does_not_surface_agent_errors_on_offline_provider(tmp_path):
+    """Offline (NullProvider) — /load must NOT try to talk to the
+    agent (no ``Agent error: ...`` line on stdout). The dim
+    "Offline mode — skipping the metadata prompts ..." notice IS
+    expected and is pinned by the sibling test
+    ``test_offline_load_explains_why_metadata_prompts_skipped``."""
     pdf = _write_pdf(tmp_path, [{"text": "hi"}])
 
     repl, buf = _make(tmp_path, [f"/load {pdf}", "/exit"])

@@ -132,8 +132,9 @@ def collect_cover_choice(
 
     The ``"page-drawing"`` branch auto-picks the first page with an
     attached drawing that isn't hidden. If no such page exists
-    (e.g. a 100%-text Samsung Notes export) it silently falls back
-    to poster — the menu stays simple and the user can change the
+    (e.g. a 100%-text Samsung Notes export) it falls back to poster
+    and prints a yellow warning so the user isn't surprised by the
+    rendered PDF — the menu stays simple and they can change the
     cover via slash commands post-render if they want something
     different.
     """
