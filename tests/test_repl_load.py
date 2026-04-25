@@ -202,15 +202,24 @@ def test_load_kicks_the_agent_off_when_a_real_provider_is_active(tmp_path):
     assert "I see 1 page" in buf.getvalue()
 
 
-def test_load_prints_deterministic_metadata_prompts_before_agent_turn(tmp_path):
+def test_load_prints_deterministic_metadata_prompts_before_agent_turn(
+    tmp_path, monkeypatch
+):
     """User-visible behaviour regression: after ``/load`` with a real
     provider, the REPL must print the deterministic metadata prompts
-    (Title / Author / series / Cover / Back-cover) to the console
+    (title / author / series / cover / back-cover) to the console
     BEFORE the agent's first turn runs. This pins the core Sub-
     project 2 user experience — asking these via plain Python is
     what the refactor exists to do. If the wiring regresses (e.g.
     someone reverts ``collect_metadata`` in ``_cmd_load``), this
-    test fires."""
+    test fires.
+
+    Pins ``LITTLEPRESS_LANG=en`` so the assertion strings stay
+    deterministic regardless of the dev machine's locale (the
+    maintainer's Windows is Turkish; without the override, the
+    English-substring asserts below would silently miss when run on
+    their machine). Localisation itself has its own coverage in
+    ``tests/test_metadata_prompts.py``."""
     import io
 
     from rich.console import Console
@@ -218,6 +227,7 @@ def test_load_prints_deterministic_metadata_prompts_before_agent_turn(tmp_path):
     from src.agent import AgentResponse
     from src.providers.llm import find
 
+    monkeypatch.setenv("LITTLEPRESS_LANG", "en")
     pdf = _write_pdf(tmp_path, [{"text": "hi"}])
 
     class _StubLLM:
@@ -240,14 +250,20 @@ def test_load_prints_deterministic_metadata_prompts_before_agent_turn(tmp_path):
     )
     repl.run()
 
-    out = buf.getvalue()
-    # All five prompt labels appeared (case-sensitive on the first
-    # word since Rich bolds them but doesn't touch the text).
-    assert "Title?" in out
-    assert "Author?" in out
-    assert "series" in out.lower()
-    assert "Cover?" in out
-    assert "Back-cover" in out
+    out = buf.getvalue().lower()
+    # PR #76 review finding #4: pin the actual localised prompt
+    # phrasings, not bare topic words. Single-word matches like
+    # ``"title" in out`` could pass via incidental REPL output (the
+    # agent's reply, the draft summary, etc.). The exact phrasings
+    # below are the ``en`` translations from
+    # ``src/metadata_i18n.py``; if those wordings change, this
+    # test fails loudly and the next maintainer updates either the
+    # translation or the assertion deliberately.
+    assert "what's the title of the book" in out
+    assert "who's the author" in out
+    assert "is this book part of a series" in out
+    assert "how would you like the cover" in out
+    assert "back-cover blurb" in out
     # The deterministic writes happened.
     assert repl.draft is not None
     assert repl.draft.title == "The Brave Owl"
