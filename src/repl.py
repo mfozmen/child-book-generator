@@ -238,9 +238,17 @@ _DETERMINISTIC_COVER_STATE = {
 }
 
 
+_KNOWN_COVER_CHOICES = frozenset(
+    {_AI_COVER_TAG, *_DETERMINISTIC_COVER_STATE.keys()}
+)
+_KNOWN_BACK_COVER_CHOICES = frozenset(
+    {_AI_BACK_COVER_TAG, "none", "self-written"}
+)
+
+
 def _build_agent_greeting(
-    cover_choice: str = "page-drawing",
-    back_cover_choice: str = "none",
+    cover_choice: str | None = None,
+    back_cover_choice: str | None = None,
 ) -> str:
     """Build the agent's first-turn greeting from the REPL's metadata
     choices.
@@ -250,7 +258,7 @@ def _build_agent_greeting(
     misread the draft state and "helpfully" call ``set_cover`` —
     that's what triggered the cover-override bug reported on the
     2026-04-26 live render (user picked poster, got a page-drawing
-    cover because the agent saw ``cover_image=None`` and concluded
+    cover because the agent saw ``cover_image=None`` and inferred
     the cover wasn't configured yet).
 
     The AI branches (``cover == "ai"``, ``back_cover == "ai-draft"``)
@@ -264,7 +272,32 @@ def _build_agent_greeting(
     on ``back_cover_text`` is the only path the agent has, and the
     same "metadata is already set" framing covers it), so no
     per-branch state block is injected for the back cover.
+
+    Default ``None`` for both args produces a NEUTRAL greeting with
+    no cover-state block and no AI block — the shape used by the
+    backwards-compat ``_AGENT_GREETING_HINT`` constant for tests
+    that don't care about per-branch behaviour. Real sessions
+    always pass explicit values from ``MetadataChoices``.
+
+    Unknown values raise ``ValueError`` rather than falling through
+    silently — the silent-fallthrough was the exact failure mode
+    the deterministic cover-state fix is meant to prevent (a future
+    cover option without a registered ``_DETERMINISTIC_COVER_STATE``
+    entry would otherwise revert to the no-block bug shape).
     """
+    if cover_choice is not None and cover_choice not in _KNOWN_COVER_CHOICES:
+        raise ValueError(
+            f"Unknown cover_choice {cover_choice!r}. Valid: "
+            f"{sorted(_KNOWN_COVER_CHOICES)} or None for the neutral "
+            f"default. A new cover option must register a "
+            f"_DETERMINISTIC_COVER_STATE entry (or the AI branch tag) "
+            f"before reaching the greeting builder."
+        )
+    if back_cover_choice is not None and back_cover_choice not in _KNOWN_BACK_COVER_CHOICES:
+        raise ValueError(
+            f"Unknown back_cover_choice {back_cover_choice!r}. Valid: "
+            f"{sorted(_KNOWN_BACK_COVER_CHOICES)} or None."
+        )
     parts = [_GREETING_OPENING]
     if cover_choice == _AI_COVER_TAG:
         parts.append(_GREETING_AI_COVER_BRANCH)
