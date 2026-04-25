@@ -377,18 +377,23 @@ class Repl:
     def _read_loop(self) -> int:
         """Drive the interactive read loop until the user exits.
         Returns the exit code bubbled up from ``_dispatch`` (or 0 on
-        EOF — Ctrl-D)."""
+        EOF — Ctrl-D — or Ctrl-C)."""
         while True:
             try:
                 raw = self._read()
             except EOFError:
                 return 0
             except KeyboardInterrupt:
-                # Ctrl-C clears the current line and re-prompts — same
-                # feel as Claude Code / most shells. Exit requires
-                # Ctrl-D (EOF) or /exit.
+                # Ctrl-C exits the app cleanly. Earlier behaviour
+                # (clear the line + re-prompt) modelled Claude Code /
+                # most shells, but the maintainer hit it during the
+                # 2026-04-25 review and reported it as trapping
+                # them — the standard "Ctrl-C exits" mental model
+                # wins for a task-oriented CLI. A leading newline so
+                # the terminal's echoed ``^C`` doesn't share a line
+                # with the goodbye message above.
                 self._console.print()
-                continue
+                return 0
             line = raw.strip()
             if not line:
                 continue
