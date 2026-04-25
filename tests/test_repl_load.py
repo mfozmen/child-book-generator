@@ -453,18 +453,24 @@ def test_load_pdf_auto_ingests_image_only_pages(tmp_path):
     repl.run()
 
     assert repl.draft is not None, "draft should be loaded"
-    assert llm.chat_calls == 2, (
-        f"expected 2 chat calls (one per image-only page), got {llm.chat_calls}"
+    # 2 OCR calls (one per image-only page) + 1 colophon classification
+    # call = 3 chat() invocations during ingestion. The colophon stub
+    # reply is the OCR's ``<TEXT>\nPage N transcribed`` (this stub
+    # only knows one canned shape), which the colophon parser doesn't
+    # match — so no pages get hidden, but the call still happens.
+    assert llm.chat_calls == 3, (
+        f"expected 3 chat calls (2 OCR pages + 1 colophon scan), "
+        f"got {llm.chat_calls}"
     )
     # The agent may greet the user after ingestion, but it must not
     # start its tool-use loop BEFORE ingestion completes.  If
     # chat_calls_at_first_turn is None the agent never turned (also
-    # fine); if it is set it must equal 2 (all pages already OCR'd).
+    # fine); if it is set it must equal 3 (all chat calls done).
     if llm.chat_calls_at_first_turn is not None:
-        assert llm.chat_calls_at_first_turn == 2, (
+        assert llm.chat_calls_at_first_turn == 3, (
             "agent turn fired before ingestion completed: "
             f"chat_calls at first turn = {llm.chat_calls_at_first_turn}, "
-            "expected 2"
+            "expected 3"
         )
     # Both pages should have text populated by the ingestion pass.
     for i, page in enumerate(repl.draft.pages):
