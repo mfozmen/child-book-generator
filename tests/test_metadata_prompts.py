@@ -11,9 +11,23 @@ import io
 from collections.abc import Iterator
 from pathlib import Path
 
+import pytest
 from rich.console import Console
 
 from src.draft import Draft
+
+
+# Pin English for the existing test suite — these tests were written
+# before the i18n module landed and assert against English phrasing /
+# English-only y/n token acceptance. The locale-detection path runs
+# in production; tests need a fixed default so they don't depend on
+# the dev machine's locale (the maintainer's Windows is Turkish, so
+# without the fixture each test would silently pick ``tr`` and a
+# subset would fail). Tests that exercise Turkish behaviour override
+# via their own ``monkeypatch.setenv("LITTLEPRESS_LANG", "tr")``.
+@pytest.fixture(autouse=True)
+def _force_english(monkeypatch):
+    monkeypatch.setenv("LITTLEPRESS_LANG", "en")
 
 
 def _console() -> Console:
@@ -417,6 +431,134 @@ def test_collect_back_cover_reprompts_on_unclear_answer(tmp_path):
     result = collect_back_cover(draft, _scripted(["x", "a"]), _console())
 
     assert result == "none"
+
+
+# ---------------------------------------------------------------------------
+# Turkish locale — paired tests covering the same contracts in tr.
+# ---------------------------------------------------------------------------
+# These tests prove the warmth fix actually localises: prompt strings
+# come out in Turkish, the y/n tokens accept ``evet`` / ``hayır`` /
+# ``e`` / ``h`` natively, and the cover / back-cover menus produce
+# Turkish menu text. The English-only y/n rejection test above stays
+# in place as the en-mode regression; this is its tr counterpart.
+
+
+def test_collect_title_prompts_in_turkish_when_lang_is_tr(tmp_path):
+    """The Turkish prompt for the title comes out as
+    ``Kitabın adı ne?`` — a full sentence, not a single English
+    label. The user's typed string is still written verbatim."""
+    from src.metadata_prompts import collect_title
+
+    draft = _empty_draft(tmp_path)
+    buf = io.StringIO()
+    console = Console(
+        file=buf, force_terminal=False, width=100, no_color=True
+    )
+    collect_title(
+        draft, _scripted(["Yavru Dinozor"]), console, lang="tr"
+    )
+
+    assert draft.title == "Yavru Dinozor"
+    out = buf.getvalue()
+    # Substring rather than full match — Rich may add formatting
+    # markers around the bolded text.
+    assert "Kitabın" in out and "adı" in out
+
+
+def test_collect_series_accepts_evet_in_turkish_mode(tmp_path):
+    """In Turkish mode the y/n tokens widen to include ``evet`` /
+    ``e`` (yes) and ``hayır`` / ``h`` (no), matching what a
+    Turkish-typing user would naturally answer. CLAUDE.md
+    compliance is preserved because these tokens live behind the
+    ``lang == "tr"`` gate in a structured i18n module — not as
+    scattered Turkish leaks in English flows."""
+    from src.metadata_prompts import collect_series
+
+    draft = _empty_draft(tmp_path)
+    draft.title = "A"
+    collect_series(
+        draft, _scripted(["evet", "1"]), _console(), lang="tr"
+    )
+    assert draft.title == "A - 1"
+
+    # And the negative side.
+    draft2 = _empty_draft(tmp_path)
+    draft2.title = "B"
+    collect_series(draft2, _scripted(["hayır"]), _console(), lang="tr")
+    assert draft2.title == "B"
+
+
+def test_collect_cover_choice_menu_renders_in_turkish(tmp_path):
+    """The cover menu renders Turkish option text — full sentences,
+    not bare ``(a)/(b)/(c)`` letters."""
+    from src.metadata_prompts import collect_cover_choice
+
+    draft = _draft_with_pages(tmp_path, [("page-01.png", False)])
+    buf = io.StringIO()
+    console = Console(
+        file=buf, force_terminal=False, width=100, no_color=True
+    )
+    collect_cover_choice(draft, _scripted(["c"]), console, lang="tr")
+
+    out = buf.getvalue()
+    assert "Kapak" in out
+    # A descriptive Turkish snippet from the menu must be present.
+    assert "afiş" in out or "yapay zeka" in out
+
+
+def test_collect_back_cover_self_written_prompts_turkish(tmp_path):
+    """Back-cover self-written branch in Turkish — both the menu and
+    the inner ``write the blurb`` prompt must localise."""
+    from src.metadata_prompts import collect_back_cover
+
+    draft = _empty_draft(tmp_path)
+    buf = io.StringIO()
+    console = Console(
+        file=buf, force_terminal=False, width=100, no_color=True
+    )
+    result = collect_back_cover(
+        draft,
+        _scripted(["b", "Bir dinozorun cesaret hikayesi."]),
+        console,
+        lang="tr",
+    )
+
+    assert result == "self-written"
+    assert draft.back_cover_text == "Bir dinozorun cesaret hikayesi."
+    out = buf.getvalue()
+    assert "Arka kapak" in out
+
+
+def test_collect_metadata_orchestrator_uses_one_language_throughout(tmp_path):
+    """The orchestrator resolves the language ONCE and passes it
+    down to every helper — the user must never see English and
+    Turkish prompts mixed in a single session."""
+    from src.metadata_prompts import collect_metadata
+
+    draft = _draft_with_pages(tmp_path, [("page-01.png", False)])
+    buf = io.StringIO()
+    console = Console(
+        file=buf, force_terminal=False, width=100, no_color=True
+    )
+
+    collect_metadata(
+        draft,
+        _scripted(["Yavru Dinozor", "Ece", "n", "c", "a"]),
+        console,
+        lang="tr",
+    )
+
+    out = buf.getvalue()
+    # Every Turkish prompt label appears.
+    assert "Kitabın" in out
+    assert "Yazar" in out
+    assert "seri" in out.lower()  # "serinin" / "serisi"
+    assert "Kapak" in out
+    assert "kapak yazısı" in out.lower() or "Arka kapak" in out
+    # And no English label leaked through (sanity — uses unique
+    # English tokens that don't accidentally match Turkish).
+    assert "What's the title" not in out
+    assert "Who's the author" not in out
 
 
 # ---------------------------------------------------------------------------

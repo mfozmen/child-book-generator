@@ -29,6 +29,12 @@ Design notes:
 
 - Series membership lives INSIDE the title (e.g. ``My Book - 1``) so
   the cover renderer picks it up naturally — no separate data field.
+
+- Prompts localise via ``src/metadata_i18n.py``. Each ``collect_*``
+  takes an optional ``lang`` arg; ``None`` resolves to the detected
+  language at call time. ``collect_metadata`` resolves once and
+  passes the same language down so the user doesn't see English and
+  Turkish prompts mixed in one session.
 """
 from __future__ import annotations
 
@@ -38,6 +44,7 @@ from dataclasses import dataclass
 from rich.console import Console
 
 from src.draft import Draft
+from src.metadata_i18n import detect_lang, t
 
 ReadLine = Callable[[], str]
 
@@ -57,8 +64,23 @@ class MetadataChoices:
     back_cover: str
 
 
-_YES_TOKENS = frozenset({"y", "yes"})
-_NO_TOKENS = frozenset({"n", "no"})
+# Per-language y/n token sets. English-only mode keeps the strict
+# English shape (PR #69 review #1: no Turkish leaks in en flows);
+# Turkish mode adds the native ``evet`` / ``hayır`` shortcuts on
+# top of the English pair so a Turkish-typing user gets natural
+# acceptance without having to reach for ``y``/``n``.
+_YES_TOKENS: dict[str, frozenset[str]] = {
+    "en": frozenset({"y", "yes"}),
+    "tr": frozenset({"y", "yes", "e", "evet"}),
+}
+_NO_TOKENS: dict[str, frozenset[str]] = {
+    "en": frozenset({"n", "no"}),
+    "tr": frozenset({"n", "no", "h", "hayır", "hayir"}),
+}
+
+
+def _resolve_lang(lang: str | None) -> str:
+    return lang if lang is not None else detect_lang()
 
 
 def _prompt_nonempty(prompt: str, read_line: ReadLine, console: Console) -> str:
@@ -71,37 +93,55 @@ def _prompt_nonempty(prompt: str, read_line: ReadLine, console: Console) -> str:
             return value
 
 
-def collect_title(draft: Draft, read_line: ReadLine, console: Console) -> None:
-    draft.title = _prompt_nonempty("[bold]Title?[/bold]", read_line, console)
+def collect_title(
+    draft: Draft,
+    read_line: ReadLine,
+    console: Console,
+    lang: str | None = None,
+) -> None:
+    lang = _resolve_lang(lang)
+    draft.title = _prompt_nonempty(t("title.prompt", lang), read_line, console)
 
 
-def collect_author(draft: Draft, read_line: ReadLine, console: Console) -> None:
-    draft.author = _prompt_nonempty("[bold]Author?[/bold]", read_line, console)
+def collect_author(
+    draft: Draft,
+    read_line: ReadLine,
+    console: Console,
+    lang: str | None = None,
+) -> None:
+    lang = _resolve_lang(lang)
+    draft.author = _prompt_nonempty(
+        t("author.prompt", lang), read_line, console
+    )
 
 
-def collect_series(draft: Draft, read_line: ReadLine, console: Console) -> None:
+def collect_series(
+    draft: Draft,
+    read_line: ReadLine,
+    console: Console,
+    lang: str | None = None,
+) -> None:
     """Ask whether the book is part of a series; on a yes, append the
     volume number to ``draft.title`` as ``<title> - <n>``. No-op on
     a no."""
+    lang = _resolve_lang(lang)
+    yes_tokens = _YES_TOKENS.get(lang, _YES_TOKENS["en"])
+    no_tokens = _NO_TOKENS.get(lang, _NO_TOKENS["en"])
     while True:
-        console.print(
-            "[bold]Is this book part of a series?[/bold] (y/n)"
-        )
+        console.print(t("series.prompt", lang))
         answer = read_line().strip().lower()
-        if answer in _YES_TOKENS:
-            volume = _prompt_volume(read_line, console)
+        if answer in yes_tokens:
+            volume = _prompt_volume(read_line, console, lang)
             draft.title = f"{draft.title} - {volume}"
             return
-        if answer in _NO_TOKENS:
+        if answer in no_tokens:
             return
         # Gibberish — re-prompt.
 
 
-def _prompt_volume(read_line: ReadLine, console: Console) -> int:
+def _prompt_volume(read_line: ReadLine, console: Console, lang: str) -> int:
     while True:
-        console.print(
-            "[bold]Which volume is this? (positive integer)[/bold]"
-        )
+        console.print(t("series.volume_prompt", lang))
         raw = read_line().strip()
         try:
             n = int(raw)
@@ -111,16 +151,11 @@ def _prompt_volume(read_line: ReadLine, console: Console) -> int:
             return n
 
 
-_COVER_MENU = (
-    "[bold]Cover?[/bold]\n"
-    "  (a) use a page drawing from the story\n"
-    "  (b) generate with AI\n"
-    "  (c) poster (typography only, no image)"
-)
-
-
 def collect_cover_choice(
-    draft: Draft, read_line: ReadLine, console: Console
+    draft: Draft,
+    read_line: ReadLine,
+    console: Console,
+    lang: str | None = None,
 ) -> str:
     """3-way menu: ``"page-drawing"``, ``"ai"``, or ``"poster"``.
 
@@ -133,16 +168,17 @@ def collect_cover_choice(
     The ``"page-drawing"`` branch auto-picks the first page with an
     attached drawing that isn't hidden. If no such page exists
     (e.g. a 100%-text Samsung Notes export) it falls back to poster
-    and prints a yellow warning so the user isn't surprised by the
-    rendered PDF — the menu stays simple and they can change the
-    cover via slash commands post-render if they want something
+    and prints a localised warning so the user isn't surprised by
+    the rendered PDF — the menu stays simple and they can change
+    the cover via slash commands post-render if they want something
     different.
     """
+    lang = _resolve_lang(lang)
     while True:
-        console.print(_COVER_MENU)
+        console.print(t("cover.menu", lang))
         answer = read_line().strip().lower()
         if answer == "a":
-            return _apply_page_drawing_cover(draft, console)
+            return _apply_page_drawing_cover(draft, console, lang)
         if answer == "b":
             return "ai"
         if answer == "c":
@@ -151,7 +187,9 @@ def collect_cover_choice(
             return "poster"
 
 
-def _apply_page_drawing_cover(draft: Draft, console: Console) -> str:
+def _apply_page_drawing_cover(
+    draft: Draft, console: Console, lang: str
+) -> str:
     first_drawing = next(
         (p.image for p in draft.pages if not p.hidden and p.image is not None),
         None,
@@ -159,11 +197,8 @@ def _apply_page_drawing_cover(draft: Draft, console: Console) -> str:
     if first_drawing is None:
         # Surface the fallback loudly — the user asked for a drawing
         # cover and would otherwise discover the poster result only
-        # when the rendered PDF opens. PR #69 review finding #3.
-        console.print(
-            "[yellow]No page drawing available — falling back to "
-            "poster.[/yellow]"
-        )
+        # when the rendered PDF opens.
+        console.print(t("cover.no_drawing_fallback", lang))
         draft.cover_image = None
         draft.cover_style = "poster"
         return "poster"
@@ -172,16 +207,11 @@ def _apply_page_drawing_cover(draft: Draft, console: Console) -> str:
     return "page-drawing"
 
 
-_BACK_COVER_MENU = (
-    "[bold]Back-cover blurb?[/bold]\n"
-    "  (a) none\n"
-    "  (b) I'll write it\n"
-    "  (c) draft with AI"
-)
-
-
 def collect_back_cover(
-    draft: Draft, read_line: ReadLine, console: Console
+    draft: Draft,
+    read_line: ReadLine,
+    console: Console,
+    lang: str | None = None,
 ) -> str:
     """3-way menu: ``"none"``, ``"self-written"``, or ``"ai-draft"``.
 
@@ -191,15 +221,16 @@ def collect_back_cover(
     leaves the draft untouched; the caller hands off to the agent's
     first turn so the LLM can draft a one-line blurb grounded on the
     story's actual page text."""
+    lang = _resolve_lang(lang)
     while True:
-        console.print(_BACK_COVER_MENU)
+        console.print(t("back_cover.menu", lang))
         answer = read_line().strip().lower()
         if answer == "a":
             draft.back_cover_text = ""
             return "none"
         if answer == "b":
             draft.back_cover_text = _prompt_nonempty(
-                "[bold]Type the back-cover blurb (one or two sentences):[/bold]",
+                t("back_cover.self_written_prompt", lang),
                 read_line,
                 console,
             )
@@ -209,7 +240,10 @@ def collect_back_cover(
 
 
 def collect_metadata(
-    draft: Draft, read_line: ReadLine, console: Console
+    draft: Draft,
+    read_line: ReadLine,
+    console: Console,
+    lang: str | None = None,
 ) -> MetadataChoices:
     """Run the five deterministic prompts in order: title → author →
     series → cover → back-cover.
@@ -221,10 +255,15 @@ def collect_metadata(
     (``generate_cover_illustration`` for cover AI,
     ``set_metadata(field="back_cover_text", value=…)`` for back-
     cover AI after the user accepts the draft).
+
+    Resolves the language once at the orchestrator level and passes
+    the same value down to each prompt — the user shouldn't see
+    English and Turkish strings mixed in one session.
     """
-    collect_title(draft, read_line, console)
-    collect_author(draft, read_line, console)
-    collect_series(draft, read_line, console)
-    cover = collect_cover_choice(draft, read_line, console)
-    back_cover = collect_back_cover(draft, read_line, console)
+    lang = _resolve_lang(lang)
+    collect_title(draft, read_line, console, lang=lang)
+    collect_author(draft, read_line, console, lang=lang)
+    collect_series(draft, read_line, console, lang=lang)
+    cover = collect_cover_choice(draft, read_line, console, lang=lang)
+    back_cover = collect_back_cover(draft, read_line, console, lang=lang)
     return MetadataChoices(cover=cover, back_cover=back_cover)
