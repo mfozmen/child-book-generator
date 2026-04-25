@@ -52,6 +52,7 @@ from src.providers.validator import (
     ProviderUnavailable,
     TransientValidationError,
 )
+from src.colophon import detect_colophon_pages
 from src.ingestion import ingest_image_only_pages
 from src.metadata_prompts import collect_metadata
 
@@ -404,15 +405,24 @@ class Repl:
 
     def _run_ingestion(self) -> None:
         """OCR every image-only page in the current draft before the
-        agent's first turn.  No-op when there is no draft, when the
-        provider is offline (NullProvider), or when all pages already
-        have text (idempotent)."""
+        agent's first turn, then run colophon detection so book-
+        metadata pages (``YAZAR:POYRAZ`` / ``WRITTEN BY ...``) get
+        auto-hidden instead of rendering as interior story pages.
+        No-op when there is no draft, when the provider is offline
+        (``NullProvider``), or when all pages already have text
+        (idempotent)."""
         if self._draft is None or isinstance(self._llm, NullProvider):
             return
         try:
             ingest_image_only_pages(self._draft, self._llm, self._console)
         except Exception as e:  # noqa: BLE001 — keep the load path alive
             self._console.print(f"[dim]Auto-ingestion failed: {e}[/dim]")
+        try:
+            detect_colophon_pages(self._draft, self._llm, self._console)
+        except Exception as e:  # noqa: BLE001 — keep the load path alive
+            self._console.print(
+                f"[dim]Colophon detection failed: {e}[/dim]"
+            )
 
     def _persist_draft(self) -> None:
         """Write the current draft to .book-gen/draft.json so the next
