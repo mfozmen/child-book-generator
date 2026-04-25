@@ -465,6 +465,34 @@ def test_collect_title_prompts_in_turkish_when_lang_is_tr(tmp_path):
     assert "Kitabın" in out and "adı" in out
 
 
+def test_resolve_lang_normalises_unsupported_to_detected_default(monkeypatch):
+    """PR #76 round-2 review #1: ``_resolve_lang`` was made
+    symmetric with ``detect_lang()`` — an unsupported ``lang``
+    argument (e.g. ``"fr"``) falls through to the detected default
+    rather than being returned as-is. Without the fall-through, a
+    caller passing an unsupported code would force every ``t()``
+    lookup down the English fallback path while a quietly
+    inconsistent locale tag stays visible elsewhere.
+
+    Patches ``detect_lang`` to return ``"en"`` deterministically so
+    the test isn't sensitive to the dev machine's system locale
+    (the maintainer's Windows is Turkish; without the patch the
+    fall-through would land on ``"tr"`` here)."""
+    from src import metadata_prompts
+
+    monkeypatch.setattr(metadata_prompts, "detect_lang", lambda: "en")
+
+    # Unsupported codes fall through to the detected default.
+    assert metadata_prompts._resolve_lang("fr") == "en"
+    assert metadata_prompts._resolve_lang("klingon") == "en"
+    assert metadata_prompts._resolve_lang("") == "en"
+    # Supported codes pass through untouched.
+    assert metadata_prompts._resolve_lang("en") == "en"
+    assert metadata_prompts._resolve_lang("tr") == "tr"
+    # ``None`` resolves via ``detect_lang`` directly (not fall-through).
+    assert metadata_prompts._resolve_lang(None) == "en"
+
+
 def test_collect_series_turkish_prompt_advertises_e_h_not_y_n(tmp_path):
     """PR #76 review #2: the Turkish series prompt used to print
     ``(y/n)`` while accepting ``evet`` / ``e`` / ``hayır`` / ``h``
