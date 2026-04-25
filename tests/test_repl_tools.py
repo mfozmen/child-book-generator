@@ -130,6 +130,36 @@ def test_transcribe_page_omitted_on_null_provider(tmp_path):
     assert "transcribe_page" not in _tool_names(repl)
 
 
+def test_confirm_accepts_english_yes_tokens_only(tmp_path):
+    """``Repl._confirm`` accepts ``y`` / ``yes`` (case-insensitive)
+    and rejects everything else, including the Turkish ``evet`` /
+    ``e`` shortcuts that used to be in the accepted set.
+
+    The prompt itself prints in English (``(y/n)``) so accepting
+    Turkish tokens here would be a stray inline-Turkish-leak —
+    exactly the shape CLAUDE.md's structured-i18n carve-out
+    forbids. When the cost-confirm prompt eventually localises to
+    match the metadata-prompt i18n, the per-language token set
+    will live in ``src/metadata_i18n.py``, NOT as scattered
+    literals here. This test pins both halves of that contract:
+    English yes accepted, Turkish-only tokens rejected."""
+    repl = _repl(tmp_path, provider_name="none", api_key=None)
+
+    accepted = ("y", "Y", "yes", "YES", "Yes")
+    rejected = ("evet", "Evet", "e", "E", "hayır", "n", "no", "", "huh")
+
+    for tok in accepted:
+        repl._read = lambda _t=tok: _t  # noqa: SLF001
+        assert repl._confirm("test?") is True, (
+            f"English yes-token {tok!r} should be accepted"
+        )
+    for tok in rejected:
+        repl._read = lambda _t=tok: _t  # noqa: SLF001
+        assert repl._confirm("test?") is False, (
+            f"non-English (or no) token {tok!r} should be rejected"
+        )
+
+
 def test_confirm_plumbing_only_wired_to_cost_tools():
     """Regression guard: after the review-based-gate refactor,
     ``Repl._confirm`` is only passed to the two AI illustration tools.

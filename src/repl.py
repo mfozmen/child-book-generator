@@ -506,13 +506,22 @@ class Repl:
         ``restore_page`` / ``hide_page`` if anything's wrong.
 
         Default: no on EOF or anything that isn't clearly a yes —
-        preserve-child-voice prefers silence over a speculative charge."""
+        preserve-child-voice prefers silence over a speculative charge.
+
+        English-only by design today: the prompt itself prints in
+        English (``(y/n)``), so the accepted tokens stay strictly
+        English to avoid the inline-Turkish-leak pattern CLAUDE.md
+        forbids. Localising the cost-confirm prompt to match the
+        metadata-prompt i18n is a tracked follow-up; when it lands
+        the per-language token set will live in
+        ``src/metadata_i18n.py`` alongside the metadata-prompt
+        tokens, not as scattered literals here."""
         self._console.print(f"[yellow]{prompt}[/yellow] (y/n)")
         try:
             answer = self._read().strip().lower()
         except (EOFError, KeyboardInterrupt):
             return False
-        return answer in {"y", "yes", "evet", "e"}
+        return answer in {"y", "yes"}
 
     def _persist(self) -> None:
         if self._session_root is None or self._provider is None:
