@@ -61,6 +61,52 @@ def test_default_greeting_does_not_ask_for_metadata_anymore():
 # ---------------------------------------------------------------------------
 
 
+def test_poster_cover_branch_tells_agent_not_to_call_set_cover():
+    """Reported on the 2026-04-26 live render: user picked option
+    (c) ``afiş`` (poster) at the cover prompt, the REPL set
+    ``cover_image=None, cover_style="poster"``, but the agent
+    misread the state and called ``set_cover`` with a page-drawing
+    fallback — overriding the user's deterministic choice. The
+    fix injects an explicit COVER STATE block that names the
+    user's pick and forbids ``set_cover`` calls during the metadata
+    phase. Pin both halves: poster branch surfaces the choice,
+    AND tells the agent not to call ``set_cover`` to fill the
+    ``cover_image=None`` slot."""
+    g = _build_agent_greeting(cover_choice="poster").lower()
+    assert "poster" in g
+    # Agent must understand cover_image=None is the COMPLETE poster
+    # configuration, not a half-set cover.
+    assert "complete poster" in g or "intentionally" in g
+    # Explicit forbid on set_cover during metadata phase.
+    assert "do not call" in g and "set_cover" in g
+
+
+def test_page_drawing_cover_branch_tells_agent_not_to_call_set_cover():
+    """Counterpart for the page-drawing branch — same risk shape.
+    User picked option (a), REPL set the cover to the first page
+    drawing; the agent shouldn't "helpfully" pick a different
+    drawing or call ``set_cover`` to confirm. The COVER STATE block
+    pins the choice."""
+    g = _build_agent_greeting(cover_choice="page-drawing").lower()
+    assert "page drawing" in g or "first available page drawing" in g
+    assert "do not call" in g and "set_cover" in g
+
+
+def test_ai_cover_branch_does_not_inject_deterministic_cover_state():
+    """The AI cover branch legitimately calls ``set_cover`` (via
+    ``generate_cover_illustration``), so the deterministic-cover
+    COVER STATE block must NOT fire on this branch — the AI block
+    has its own narrower instructions. Pin that the
+    "do NOT call set_cover" framing only appears for poster /
+    page-drawing, not AI."""
+    g = _build_agent_greeting(cover_choice="ai").lower()
+    # AI cover block is present.
+    assert "generate_cover_illustration" in g
+    # Deterministic-cover-state framing absent — the AI flow is
+    # supposed to set the cover.
+    assert "intentionally" not in g.split("generate_cover_illustration")[0]
+
+
 def test_default_greeting_omits_ai_cover_branch():
     """When the user picks the non-AI cover options (page-drawing /
     poster), the greeting must NOT contain the AI cover instructions

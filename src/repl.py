@@ -214,21 +214,62 @@ _AI_COVER_TAG = "ai"
 _AI_BACK_COVER_TAG = "ai-draft"
 
 
+_DETERMINISTIC_COVER_STATE = {
+    "page-drawing": (
+        "COVER STATE: the user picked option (a) at the cover prompt — "
+        "use a page drawing from the story. ``draft.cover_image`` is "
+        "already set to the first available page drawing and "
+        "``draft.cover_style`` is ``full-bleed``. Do NOT call "
+        "``set_cover``; the user's choice is final. If they ask in "
+        "the post-render review turn for a different drawing, that "
+        "is when ``set_cover`` is appropriate.\n\n"
+    ),
+    "poster": (
+        "COVER STATE: the user picked option (c) at the cover prompt — "
+        "poster style (typography only, no image). ``draft.cover_image`` "
+        "is intentionally ``None`` and ``draft.cover_style`` is "
+        "``poster`` — this is the COMPLETE poster configuration, NOT "
+        "a half-set cover waiting for an image. Do NOT call "
+        "``set_cover`` to "
+        "fill in an image; the user's choice is final. If they ask "
+        "in the post-render review turn for a different cover, that "
+        "is when ``set_cover`` is appropriate.\n\n"
+    ),
+}
+
+
 def _build_agent_greeting(
     cover_choice: str = "page-drawing",
     back_cover_choice: str = "none",
 ) -> str:
     """Build the agent's first-turn greeting from the REPL's metadata
-    choices. Deterministic branches (``page-drawing`` / ``poster`` /
-    ``none`` / ``self-written``) mean the corresponding AI-branch
-    block is OMITTED from the greeting — the agent is told metadata
-    is set and goes straight to render + review. Only the AI
-    branches (``cover == "ai"``, ``back_cover == "ai-draft"``) inject
-    their block, so the agent only sees instructions for work it
-    actually has to do."""
+    choices.
+
+    Deterministic cover branches (``page-drawing`` / ``poster``)
+    inject an explicit COVER STATE block so the agent doesn't
+    misread the draft state and "helpfully" call ``set_cover`` —
+    that's what triggered the cover-override bug reported on the
+    2026-04-26 live render (user picked poster, got a page-drawing
+    cover because the agent saw ``cover_image=None`` and concluded
+    the cover wasn't configured yet).
+
+    The AI branches (``cover == "ai"``, ``back_cover == "ai-draft"``)
+    inject their judgment-instruction block instead — that path
+    legitimately calls ``set_cover`` (via
+    ``generate_cover_illustration``) so the COVER STATE warning
+    doesn't apply.
+
+    Deterministic back-cover branches (``none`` / ``self-written``)
+    don't have an analogous override risk today (``set_metadata``
+    on ``back_cover_text`` is the only path the agent has, and the
+    same "metadata is already set" framing covers it), so no
+    per-branch state block is injected for the back cover.
+    """
     parts = [_GREETING_OPENING]
     if cover_choice == _AI_COVER_TAG:
         parts.append(_GREETING_AI_COVER_BRANCH)
+    elif cover_choice in _DETERMINISTIC_COVER_STATE:
+        parts.append(_DETERMINISTIC_COVER_STATE[cover_choice])
     if back_cover_choice == _AI_BACK_COVER_TAG:
         parts.append(_GREETING_AI_BACK_COVER_BRANCH)
     parts.append(_GREETING_RENDER_AND_REVIEW)
