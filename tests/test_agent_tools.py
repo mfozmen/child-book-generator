@@ -2935,7 +2935,13 @@ def _two_page_draft(tmp_path, *, title="The Brave Owl", author="Yusuf"):
     )
 
 
-def test_render_book_writes_a5_by_default(tmp_path):
+def test_render_book_default_produces_a5_and_booklet(tmp_path):
+    """Reported on the 2026-04-27 live render: agent called
+    ``render_book()`` with no args and the user got only the A5
+    reading copy — no A4 booklet to print + fold + staple. Default
+    flipped to ``impose=true`` so the booklet (the actual print
+    artefact) ships with every render. Callers that genuinely want
+    A5-only pass ``impose=false`` (covered by the sibling test)."""
     draft = _two_page_draft(tmp_path)
     tool = render_book_tool(
         get_draft=lambda: draft,
@@ -2945,12 +2951,15 @@ def test_render_book_writes_a5_by_default(tmp_path):
     result = tool.handler({})
 
     output_dir = tmp_path / ".book-gen" / "output"
-    stable = output_dir / "the_brave_owl.pdf"
-    assert stable.is_file()
-    # No booklet without the --impose flag (stable or versioned).
-    assert list(output_dir.glob("*_A4_booklet.pdf")) == []
-    # The tool's result string tells the agent where the file landed.
-    assert str(stable) in result or stable.name in result
+    a5 = output_dir / "the_brave_owl.pdf"
+    booklet = output_dir / "the_brave_owl_A4_booklet.pdf"
+    assert a5.is_file()
+    assert booklet.is_file(), (
+        "default render must produce the A4 booklet — that's the "
+        "actual print artefact (PR #80 follow-up)"
+    )
+    assert str(a5) in result or a5.name in result
+    assert "booklet" in result.lower()
 
 
 def test_render_book_with_impose_writes_booklet_too(tmp_path):
@@ -3050,17 +3059,19 @@ def test_render_book_message_explains_the_role_of_each_output_file(tmp_path):
 def test_render_book_message_names_a5_role_without_booklet_when_impose_false(
     tmp_path,
 ):
-    """Without ``impose=True`` only the A5 pair is produced — the
-    booklet / print / fold / staple copy must NOT leak into the
-    message. Pins the role-naming on the A5-only path and the
-    negative booklet check together."""
+    """When the caller explicitly passes ``impose=False`` only the
+    A5 pair is produced — the booklet / print / fold / staple copy
+    must NOT leak into the message. Pins the role-naming on the
+    A5-only path and the negative booklet check together. (The
+    default is ``impose=True`` after the 2026-04-27 fix; this test
+    exercises the explicit-opt-out path.)"""
     draft = _two_page_draft(tmp_path)
     tool = render_book_tool(
         get_draft=lambda: draft,
         get_session_root=lambda: tmp_path,
     )
 
-    result = tool.handler({}).lower()
+    result = tool.handler({"impose": False}).lower()
 
     # A5 role still named.
     assert "to open and read" in result

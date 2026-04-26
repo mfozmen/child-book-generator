@@ -2024,7 +2024,16 @@ def render_book_tool(
                 "one and use set_metadata before calling render_book."
             )
 
-        impose = bool(input_.get("impose", False))
+        # Default to True: the A4 booklet is the actual print artefact
+        # the user folds and staples. Without it the user gets only a
+        # reading-copy A5 and no way to print + bind the book —
+        # reported on the 2026-04-27 live render where the agent
+        # called ``render_book()`` with no args and the user was
+        # missing the booklet in the output directory. Cheap to
+        # produce (2-up pypdf imposition) and the snapshot
+        # housekeeping handles the extra files. Callers that
+        # genuinely don't want the booklet pass ``impose=False``.
+        impose = bool(input_.get("impose", True))
         source_dir = Path(get_session_root()) / _BOOK_GEN_DIR
         output_dir = source_dir / "output"
         slug = slugify(draft.title)
@@ -2080,9 +2089,12 @@ def render_book_tool(
         name="render_book",
         description=(
             "Build the finished A5 picture-book PDF from the current draft. "
-            "Set impose=true to also produce a 2-up A4 booklet ready to "
-            "print double-sided, fold, and staple. Only call this once the "
-            "title (and ideally author + cover) are set."
+            "By default ALSO produces a 2-up A4 booklet ready to print "
+            "double-sided, fold, and staple — that's the actual artefact "
+            "the user binds; the A5 is the reading copy. Set "
+            "impose=false only when the caller explicitly wants the A5 "
+            "alone. Only call this once the title (and ideally author + "
+            "cover) are set."
         ),
         input_schema={
             "type": "object",
@@ -2090,7 +2102,8 @@ def render_book_tool(
                 "impose": {
                     "type": "boolean",
                     "description": (
-                        "Also produce the A4 booklet. Default false."
+                        "Also produce the A4 booklet. Default true — "
+                        "the booklet is the print artefact."
                     ),
                 }
             },
