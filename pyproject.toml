@@ -28,6 +28,11 @@ classifiers = [
 dependencies = [
   "reportlab>=4.0.0",
   "Pillow>=10.0.0",
+  # Used by ``src/drawing_extraction.py`` for row-density analysis
+  # when separating typed text from a single-raster page illustration
+  # (Samsung Notes / phone-scan input). Pillow doesn't transitively
+  # pull numpy, so it's an explicit dep.
+  "numpy>=1.24.0",
   "pypdf>=4.0.0",
   "rich>=13.0.0",
   # Drives the interactive prompt + slash-menu auto-completion. Swaps

@@ -504,7 +504,16 @@ def restore_page_tool(
         candidates = sorted(
             p
             for p in images_dir.glob(f"{stem}.*")
-            if p.is_file() and p.suffix.lower() in _PIL_IMAGE_EXTS
+            if p.is_file()
+            and p.suffix.lower() in _PIL_IMAGE_EXTS
+            # PR #80 review #1: ``glob`` matches both
+            # ``page-NN.png`` and our extracted-drawing companion
+            # ``page-NN.drawing.png`` (the ``.*`` glob spans
+            # multiple dots). Without this exact-stem guard, a
+            # restore that should re-attach the ORIGINAL full-
+            # page raster would pick up the cropped illustration
+            # instead — defeating the whole point of restore_page.
+            and p.stem == stem
         )
         # Prefer PNG if the same page has multiple extensions on disk
         # (deterministic — png is lossless, so keep it when present).
@@ -1053,24 +1062,33 @@ def apply_sentinel_result(page, reply: str, page_n: int, method: str) -> str:
         )
 
     if sentinel == _MIXED_SENTINEL:
-        # Safe-default flip after the Samsung Notes duplicate-text
-        # regression: vision often labels handwriting + margin doodles
-        # as <MIXED>, but rendering the image (with the handwritten
-        # text baked in) alongside the transcription prints the same
-        # content twice. Keep ``page.image`` attached so the user can
-        # opt back into the drawing via ``choose_layout(page, layout)``
-        # in the review turn, but force the layout to ``text-only`` so
-        # the renderer skips the image by default
-        # (``src/pages.py::draw_page`` respects explicit text-only
-        # layouts even when image is present).
+        # MIXED page = transcribed text + a separate illustration on
+        # the same page raster. Try to extract just the illustration
+        # so the rendered book gets a clean drawing alongside the
+        # transcribed text (image-top layout — text on top, drawing
+        # below, no duplicate text). When extraction succeeds the
+        # original full-page raster stays on disk so ``restore_page``
+        # in the review turn can swap back. Extraction failure falls
+        # back to text-only — drops the drawing rather than risk the
+        # duplicate-text bug.
         page.text = body
+        extracted = _try_extract_drawing(page.image)
+        if extracted is not None:
+            page.image = extracted
+            page.layout = "image-top"
+            return (
+                f"Page {page_n} transcribed ({len(body)} chars, "
+                f"drawing extracted to {extracted.name}; layout "
+                f"image-top — clean drawing under the transcription, "
+                f"no duplicate text). "
+                + _NO_DISPLAY_NO_APPROVAL_SUFFIX
+            )
         page.layout = "text-only"
         return (
             f"Page {page_n} transcribed ({len(body)} chars, "
-            f"drawing kept on disk but layout defaulted to "
-            f"text-only to avoid duplicate print; user can opt "
-            f"the drawing back in via choose_layout in the "
-            f"review turn). "
+            f"drawing extraction couldn't isolate a clean "
+            f"region — falling back to text-only to avoid the "
+            f"duplicate-text bug). "
             + _NO_DISPLAY_NO_APPROVAL_SUFFIX
         )
 
@@ -1086,6 +1104,25 @@ def apply_sentinel_result(page, reply: str, page_n: int, method: str) -> str:
         f"unchanged). "
         + _NO_DISPLAY_NO_APPROVAL_SUFFIX
     )
+
+
+def _try_extract_drawing(page_image: Path | None) -> Path | None:
+    """Run ``extract_drawing_region`` on ``page_image`` and return
+    the path to the cleaned drawing on success, ``None`` on failure
+    (no recognisable drawing region, or any exception). The cleaned
+    file lives next to the original at ``page-NN.drawing.png`` —
+    callers update ``page.image`` to this path; the original stays
+    untouched on disk so ``restore_page`` keeps working."""
+    from src.drawing_extraction import extract_drawing_region
+
+    if page_image is None:
+        return None
+    output = page_image.parent / f"{page_image.stem}.drawing.png"
+    try:
+        success = extract_drawing_region(page_image, output)
+    except Exception:  # noqa: BLE001 — extraction failure is non-fatal
+        return None
+    return output if success else None
 
 
 # Anthropic recommends images no larger than 1568px on the long edge
