@@ -376,6 +376,191 @@ def test_mask_text_regions_skips_inverted_boxes(tmp_path):
     assert output.is_file()
 
 
+def test_content_runs_groups_consecutive_true_indices():
+    """``_content_runs`` returns ``(start, end)`` tuples with
+    ``end`` exclusive (PIL crop convention) for each consecutive
+    block of ``True`` values. Empty input gives an empty list."""
+    from src.drawing_extraction import _content_runs
+
+    # Mixed bool array: True at 1-3, 5-5, 8-9.
+    has = [False, True, True, True, False, True, False, False, True, True]
+    assert _content_runs(has) == [(1, 4), (5, 6), (8, 10)]
+
+
+def test_content_runs_handles_trailing_run():
+    """A run that's still open when iteration ends must close at
+    ``len(has_content)``. Without the trailing-run branch a final
+    True streak would silently drop."""
+    from src.drawing_extraction import _content_runs
+
+    has = [False, False, True, True, True]
+    assert _content_runs(has) == [(2, 5)]
+
+
+def test_content_runs_empty_input():
+    from src.drawing_extraction import _content_runs
+
+    assert _content_runs([]) == []
+
+
+def test_content_runs_all_false():
+    from src.drawing_extraction import _content_runs
+
+    assert _content_runs([False] * 10) == []
+
+
+def test_extract_drawing_region_blank_image_returns_false(tmp_path):
+    """Blank (all-white) image has zero content rows → no run to
+    pick → ``extract_drawing_region`` returns ``False`` and writes
+    no output. The fallback in ``apply_sentinel_result`` then
+    keeps the page on the text-only safe default."""
+    from src.drawing_extraction import extract_drawing_region
+
+    blank = tmp_path / "blank.png"
+    Image.new("RGB", (400, 600), (255, 255, 255)).save(blank)
+    output = tmp_path / "extracted.png"
+
+    assert extract_drawing_region(blank, output) is False
+    assert not output.exists()
+
+
+def test_extract_drawing_region_no_run_tall_enough_returns_false(tmp_path):
+    """Pages whose only content is short text rows (no drawing-
+    sized block) must return ``False`` — there's nothing tall
+    enough to be a drawing. The 50-px minimum height in
+    ``extract_drawing_region`` rules out tiny crops that would
+    visibly degrade the rendered book."""
+    from src.drawing_extraction import extract_drawing_region
+
+    # 400x600 page with two thin black bars at y=100 and y=200,
+    # each 5px tall — text-row shape, no drawing.
+    img = Image.new("RGB", (400, 600), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([20, 100, 380, 105], fill=(0, 0, 0))
+    draw.rectangle([20, 200, 380, 205], fill=(0, 0, 0))
+    page = tmp_path / "thin.png"
+    img.save(page)
+    output = tmp_path / "extracted.png"
+
+    assert extract_drawing_region(page, output) is False
+    assert not output.exists()
+
+
+def test_extract_drawing_region_single_tall_block_cropped_correctly(tmp_path):
+    """Single tall content block (no surrounding text rows): the
+    function picks the tallest run (the only run) and crops to its
+    bounding box."""
+    from src.drawing_extraction import extract_drawing_region
+
+    # 400x800 page with one solid black rectangle at (50, 100) to
+    # (350, 700) — a clear drawing region, 600px tall.
+    img = Image.new("RGB", (400, 800), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([50, 100, 350, 700], fill=(0, 0, 0))
+    page = tmp_path / "drawing.png"
+    img.save(page)
+    output = tmp_path / "extracted.png"
+
+    assert extract_drawing_region(page, output) is True
+    assert output.exists()
+
+    # Cropped to drawing bbox — within a few pixels of the rectangle.
+    with Image.open(output) as crop:
+        w, h = crop.size
+        assert 290 <= w <= 310, f"crop width {w} not near 300"
+        assert 590 <= h <= 610, f"crop height {h} not near 600"
+
+
+def test_extract_drawing_region_multi_run_picks_tallest(tmp_path):
+    """A page with multiple content runs (text rows + drawing) must
+    crop to the TALLEST run. Pins the discriminator the algorithm
+    relies on."""
+    from src.drawing_extraction import extract_drawing_region
+
+    img = Image.new("RGB", (400, 1200), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    # Three short text rows in the top half (~10px each).
+    for y in (50, 100, 150):
+        draw.rectangle([30, y, 370, y + 10], fill=(0, 0, 0))
+    # Single tall drawing block in the bottom half (300px tall).
+    draw.rectangle([100, 600, 300, 900], fill=(0, 0, 0))
+    page = tmp_path / "page.png"
+    img.save(page)
+    output = tmp_path / "extracted.png"
+
+    assert extract_drawing_region(page, output) is True
+
+    with Image.open(output) as crop:
+        w, h = crop.size
+        # Crop matches the drawing block, NOT the text rows.
+        assert 190 <= w <= 210, f"crop width {w} should match drawing ~200"
+        assert 290 <= h <= 310, f"crop height {h} should match drawing ~300"
+
+
+def test_extract_drawing_region_min_contrast_guard_rejects_close_runs(tmp_path):
+    """PR #80 review #3 guard: when the tallest content run isn't
+    decisively taller than the second-tallest, refuse to crop. A
+    page with one long uninterrupted text block (no drawing)
+    would otherwise get its text cropped as if it were the
+    drawing. Default contrast ratio is 2.0 — tallest must be at
+    least 2x the second-tallest."""
+    from src.drawing_extraction import extract_drawing_region
+
+    img = Image.new("RGB", (400, 1200), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    # Two runs of similar height (200px each) — neither is
+    # decisively the drawing.
+    draw.rectangle([50, 100, 350, 300], fill=(0, 0, 0))
+    draw.rectangle([50, 600, 350, 800], fill=(0, 0, 0))
+    page = tmp_path / "ambiguous.png"
+    img.save(page)
+    output = tmp_path / "extracted.png"
+
+    assert extract_drawing_region(page, output) is False
+    assert not output.exists()
+
+
+def test_extract_drawing_region_min_contrast_guard_passes_decisive_runs(tmp_path):
+    """Same shape as above but with a decisive tallest run
+    (3x the next): extraction succeeds. Pins the upper boundary
+    of the contrast guard so it only fires for genuinely
+    ambiguous pages."""
+    from src.drawing_extraction import extract_drawing_region
+
+    img = Image.new("RGB", (400, 1500), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    # Tall drawing run (600px) + short text run (100px) — ratio = 6.
+    draw.rectangle([50, 100, 350, 200], fill=(0, 0, 0))
+    draw.rectangle([50, 400, 350, 1000], fill=(0, 0, 0))
+    page = tmp_path / "decisive.png"
+    img.save(page)
+    output = tmp_path / "extracted.png"
+
+    assert extract_drawing_region(page, output) is True
+    assert output.exists()
+
+
+def test_extract_drawing_region_input_file_untouched(tmp_path):
+    """Like ``mask_text_regions``, the extractor never writes
+    through to its input — the original page raster stays
+    pixel-identical for ``restore_page`` to find later."""
+    from src.drawing_extraction import extract_drawing_region
+
+    img = Image.new("RGB", (400, 800), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([50, 100, 350, 700], fill=(0, 0, 0))
+    page = tmp_path / "page.png"
+    img.save(page)
+    original_bytes = page.read_bytes()
+    output = tmp_path / "extracted.png"
+
+    extract_drawing_region(page, output)
+
+    assert page.read_bytes() == original_bytes, (
+        "input file was modified during extraction"
+    )
+
+
 def test_mask_text_regions_preserves_image_mode(tmp_path):
     """The cleaned image must round-trip through PIL as a normal
     RGB PNG — same mode, same size. Anything weirder (mode change,

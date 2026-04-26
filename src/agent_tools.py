@@ -504,7 +504,16 @@ def restore_page_tool(
         candidates = sorted(
             p
             for p in images_dir.glob(f"{stem}.*")
-            if p.is_file() and p.suffix.lower() in _PIL_IMAGE_EXTS
+            if p.is_file()
+            and p.suffix.lower() in _PIL_IMAGE_EXTS
+            # PR #80 review #1: ``glob`` matches both
+            # ``page-NN.png`` and our extracted-drawing companion
+            # ``page-NN.drawing.png`` (the ``.*`` glob spans
+            # multiple dots). Without this exact-stem guard, a
+            # restore that should re-attach the ORIGINAL full-
+            # page raster would pick up the cropped illustration
+            # instead — defeating the whole point of restore_page.
+            and p.stem == stem
         )
         # Prefer PNG if the same page has multiple extensions on disk
         # (deterministic — png is lossless, so keep it when present).

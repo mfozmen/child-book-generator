@@ -43,6 +43,7 @@ def extract_drawing_region(
     *,
     content_threshold: int = 200,
     row_min_density_pct: float = 0.02,
+    min_contrast_ratio: float = 2.0,
 ) -> bool:
     """Find the largest single content region in ``image_path`` —
     typically the page's illustration on a Samsung-Notes / phone-
@@ -72,8 +73,19 @@ def extract_drawing_region(
 
     Empirically (see end-to-end fixture tests): drawing height runs
     600-1100px on the user's actual pages while text rows cap at
-    50px — the contrast is so large that "tallest run wins" works
-    even when the drawing is short relative to the text region.
+    50px — the contrast is enormous, so "tallest run wins" is a
+    safe call.
+
+    Layouts that BREAK the assumption: pages with one long
+    uninterrupted text block (e.g. a spread-page paragraph dump
+    with no drawing) would treat the text block as the drawing.
+    Guarded against with ``min_contrast_ratio``: the tallest run
+    must be at least that much taller than the second-tallest
+    run, otherwise the function returns ``False`` and the caller
+    falls back to text-only. Default ratio of 2.0 is conservative
+    — comfortable for the user's Samsung Notes layout (text rows
+    50px, drawing 400px+ → ratio ≥ 8) and also for "tall paragraph
+    + short illustration" cases (no drawing detected, fall back).
 
     Out of scope: pages where text and drawing genuinely overlap on
     the same pixels (the algorithm treats overlap as one big run
@@ -82,8 +94,11 @@ def extract_drawing_region(
     they do later, a follow-up swaps in OpenCV inpainting per the
     PLAN entry.
     """
-    import numpy as np  # local import — numpy is a transitive dep
-    # already and the module is otherwise PIL-only.
+    # ``numpy`` is a first-class dependency declared in
+    # pyproject.toml — Pillow does NOT pull it transitively. Local
+    # import keeps it out of the import-time path for callers that
+    # only use ``mask_text_regions`` (which is PIL-only).
+    import numpy as np
 
     with Image.open(image_path) as img:
         rgb = img.convert("RGB")
@@ -101,10 +116,19 @@ def extract_drawing_region(
 
     runs.sort(key=lambda r: r[1] - r[0], reverse=True)
     y_start, y_end = runs[0]
-    if (y_end - y_start) < 50:
+    tallest_height = y_end - y_start
+    if tallest_height < 50:
         # No region tall enough to be a drawing — small text-only
         # page or noise. Bail rather than save a tiny crop.
         return False
+    # Min-contrast guard: refuse to crop when the "tallest" run
+    # isn't decisively taller than the rest. Without this, a page
+    # with one long uninterrupted text block would get its text
+    # block cropped as if it were the drawing. PR #80 review #3.
+    if len(runs) >= 2:
+        second_tallest = runs[1][1] - runs[1][0]
+        if second_tallest > 0 and tallest_height < min_contrast_ratio * second_tallest:
+            return False
 
     strip = content[y_start:y_end, :]
     col_density = strip.sum(axis=0)

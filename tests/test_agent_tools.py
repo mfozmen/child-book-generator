@@ -3945,6 +3945,46 @@ def test_restore_page_ignores_non_image_strays(tmp_path):
     assert "no original image" in result.lower()
 
 
+def test_restore_page_does_not_pick_extracted_drawing_companion(tmp_path):
+    """PR #80 review #1 regression: ``_try_extract_drawing`` writes
+    ``page-NN.drawing.png`` next to ``page-NN.png`` in the same
+    images dir. ``restore_page``'s ``glob(f"{stem}.*")`` matches
+    BOTH files (the ``.*`` glob spans multiple dots), and lexicographic
+    sort puts ``page-01.drawing.png`` before ``page-01.png`` — so a
+    user who said ``page N restore`` would have gotten the cropped
+    drawing back instead of the original full-page raster, defeating
+    restore_page's whole point. The fix filters on
+    ``p.stem == stem`` (exact match), which excludes the
+    ``page-NN.drawing`` companion stem."""
+    from PIL import Image
+    from src.agent_tools import restore_page_tool
+
+    images = tmp_path / ".book-gen" / "images"
+    images.mkdir(parents=True)
+    original = images / "page-01.png"
+    extracted = images / "page-01.drawing.png"
+    Image.new("RGB", (40, 40), "red").save(original)
+    Image.new("RGB", (20, 20), "blue").save(extracted)
+
+    draft = Draft(
+        source_pdf=tmp_path / "draft.pdf",
+        pages=[DraftPage(text="p1", image=None, hidden=True)],
+    )
+    tool = restore_page_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+    )
+
+    tool.handler({"page": 1})
+
+    # Must be the original, not the .drawing companion.
+    assert draft.pages[0].image == original, (
+        f"restore_page returned the extracted-drawing companion "
+        f"{draft.pages[0].image!r} instead of the original "
+        f"full-page raster {original!r}"
+    )
+
+
 def test_restore_page_prefers_png_when_both_exist(tmp_path):
     """Determinism: when both .png and .jpg exist for the same page,
     prefer .png."""

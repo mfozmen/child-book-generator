@@ -264,7 +264,7 @@ def test_yavru_dinozor_renders_illustrations_and_no_duplicate_text(
 
     # ---- Colophon page hidden ----
     assert pages[4].hidden, (
-        "page 5 (colophon ``YAZAR:POYRAZ``) should be auto-hidden"
+        "page 5 (colophon credits page) should be auto-hidden"
     )
 
     # ---- Blank pages hidden ----
