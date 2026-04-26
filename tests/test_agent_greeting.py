@@ -61,6 +61,109 @@ def test_default_greeting_does_not_ask_for_metadata_anymore():
 # ---------------------------------------------------------------------------
 
 
+def test_poster_cover_branch_tells_agent_not_to_call_set_cover():
+    """Reported on the 2026-04-26 live render: user picked option
+    (c) ``afiş`` (poster) at the cover prompt, the REPL set
+    ``cover_image=None, cover_style="poster"``, but the agent
+    misread the state and called ``set_cover`` with a page-drawing
+    fallback — overriding the user's deterministic choice. The
+    fix injects an explicit COVER STATE block that names the
+    user's pick and forbids ``set_cover`` calls during the metadata
+    phase. Pin both halves: poster branch surfaces the choice,
+    AND tells the agent not to call ``set_cover`` to fill the
+    ``cover_image=None`` slot."""
+    g = _build_agent_greeting(cover_choice="poster").lower()
+    assert "poster" in g
+    # Agent must understand cover_image=None is the COMPLETE poster
+    # configuration, not a half-set cover.
+    assert "complete poster" in g or "intentionally" in g
+    # Explicit forbid on set_cover during metadata phase.
+    assert "do not call" in g and "set_cover" in g
+
+
+def test_page_drawing_cover_branch_tells_agent_not_to_call_set_cover():
+    """Counterpart for the page-drawing branch — same risk shape.
+    User picked option (a), REPL set the cover to the first page
+    drawing; the agent shouldn't "helpfully" pick a different
+    drawing or call ``set_cover`` to confirm. The COVER STATE block
+    pins the choice."""
+    g = _build_agent_greeting(cover_choice="page-drawing").lower()
+    assert "page drawing" in g or "first available page drawing" in g
+    assert "do not call" in g and "set_cover" in g
+
+
+def test_ai_cover_branch_does_not_inject_deterministic_cover_state():
+    """The AI cover branch legitimately calls ``set_cover`` (via
+    ``generate_cover_illustration``), so the deterministic-cover
+    COVER STATE block must NOT fire on this branch — the AI block
+    has its own narrower instructions. PR #79 review #2: the
+    earlier check used ``g.split("generate_cover_illustration")[0]``
+    which only inspected the substring before the first occurrence;
+    a future change adding ``"intentionally"`` to text after that
+    point would silently pass. Tightened to a full-greeting check
+    on a string that's unique to the deterministic block."""
+    g = _build_agent_greeting(cover_choice="ai").lower()
+    # AI cover block is present.
+    assert "generate_cover_illustration" in g
+    # Deterministic-cover-state framing absent ANYWHERE — the AI
+    # flow legitimately sets the cover, so the deterministic
+    # "do not call set_cover" directive would conflict. PR #79
+    # round-2 #1: this assertion replaces an earlier split-based
+    # prefix check that only inspected text before the first
+    # ``"do not call"`` occurrence — direct full-greeting check
+    # is what the comment promises.
+    assert "do not call set_cover" not in g
+    # And pin two unique substrings that appear ONLY in the
+    # deterministic blocks. Either alone would catch a regression;
+    # both together guard against a future rewrite that drops one
+    # phrasing for the other while leaking the framing into AI.
+    assert "complete poster configuration" not in g
+    assert "first available page drawing" not in g
+
+
+def test_default_greeting_has_no_cover_state_block():
+    """PR #79 review #3: the previous default
+    (``cover_choice="page-drawing"``) embedded a page-drawing
+    COVER STATE block in the ``_AGENT_GREETING_HINT`` constant —
+    misleading for tests that imported it as the "common case"
+    baseline. Default is now ``cover_choice=None`` which produces
+    a neutral greeting (no per-branch cover block). Real sessions
+    always pass explicit values from ``MetadataChoices``."""
+    g = _build_agent_greeting().lower()  # both args default to None
+    assert "complete poster configuration" not in g
+    assert "first available page drawing" not in g
+    assert "generate_cover_illustration" not in g
+    # The opening, render, and review sections are still present.
+    assert "read_draft" in g
+    assert "render_book" in g.lower()
+
+
+def test_build_greeting_raises_on_unknown_cover_choice():
+    """PR #79 review #4: a future cover option added without a
+    ``_DETERMINISTIC_COVER_STATE`` entry would silently fall
+    through with no cover-state block — exactly the original bug
+    shape. The builder now raises ``ValueError`` so the next
+    contributor has to register the option deliberately."""
+    import pytest
+
+    with pytest.raises(ValueError, match="Unknown cover_choice"):
+        _build_agent_greeting(cover_choice="framed")
+    with pytest.raises(ValueError, match="Unknown cover_choice"):
+        _build_agent_greeting(cover_choice="some-future-option")
+    # And the back-cover side has the same shape.
+    with pytest.raises(ValueError, match="Unknown back_cover_choice"):
+        _build_agent_greeting(back_cover_choice="some-future-blurb-option")
+    # ``None`` and the registered options stay valid.
+    _build_agent_greeting(cover_choice=None)
+    _build_agent_greeting(cover_choice="ai")
+    _build_agent_greeting(cover_choice="page-drawing")
+    _build_agent_greeting(cover_choice="poster")
+    _build_agent_greeting(back_cover_choice=None)
+    _build_agent_greeting(back_cover_choice="none")
+    _build_agent_greeting(back_cover_choice="self-written")
+    _build_agent_greeting(back_cover_choice="ai-draft")
+
+
 def test_default_greeting_omits_ai_cover_branch():
     """When the user picks the non-AI cover options (page-drawing /
     poster), the greeting must NOT contain the AI cover instructions
