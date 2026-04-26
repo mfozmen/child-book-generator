@@ -1,9 +1,127 @@
 # CHANGELOG
 
 
+## v1.19.1 (2026-04-26)
+
+### Bug Fixes
+
+- **greeting**: Inject explicit cover-state block for deterministic branches
+  ([#79](https://github.com/mfozmen/littlepress-ai/pull/79),
+  [`f8b9a2f`](https://github.com/mfozmen/littlepress-ai/commit/f8b9a2f0dabaae15bdd101d96dbf55736caf6bb7))
+
+* fix(greeting): inject explicit cover-state block for deterministic branches
+
+Reported on the 2026-04-26 live render of ``yavru_dinozor``: the user picked option (c) ``afiş``
+  (poster) at the cover prompt, the REPL correctly set ``cover_image=None, cover_style="poster"``,
+  but the agent then ran ``read_draft``, saw ``cover_image=None`` plus ``cover_style="poster"``,
+  concluded "Kapak henüz seçilmemiş" (cover not yet selected), and called ``set_cover`` with a
+  page-drawing fallback — overriding the user's deterministic choice. The rendered cover was wrong.
+
+Root cause: the greeting said "metadata is already set by the REPL" but didn't surface the SPECIFIC
+  cover choice. The agent read the draft state but couldn't distinguish "user chose poster
+  (typography only — image=None is intentional)" from "cover not configured yet."
+
+Fix: ``_build_agent_greeting`` now injects an explicit COVER
+
+STATE block per deterministic branch:
+
+- ``page-drawing``: names the user's pick (option a), explains ``cover_image`` is set to the first
+  available page drawing and ``cover_style=full-bleed``, forbids ``set_cover`` during the metadata
+  phase. - ``poster``: names the user's pick (option c), names that ``cover_image=None +
+  cover_style=poster`` is the COMPLETE poster configuration (NOT a half-set cover), forbids
+  ``set_cover``. This is the wording targeted at the exact misreading the v3 render hit.
+
+Both blocks point at the post-render review turn as the legitimate place ``set_cover`` should fire —
+  if the user later asks for a different drawing or a poster swap, that's the review-turn work.
+
+The AI cover branch (``cover == "ai"``) is unchanged — that path legitimately calls ``set_cover``
+  (via ``generate_cover_illustration``), so the deterministic COVER STATE block must not fire there.
+  Only ONE of the cover blocks runs per greeting (``elif`` selection in the builder).
+
+Back-cover branches don't have an analogous override risk today (``set_metadata`` on
+  ``back_cover_text`` is the only path the agent has, and the existing "metadata is already set"
+  framing covers it), so no per-branch state block is injected.
+
+Tests:
+
+- ``test_poster_cover_branch_tells_agent_not_to_call_set_cover`` pins the poster-branch wording:
+  "poster" appears, the "complete" / "intentionally" framing is present, "do not call set_cover" is
+  explicit. - ``test_page_drawing_cover_branch_tells_agent_not_to_call_set_cover`` same shape for
+  the page-drawing branch. - ``test_ai_cover_branch_does_not_inject_deterministic_cover_state``
+  guards against the deterministic block leaking into the AI flow (which would conflict with the AI
+  block's "call generate_cover_illustration" instruction).
+
+Full suite: 738 passing (+3).
+
+PLAN updated: cover-override entry added; the existing baked-pixel-extraction entry updated to note
+  that PR #74's protection is the why-no-illustrations symptom the user re-confirmed today.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(greeting): address PR #79 review — neutral default, strict unknown, full-greeting check
+
+Four below-threshold review findings, all addressed.
+
+1. (score 75) Turkish quotes in ``docs/PLAN.md`` for the cover- override entry: ``(c) afiş`` and
+  ``"Kapak henüz seçilmemiş"``. CLAUDE.md English-only rule applies to repository docs the same as
+  it does to code/comments/docstrings. Paraphrased to "option (c) (poster, typography only)" and
+  "the agent inferred the cover wasn't yet selected" — same factual record without the verbatim
+  Turkish.
+
+2. (score 25) Vacuous assertion in
+  ``test_ai_cover_branch_does_not_inject_deterministic_cover_state``. The check was
+  ``"intentionally" not in g.split( "generate_cover_illustration")[0]`` — only inspected the
+  substring before the first occurrence; a future change adding ``"intentionally"`` after that point
+  would silently pass. Tightened to a full-greeting check on a string unique to the deterministic
+  blocks (``"complete poster configuration"`` and ``"first available page drawing"`` — neither
+  appears in the AI block).
+
+3. (score 50) ``_AGENT_GREETING_HINT`` default no longer silently embeds the page-drawing COVER
+  STATE block. Default for both args is now ``None`` (neutral — no per-branch block), with the
+  existing AI-branch check and the new deterministic-state check both keyed off the explicit values.
+  Real sessions always pass values from ``MetadataChoices``; the constant is only used by tests that
+  want a "common case" baseline. New test ``test_default_greeting_has_no_cover_state_block`` pins
+  the neutral shape.
+
+4. (score 50) Unknown ``cover_choice`` / ``back_cover_choice`` used to fall through silently (the
+  exact failure mode the deterministic cover-state fix was added to prevent — a future option
+  without a registered ``_DETERMINISTIC_COVER_STATE`` entry would revert to the original bug shape).
+  Now raises ``ValueError`` with a message naming valid options and pointing at where to register a
+  new one. New test ``test_build_greeting_raises_on_unknown_cover_choice`` pins: ``framed``,
+  ``some-future-option``, ``some-future-blurb-option`` all raise; ``None`` and every registered
+  option stay valid.
+
+Full suite: 740 passing (+2 new regressions; one existing test got tightened in place rather than
+  added).
+
+* test(greeting): direct ``do not call set_cover`` check (PR #79 r2 #1)
+
+Round-2 residual on the original F2 fix: I left a split-based prefix-only assertion in
+  ``test_ai_cover_branch_does_not_inject_deterministic_cover_state`` even though the comment
+  immediately above promised a full-greeting check. The line ``assert "do not call" not in g or
+  "set_cover" not in g.split("do not call")[1] if "do not call" in g else True`` was harmless today
+  (the AI block doesn't contain that phrase) but misleading — a future change adding a second ``"do
+  not call"`` block before any ``"set_cover"`` reference would still pass it. Same prefix-only
+  failure mode the original F2 was pinned to fix.
+
+Replaced with the direct ``assert "do not call set_cover" not in g``. The two unique-substring
+  checks below it (``"complete poster configuration"``, ``"first available page drawing"``) stay as
+  the real safety net — either alone would catch a regression; all three together pin the contract
+  from multiple angles.
+
+Full suite: 740 passing (no count change — assertion swap, not a new test).
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+
 ## v1.19.0 (2026-04-25)
 
 ### Chores
+
+- **release**: 1.19.0 [skip ci]
+  ([`2dc7e21`](https://github.com/mfozmen/littlepress-ai/commit/2dc7e216042fd3a3e7bfefb06678a1d3ce3495aa))
 
 - **repl**: Strip Turkish tokens from cost-confirm gate
   ([#77](https://github.com/mfozmen/littlepress-ai/pull/77),
