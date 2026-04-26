@@ -1,6 +1,154 @@
 # CHANGELOG
 
 
+## v1.20.0 (2026-04-26)
+
+### Features
+
+- **drawing-extraction**: Isolate illustrations from single-raster pages
+  ([#80](https://github.com/mfozmen/littlepress-ai/pull/80),
+  [`7d13ad8`](https://github.com/mfozmen/littlepress-ai/commit/7d13ad823286de3f31a733b64aa90b495c472ed4))
+
+* feat(drawing-extraction): isolate illustrations from single-raster Samsung-Notes pages
+
+Reported repeatedly across the v1/v2/v3 live renders: the rendered book had no illustrations because
+  every MIXED page defaulted to ``text-only`` after PR #74's protection — losing the drawings to
+  avoid the duplicate-text bug. The user pushed back hard: 2026, text and drawing in one image
+  should be separable; stop blaming Samsung Notes.
+
+Pixel-level reality of the input: yes, text and drawing share one PNG per page. But on this user's
+  input (typed text rows + a clearly-rectangular illustration in a separate vertical region), the
+  regions are spatially distinct — the algorithm just has to identify the drawing's bounding box and
+  crop it.
+
+New ``extract_drawing_region(image_path, output_path)`` in ``src/drawing_extraction.py``:
+
+* Convert page to grayscale. * Threshold to "content" pixels (< 200 brightness). * Compute per-row
+  content density. * Find consecutive content runs. * The TALLEST run is the drawing — text rows on
+  these pages cap at ~50px, drawings start at 400px. The height contrast is the discriminator. *
+  Within that run, find the leftmost and rightmost content columns and crop to that rectangle.
+
+Verified empirically on the user's actual yavru_dinozor pages: the algorithm cleanly extracts the
+  dinosaur illustrations on pages 1-4 (heights 441-1051px against text rows that cap at 46px; the
+  contrast is enormous).
+
+``apply_sentinel_result``'s MIXED branch wired to the extraction:
+
+* Try to extract the drawing. * On success: ``page.image`` swaps to the cleaned
+  ``page-NN.drawing.png``; layout becomes ``image-top``. The rendered book gets a clean drawing
+  under the transcribed text (no duplicate, illustration visible). * On failure: fall back to the
+  old ``text-only`` default (drops the drawing rather than risk the duplicate-text bug). * Original
+  full-page raster stays untouched on disk so ``restore_page`` in the review turn keeps working.
+
+End-to-end regression test ``tests/test_yavru_dinozor_e2e.py`` runs the COMPLETE pipeline (load PDF
+  → OCR → colophon detection → metadata prompts → agent → render) against the user's actual Samsung
+  Notes draft, asserting every invariant the rounds have hit:
+
+* MIXED pages 1-4 get extracted drawings + image-top layout. * Colophon page (5) auto-hidden. *
+  Blanks (6, 7, 8) auto-hidden. * Cover poster choice respected. * Each story phrase appears at most
+  once in the rendered PDF (the duplicate-text bug pin the user has been hitting across rounds). *
+  Extracted drawing meaningfully smaller than the original raster (proves cropping happened).
+
+The fixture PDF is the user's child's content — it lives at
+  ``tests/fixtures/yavru_dinozor/draft.pdf`` and is gitignored by the existing ``*.pdf`` rule, so it
+  stays off the public repo. The test ``skipif``s when the fixture isn't on disk, runs locally on
+  the maintainer's machine where it is.
+
+``numpy>=1.24.0`` added as an explicit dep — Pillow doesn't transitively pull it. Updated PLAN to
+  mark the extraction work shipped (was the top deferred item from the 2026-04-26 round) and README
+  to describe the new behaviour for users.
+
+Full suite: 741 passing (740 previous + 1 new e2e regression).
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(extraction): address PR #80 review — restore_page bug, unit tests, contrast guard
+
+Two above-threshold findings + three cleanup nits, all addressed.
+
+1. (score 100, CRITICAL) ``restore_page`` returned the extracted drawing companion instead of the
+  original full-page raster. ``_try_extract_drawing`` writes ``page-NN.drawing.png`` next to
+  ``page-NN.png`` in the same images dir; the glob ``f"{stem}.*"`` matches both (``.*`` spans
+  multiple dots), sort puts ``.drawing.png`` first lexicographically, and ``next(...)`` picks it. So
+  a user saying "page N restore" would have gotten the cropped illustration back instead of the
+  original — defeating restore_page's whole reason for existing. Added an exact-stem guard (``and
+  p.stem == stem``) to the candidates filter, which excludes the ``page-NN.drawing`` companion stem.
+  New regression test ``test_restore_page_does_not_pick_extracted_drawing_companion`` pins the
+  contract by writing both files and asserting the tool returns the original.
+
+2. (score 100, TDD violation + Sonar coverage gate) ``extract_drawing_region`` and ``_content_runs``
+  shipped without unit tests — only the e2e fixture test exercised them, and that test ``skipif``s
+  without the maintainer's private PDF, so CI saw zero coverage on these paths. SonarQube confirmed:
+  67.3% on new code, below the 80% gate. Added 9 unit tests in ``tests/test_drawing_extraction.py``:
+
+- ``_content_runs``: groups consecutive ``True`` indices, handles trailing-run branch, empty input,
+  all-false input. - ``extract_drawing_region``: blank image returns False, no run tall enough
+  returns False, single tall block cropped to bbox, multi-run picks tallest, input file untouched
+  (preserve-child-voice contract for the original raster).
+
+3. (score 75) Algorithm assumption "tallest run wins" had no guard against pages with one long
+  uninterrupted text block (no drawing) — that block would be misclassified as the illustration and
+  cropped. Added ``min_contrast_ratio=2.0`` parameter: tallest run must be at least 2x the second-
+  tallest, otherwise return False (caller falls back to text-only). Comfortable for the user's
+  Samsung Notes layout (text rows 50px, drawing 400px+ → ratio ≥ 8) and for "tall paragraph + short
+  illustration" cases (no drawing detected, correct fall back). Two new tests pin: ambiguous case
+  (similar-height runs) refuses; decisive case (tallest 3x+) accepts.
+
+4. (score 50) Misleading comment claimed numpy was a transitive dep via Pillow. Pillow does NOT pull
+  numpy; it's an explicit dependency declared in pyproject.toml as part of this PR. Comment
+  rewritten to accurately describe numpy as a first- class dep + the local-import rationale (keep
+  import-time cost off ``mask_text_regions`` callers that only need PIL).
+
+5. (score 50) Turkish ``YAZAR:POYRAZ`` literal in an assertion message at
+  ``tests/test_yavru_dinozor_e2e.py:267``. CLAUDE.md English-only rule applies to assertion messages
+  (the non-English-fixture exception covers test *input data*, not ``assert`` strings). Replaced
+  with "page 5 (colophon credits page) should be auto-hidden" — same factual record without the
+  verbatim Turkish.
+
+Full suite: 753 passing (+12 new tests: 9 extraction unit, 1 restore-page regression, 2
+  contrast-guard tests).
+
+* fix(extraction): clear Sonar issue + lift new-code coverage to 100%
+
+Two cleanups for Sonar's quality gate.
+
+1. Sonar issue (MINOR, python:S1481) — unused local variable ``height`` in
+  ``extract_drawing_region``. Replaced ``height, width = gray.shape`` with ``width =
+  gray.shape[1]``; the height value isn't used downstream (row indices come from ``has_content``
+  enumeration, not from the array's height).
+
+2. New-code coverage gap on ``_try_extract_drawing`` and on two defensive branches inside
+  ``extract_drawing_region``.
+
+- Added two unit tests for ``_try_extract_drawing``: the ``page_image is None`` short-circuit
+  (caller passes ``page.image`` directly, may be None on TEXT-classified pages that already cleared
+  the image) and the exception-swallow branch (extraction failure is non-fatal — a crash here would
+  break OCR ingestion mid-flow).
+
+- Removed two unreachable defensive branches in ``extract_drawing_region``:
+
+* ``second_tallest > 0`` check before the contrast-ratio division. ``_content_runs`` only emits
+  ``end > start`` tuples by construction, so ``second_tallest`` is guaranteed positive — no
+  zero-divide concern. * ``content_cols.size == 0`` guard after column-density computation.
+  ``has_content`` already filtered rows above the density threshold, so the tallest run's strip has
+  at least ``row_min_density_pct * width`` content pixels per row by construction — non-zero columns
+  are guaranteed.
+
+Per CLAUDE.md ("don't add error handling for scenarios that can't happen"), the defensive checks
+  were YAGNI; the comments now document why the invariants hold.
+
+Local coverage on the new code:
+
+src/drawing_extraction.py: 100% (59/59 stmts) src/agent_tools.py: only 3 misses, all pre-existing
+  pre-PR code (lines 850, 874, 1191) — none are in this PR's diff.
+
+Full suite: 755 passing (+2 new ``_try_extract_drawing`` tests).
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+
 ## v1.19.1 (2026-04-26)
 
 ### Bug Fixes
@@ -114,6 +262,11 @@ Full suite: 740 passing (no count change — assertion swap, not a new test).
 ---------
 
 Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+### Chores
+
+- **release**: 1.19.1 [skip ci]
+  ([`2653637`](https://github.com/mfozmen/littlepress-ai/commit/2653637299d27ee15dbe8d2e8a22f85fefb96c69))
 
 
 ## v1.19.0 (2026-04-25)
