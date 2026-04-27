@@ -1761,70 +1761,35 @@ def _mirror_stable(versioned: Path, stable: Path) -> bool:
         return False
 
 
-def _render_message(
-    versioned: Path,
-    stable: Path,
-    *,
-    stable_updated: bool,
-    opened: bool,
-) -> str:
-    """Assemble the A5 success line for the agent's reply.
-
-    A single render drops four files (stable + versioned × A5 +
-    booklet). The user reads four files as "why is this producing so
-    much stuff?" unless each file's role is named. This message
-    focuses on the A5 pair; the booklet pair is narrated by
-    ``_impose_and_mirror`` in the same shape.
-    """
-    if not stable_updated:
-        return (
-            f"Wrote snapshot {versioned}. Couldn't update {stable.name} "
-            "(is it open in a PDF viewer? close it and copy "
-            f"{versioned.name} over {stable.name} to refresh)."
-        )
+def _render_message(a5: Path, *, opened: bool) -> str:
+    """Assemble the A5 success line for the agent's reply. Two
+    files per render now (A5 + A4 booklet); each role is named so
+    the user knows which to open."""
     opened_tail = (
         " Opened it in your viewer."
         if opened
         else " Open it manually — couldn't launch a PDF viewer here."
     )
     return (
-        f"A5 book written to {stable} — this is the file to open and "
-        f"read.{opened_tail} "
-        f"Also kept a snapshot at {versioned.name} (rollback only, "
-        "safe to ignore unless you want to compare with a later render)."
+        f"A5 book written to {a5} — this is the file to open and "
+        f"read.{opened_tail}"
     )
 
 
-def _impose_and_mirror(
-    versioned_a5: Path,
-    stable_a5: Path,
-    stable_updated: bool,
-    message: str,
-) -> str:
-    """Produce the A4 booklet and mirror it alongside the A5 pair."""
-    versioned_booklet = versioned_a5.with_name(
-        f"{versioned_a5.stem}_A4_booklet.pdf"
-    )
-    stable_booklet = stable_a5.with_name(f"{stable_a5.stem}_A4_booklet.pdf")
+def _impose_to(a5: Path, booklet: Path, message: str) -> str:
+    """Produce the A4 booklet directly to its stable name."""
     try:
-        impose_a5_to_a4(versioned_a5, versioned_booklet)
+        impose_a5_to_a4(a5, booklet)
     except Exception as e:
         return (
             f"{message} Booklet imposition failed: {e}. The A5 "
             "stayed on disk — the user can still print it."
         )
-    booklet_stable_updated = stable_updated and _mirror_stable(
-        versioned_booklet, stable_booklet
-    )
-    booklet_target = stable_booklet if booklet_stable_updated else versioned_booklet
     return (
         f"{message} "
-        f"A4 booklet written to {booklet_target} — print this one "
+        f"A4 booklet written to {booklet} — print this one "
         "double-sided (flipped on short edge), fold in half, staple the "
-        "spine. "
-        f"Also kept a snapshot at {versioned_booklet.name} (rollback "
-        "only, safe to ignore unless you want to compare with a later "
-        "render)."
+        "spine."
     )
 
 
@@ -2037,50 +2002,40 @@ def render_book_tool(
         source_dir = Path(get_session_root()) / _BOOK_GEN_DIR
         output_dir = source_dir / "output"
         slug = slugify(draft.title)
-        # next_version_number needs the directory to exist so it can
-        # scan for prior snapshots; create it up front.
         output_dir.mkdir(parents=True, exist_ok=True)
-        version = next_version_number(output_dir, slug)
-        versioned_a5 = (output_dir / f"{slug}.v{version}.pdf").resolve()
-        stable_a5 = (output_dir / f"{slug}.pdf").resolve()
+        # Just two outputs per render: ``<slug>.pdf`` (A5 reading
+        # copy) and ``<slug>_A4_booklet.pdf`` (A4 print artefact).
+        # The earlier versioned-snapshot system (``<slug>.vN.pdf``,
+        # ``<slug>.vN_A4_booklet.pdf``) was removed on the
+        # 2026-04-27 round — the user's complaint was 4 outputs
+        # showing up for a 1-render session, with two pairs
+        # identical to each other. The "rollback / compare drafts"
+        # use case wasn't pulling its weight.
+        a5_path = (output_dir / f"{slug}.pdf").resolve()
+        booklet_path = (output_dir / f"{slug}_A4_booklet.pdf").resolve()
 
         try:
             book = to_book(draft, source_dir)
-            # Render to the versioned filename — that's the canonical
-            # artefact for this render. The stable name is a pointer.
-            build_pdf(book, versioned_a5)
+            build_pdf(book, a5_path)
         except Exception as e:
             return f"Render failed: {e}"
 
-        # Mirror to the stable name via atomic replace so an interrupted
-        # copy leaves either the previous stable file or the new one —
-        # never a half-written one. Windows holds an exclusive lock on
-        # open PDFs; if the user has the previous stable copy open in
-        # Acrobat we surface that separately without hiding the fact
-        # that the render itself succeeded.
-        stable_updated = _mirror_stable(versioned_a5, stable_a5)
-
-        target = stable_a5 if stable_updated else versioned_a5
         try:
-            opener(target)
+            opener(a5_path)
             opened = True
         except Exception:
             # Viewer can't launch (headless env, OS permission) —
             # file is on disk and the path is in the reply.
             opened = False
 
-        message = _render_message(
-            versioned_a5, stable_a5, stable_updated=stable_updated, opened=opened
-        )
+        message = _render_message(a5_path, opened=opened)
 
         if impose:
-            message = _impose_and_mirror(
-                versioned_a5, stable_a5, stable_updated, message
-            )
+            message = _impose_to(a5_path, booklet_path, message)
 
-        # Housekeeping: drop orphan images from earlier AI retries and
-        # snapshot PDFs beyond the most-recent few. Silent on failure —
-        # locked files (PDF viewer on Windows) are caught inside prune.
+        # Housekeeping: drop orphan images from earlier AI retries.
+        # The snapshot-cleanup half is a no-op now (no snapshots to
+        # clean) but the orphan-image sweep still earns its keep.
         prune(Path(get_session_root()), draft)
 
         return message

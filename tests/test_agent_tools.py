@@ -3024,18 +3024,12 @@ def test_render_book_surfaces_build_failure(tmp_path, monkeypatch):
 
 
 def test_render_book_message_explains_the_role_of_each_output_file(tmp_path):
-    """P6 from the Yavru Dinozor second-run feedback — a single
-    render drops four PDFs under ``.book-gen/output/``: stable +
-    versioned × A5 + booklet. The user read four files as "why is
-    this producing so much stuff?" because the success message
-    named paths without roles.
-
-    Tightens the contract: each file's role must be named in the
-    message so the user knows which one to open, which to print
-    double-sided, and which two are rollback snapshots they can
-    safely ignore. Uses multi-word markers rather than loose
-    single-word matches (``open`` / ``ignore`` already appear in
-    unrelated sentences like ``"is it open in a PDF viewer?"``)."""
+    """A render drops two PDFs under ``.book-gen/output/``: stable
+    A5 + stable A4 booklet (the versioned-snapshot system was
+    removed on the 2026-04-27 round — user complaint was four
+    files for a single render). The success message must still
+    name each file's role so the user knows which to open and
+    which to print + fold + staple."""
     draft = _two_page_draft(tmp_path)
     tool = render_book_tool(
         get_draft=lambda: draft,
@@ -3044,27 +3038,20 @@ def test_render_book_message_explains_the_role_of_each_output_file(tmp_path):
 
     result = tool.handler({"impose": True}).lower()
 
-    # Stable A5 role — specific multi-word phrase, not a lone "open".
+    # Stable A5 role — specific multi-word phrase.
     assert "to open and read" in result
     # A4 booklet role — the full print workflow.
     assert "print this one double-sided" in result
     assert "fold" in result
     assert "staple" in result
-    # Versioned snapshots — labelled as snapshots + rollback framing.
-    assert "snapshot" in result
-    assert "rollback only" in result
-    assert "safe to ignore" in result
 
 
 def test_render_book_message_names_a5_role_without_booklet_when_impose_false(
     tmp_path,
 ):
     """When the caller explicitly passes ``impose=False`` only the
-    A5 pair is produced — the booklet / print / fold / staple copy
-    must NOT leak into the message. Pins the role-naming on the
-    A5-only path and the negative booklet check together. (The
-    default is ``impose=True`` after the 2026-04-27 fix; this test
-    exercises the explicit-opt-out path.)"""
+    A5 is produced — the booklet / print / fold / staple copy
+    must NOT leak into the message."""
     draft = _two_page_draft(tmp_path)
     tool = render_book_tool(
         get_draft=lambda: draft,
@@ -3075,34 +3062,12 @@ def test_render_book_message_names_a5_role_without_booklet_when_impose_false(
 
     # A5 role still named.
     assert "to open and read" in result
-    assert "snapshot" in result
-    assert "rollback only" in result
     # Booklet workflow absent — user shouldn't see print instructions
     # for a file that wasn't produced.
     assert "print this one double-sided" not in result
     assert "staple" not in result
     assert "fold in half" not in result
     assert "booklet" not in result
-
-
-def test_render_book_snapshot_framing_consistent_across_a5_and_booklet(
-    tmp_path,
-):
-    """Both the A5 snapshot line and the booklet snapshot line must
-    describe the same feature with the same hedge (``"compare with a
-    later render"``). Inconsistent framing in a single reply reads
-    like two different invariants."""
-    draft = _two_page_draft(tmp_path)
-    tool = render_book_tool(
-        get_draft=lambda: draft,
-        get_session_root=lambda: tmp_path,
-    )
-
-    result = tool.handler({"impose": True}).lower()
-
-    # Two separate snapshots with the same framing. Count the hedge
-    # — must appear twice (once per snapshot line).
-    assert result.count("compare with a later render") == 2
 
 
 def test_render_book_returns_absolute_paths_in_message(tmp_path):
@@ -3239,11 +3204,11 @@ def test_render_book_impose_failure_keeps_a5(tmp_path, monkeypatch):
 # --- render_book versioned output ---------------------------------------
 
 
-def test_render_book_writes_stable_and_versioned_copy(tmp_path):
-    """Each render lands two A5 PDFs: the stable ``<slug>.pdf`` that
-    auto-open and user-level "the book" references point at, and a
-    ``<slug>.v1.pdf`` copy that preserves the render even if the next
-    one overwrites the stable name."""
+def test_render_book_writes_only_stable_files_no_versioning(tmp_path):
+    """Single render produces just two files: stable A5 +
+    stable A4 booklet. The earlier versioned-snapshot system was
+    removed on the 2026-04-27 round (user complaint: 4 outputs
+    for 1 render with two pairs identical to each other)."""
     draft = _two_page_draft(tmp_path)
     tool = render_book_tool(
         get_draft=lambda: draft,
@@ -3253,39 +3218,55 @@ def test_render_book_writes_stable_and_versioned_copy(tmp_path):
     tool.handler({})
 
     output_dir = tmp_path / ".book-gen" / "output"
-    stable = output_dir / "the_brave_owl.pdf"
-    versioned = output_dir / "the_brave_owl.v1.pdf"
-    assert stable.is_file()
-    assert versioned.is_file()
-    # Same bytes — versioned is the frozen copy of this render.
-    assert stable.read_bytes() == versioned.read_bytes()
+    a5 = output_dir / "the_brave_owl.pdf"
+    booklet = output_dir / "the_brave_owl_A4_booklet.pdf"
+    assert a5.is_file()
+    assert booklet.is_file()
+    # No ``.v*.pdf`` files anywhere.
+    assert list(output_dir.glob("*.v*.pdf")) == [], (
+        f"versioned snapshots leaked: "
+        f"{list(output_dir.glob('*.v*.pdf'))!r}"
+    )
 
 
-def test_second_render_does_not_clobber_the_first_versioned_copy(tmp_path):
-    """Rendering the same draft twice keeps BOTH versioned PDFs on disk.
-    Silently overwriting the first copy was losing work the user might
-    want to compare against or roll back to."""
+def test_second_render_overwrites_first_no_archive(tmp_path):
+    """Re-rendering replaces the stable files in place. No archive
+    of previous renders — that was the snapshot system, removed on
+    the 2026-04-27 round."""
     draft = _two_page_draft(tmp_path)
     tool = render_book_tool(
         get_draft=lambda: draft,
         get_session_root=lambda: tmp_path,
     )
 
-    tool.handler({})
-    tool.handler({})
+    tool.handler({"impose": True})
+    first_a5_size = (
+        tmp_path / ".book-gen" / "output" / "the_brave_owl.pdf"
+    ).stat().st_size
+
+    # Mutate the draft slightly so the second render produces
+    # different bytes — proves the file got overwritten.
+    draft.title = "The Brave Owl Vol 2"
+    tool = render_book_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+    )
+    tool.handler({"impose": True})
 
     output_dir = tmp_path / ".book-gen" / "output"
-    v1 = output_dir / "the_brave_owl.v1.pdf"
-    v2 = output_dir / "the_brave_owl.v2.pdf"
-    stable = output_dir / "the_brave_owl.pdf"
-    assert v1.is_file(), "first render's versioned copy must survive the second render"
-    assert v2.is_file(), "second render must produce a new versioned copy"
-    assert stable.is_file(), "stable copy always points at the latest"
+    # New title produces a new slug, so a different stable path is
+    # what gets written. The OLD stable file from the first render
+    # stays put (different slug → not touched).
+    assert (output_dir / "the_brave_owl_vol_2.pdf").is_file()
+    assert (output_dir / "the_brave_owl_vol_2_A4_booklet.pdf").is_file()
+    # And no .v*.pdf appeared for either slug.
+    assert list(output_dir.glob("*.v*.pdf")) == []
 
 
-def test_opener_targets_the_stable_copy_not_the_versioned_one(tmp_path):
-    """The auto-opener launches the stable ``<slug>.pdf`` — that's what
-    the user thinks of as 'the book'; versioned copies are the archive."""
+def test_opener_targets_the_stable_a5(tmp_path):
+    """The auto-opener launches the stable A5 PDF — the reading
+    copy. The booklet is the print artefact and is NOT auto-opened
+    (user reads on screen, prints when ready)."""
     draft = _two_page_draft(tmp_path)
     opened: list[Path] = []
 
@@ -3295,144 +3276,29 @@ def test_opener_targets_the_stable_copy_not_the_versioned_one(tmp_path):
         open_file=lambda p: opened.append(Path(p)),
     )
 
-    tool.handler({})
+    tool.handler({"impose": True})
 
-    stable = tmp_path / ".book-gen" / "output" / "the_brave_owl.pdf"
+    a5 = tmp_path / ".book-gen" / "output" / "the_brave_owl.pdf"
+    booklet = tmp_path / ".book-gen" / "output" / "the_brave_owl_A4_booklet.pdf"
     assert len(opened) == 1
-    assert opened[0].resolve() == stable.resolve()
+    assert opened[0].resolve() == a5.resolve()
+    # Booklet was NOT auto-opened.
+    assert booklet not in opened
 
 
-def test_booklet_is_also_versioned(tmp_path):
-    """impose=True produces the stable booklet AND a versioned copy so
-    rerunning with --impose doesn't destroy the previous booklet."""
-    draft = _two_page_draft(tmp_path)
-    tool = render_book_tool(
-        get_draft=lambda: draft,
-        get_session_root=lambda: tmp_path,
-    )
-
-    tool.handler({"impose": True})
-    tool.handler({"impose": True})
-
-    output_dir = tmp_path / ".book-gen" / "output"
-    stable_booklet = output_dir / "the_brave_owl_A4_booklet.pdf"
-    v1_booklet = output_dir / "the_brave_owl.v1_A4_booklet.pdf"
-    v2_booklet = output_dir / "the_brave_owl.v2_A4_booklet.pdf"
-    assert stable_booklet.is_file()
-    assert v1_booklet.is_file()
-    assert v2_booklet.is_file()
-
-
-def test_render_book_mentions_versioned_path_in_message(tmp_path):
-    """The agent's reply tells the user both filenames exist so they
-    know a copy has been preserved — otherwise they'd have no way to
-    discover the versioning without opening the folder."""
-    draft = _two_page_draft(tmp_path)
-    tool = render_book_tool(
-        get_draft=lambda: draft,
-        get_session_root=lambda: tmp_path,
-    )
-
-    result = tool.handler({})
-
-    # Versioned copy is mentioned so the user sees that a snapshot was kept.
-    assert "v1" in result or ".v1.pdf" in result
-
-
-# --- render_book: atomic mirror + Windows viewer-lock ------------------
-
-
-def test_render_book_uses_atomic_copy_for_the_stable_mirror(tmp_path, monkeypatch):
-    """``<slug>.pdf`` must be replaced via ``os.replace`` so a crash
-    mid-copy leaves the previous stable file untouched instead of
-    half-written. Stream-based ``shutil.copyfile`` would truncate the
-    destination first, handing the auto-opener a corrupt PDF."""
-    draft = _two_page_draft(tmp_path)
-    # Pre-populate a "previous render" at the stable path so we can
-    # verify it's preserved if the copy dies.
-    output_dir = tmp_path / ".book-gen" / "output"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    stable = output_dir / "the_brave_owl.pdf"
-    stable.write_bytes(b"PREVIOUS_RENDER_BYTES")
-
-    import shutil as real_shutil
-
-    real_copy = real_shutil.copyfile
-
-    def fail_after_tmp(src, dst):
-        # Let the tmp file come into existence so we can prove the
-        # final os.replace step is what makes the swap atomic. Then
-        # raise — if the implementation used plain copyfile(src, dst)
-        # the stable file would already be truncated by this point.
-        real_copy(src, dst)
-        if str(dst).endswith(".pdf.tmp"):
-            raise OSError("simulated disk-full after tmp write")
-
-    monkeypatch.setattr("src.draft.shutil.copyfile", fail_after_tmp)
-
-    tool = render_book_tool(
-        get_draft=lambda: draft,
-        get_session_root=lambda: tmp_path,
-    )
-
-    tool.handler({})
-
-    # Previous stable render is untouched — atomicity held.
-    assert stable.read_bytes() == b"PREVIOUS_RENDER_BYTES"
-
-
-def test_render_book_reports_success_when_stable_copy_is_locked(
-    tmp_path, monkeypatch
-):
-    """Windows holds an exclusive lock on PDFs opened in a viewer.
-    When the stable copy can't be replaced (PermissionError from
-    ``os.replace``), the versioned PDF still wrote fine — the render
-    succeeded. The agent's reply tells the user the snapshot exists
-    and suggests closing the viewer, instead of falsely reporting a
-    full render failure."""
+def test_render_book_auto_prunes_orphan_images(tmp_path):
+    """Auto-prune still runs after a render — its job is to drop
+    orphan AI illustration retries from ``.book-gen/images/``. The
+    snapshot-cleanup half is a no-op now (no snapshots produced)
+    but the orphan-image sweep still earns its keep."""
     draft = _two_page_draft(tmp_path)
 
-    def fail_replace(_src, _dst):
-        raise PermissionError("file in use by another process")
-
-    monkeypatch.setattr("src.draft.os.replace", fail_replace)
-
-    tool = render_book_tool(
-        get_draft=lambda: draft,
-        get_session_root=lambda: tmp_path,
-    )
-
-    result = tool.handler({})
-
-    output_dir = tmp_path / ".book-gen" / "output"
-    versioned = output_dir / "the_brave_owl.v1.pdf"
-    assert versioned.is_file(), "versioned snapshot must still be written"
-    # Message mentions the snapshot so the user isn't empty-handed.
-    assert "v1" in result
-    # And hints at the viewer-lock cause rather than claiming catastrophic failure.
-    assert "viewer" in result.lower() or "open" in result.lower()
-
-
-def test_render_book_auto_prunes_orphans_and_old_snapshots(tmp_path):
-    draft = _two_page_draft(tmp_path)
-
-    # Pre-existing orphan image — retry leftover, not referenced by the draft.
-    # Matches the ``cover-<10-hex>.png`` shape that ``generate_*_illustration``
-    # actually writes; filenames outside that pattern (e.g. the child's own
-    # extracted ``page-01.png``) are preserved by ``orphaned_images``.
+    # Pre-existing orphan image — retry leftover, not referenced by
+    # the draft. Matches the ``cover-<10-hex>.png`` shape that
+    # ``generate_*_illustration`` actually writes.
     images = tmp_path / ".book-gen" / "images"
     orphan = images / "cover-0123456789.png"
     orphan.write_bytes(b"abc")
-    # Pre-existing snapshots: v1/v2/v3. After this render (v4) with
-    # default keep=3, v1 must go; v2/v3/v4 survive.
-    output_dir = tmp_path / ".book-gen" / "output"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    v1 = output_dir / "the_brave_owl.v1.pdf"
-    v1.write_bytes(b"old-v1")
-    v2 = output_dir / "the_brave_owl.v2.pdf"
-    v2.write_bytes(b"old-v2")
-    v3 = output_dir / "the_brave_owl.v3.pdf"
-    v3.write_bytes(b"old-v3")
 
     tool = render_book_tool(
         get_draft=lambda: draft,
@@ -3443,12 +3309,8 @@ def test_render_book_auto_prunes_orphans_and_old_snapshots(tmp_path):
 
     # Orphan image pruned.
     assert not orphan.exists()
-    # v1 pruned; v2/v3 and the newly-written v4 survive.
-    assert not v1.exists()
-    assert v2.exists()
-    assert v3.exists()
-    assert (output_dir / "the_brave_owl.v4.pdf").is_file()
-    # Stable pointer was written and kept.
+    # Stable A5 was written.
+    output_dir = tmp_path / ".book-gen" / "output"
     assert (output_dir / "the_brave_owl.pdf").is_file()
 
 

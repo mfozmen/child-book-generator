@@ -52,19 +52,24 @@ def test_reader_sequence_puts_blank_after_cover_when_padding():
     assert _reader_sequence(3) == [1, None, 2, 3]
 
 
-def test_reader_sequence_splits_blanks_around_story_for_pad_two():
-    """n=6 (cover + 4 story + back, pad=2). Classic children's-book
-    shape: one blank after cover (inside-front blank), one blank
-    before back cover (inside-back blank), story sandwiched in
-    between starting on a recto."""
-    assert _reader_sequence(6) == [1, None, 2, 3, 4, 5, None, 6]
+def test_reader_sequence_distributes_blanks_at_even_positions_for_pad_two():
+    """n=6 (cover + 4 story + back, pad=2). Blanks at every-other
+    even position (pos 2, pos 4) so saddle-stitch pairing — which
+    pairs (pos 2 + pos 7), (pos 3 + pos 6), (pos 4 + pos 5) onto
+    physical sheets — produces NO sheet with both halves blank.
+    Old rule (PR #68) put both blanks adjacent to the covers
+    (positions 2, 7) which paired them onto the same physical
+    sheet; the imposed A4 PDF then had one entirely-blank page —
+    surfaced on the 2026-04-27 round."""
+    assert _reader_sequence(6) == [1, None, 2, None, 3, 4, 5, 6]
 
 
-def test_reader_sequence_puts_extra_blanks_before_back_cover_for_pad_three():
-    """n=5 (cover + 3 story + back, pad=3). One blank goes after
-    cover (story on recto); the remaining two stack before back
-    cover so back cover still ends up on outside-back."""
-    assert _reader_sequence(5) == [1, None, 2, 3, 4, None, None, 5]
+def test_reader_sequence_distributes_blanks_at_even_positions_for_pad_three():
+    """n=5 (cover + 3 story + back, pad=3). Three blanks at the
+    even slots (pos 2, 4, 6). All three blank-content pairs land
+    on different physical sheets in the saddle-stitch imposition —
+    no all-blank page in the output PDF."""
+    assert _reader_sequence(5) == [1, None, 2, None, 3, None, 4, 5]
 
 
 def test_reader_sequence_rejects_n_less_than_two():
@@ -115,15 +120,16 @@ def test_booklet_order_for_n6_puts_back_cover_on_outside_back():
     )
 
 
-def test_booklet_order_for_n6_has_blank_insides_of_covers():
-    """For n=6 with pad=2 under the real-book rule, the blanks are
-    the inside-front-cover verso (reader pos 2) and the inside-back-
-    cover verso (reader pos 7). On the physical sheet imposition,
-    those both land on the OUTER sheet's back side (``_booklet_order``
-    slots 2 and 3)."""
+def test_booklet_order_for_n6_no_physical_sheet_is_fully_blank():
+    """The whole point of the PR #82 reshape: every consecutive
+    pair in ``_booklet_order`` is a physical sheet side; if any
+    pair is ``(None, None)`` the imposed PDF has a blank page.
+    Pin that no pair on the n=6 imposition is fully blank."""
     order = _booklet_order(6)
-    assert order[2] is None and order[3] is None, (
-        f"outer-sheet back pair must be (None, None) — the inside-"
-        f"front and inside-back blanks — got slots 2,3 = "
-        f"({order[2]!r}, {order[3]!r}); full order: {order!r}"
-    )
+    pairs = [(order[i], order[i + 1]) for i in range(0, len(order), 2)]
+    for left, right in pairs:
+        assert not (left is None and right is None), (
+            f"physical sheet pair {(left, right)} is fully blank — "
+            f"the imposed PDF would have a blank page. Full order: "
+            f"{order!r}"
+        )

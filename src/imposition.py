@@ -7,7 +7,8 @@ from pypdf import PdfReader  # optional; fallback below
 
 def _reader_sequence(n_pages: int) -> list[int | None]:
     """Return a reader-order list of length multiple-of-4 where padding
-    ``None`` slots land in real-book "natural" positions.
+    ``None`` slots are distributed so no single physical sheet of the
+    folded booklet ends up blank-on-both-sides.
 
     The source PDF produced by ``build_pdf`` is always structured as
     ``[cover, story_1 .. story_k, back_cover]``. A printed booklet
@@ -16,22 +17,32 @@ def _reader_sequence(n_pages: int) -> list[int | None]:
       * reader position 1 = outside front cover (source page 1)
       * reader position ``total`` = outside back cover (source page n)
       * story starts on a recto (right-hand page) whenever possible
+      * NO physical A4 sheet has both halves blank in the imposed
+        output
 
-    Rule: if any padding is needed, insert **one blank immediately
-    after the cover** (which moves story 1 onto a recto) and place
-    the remaining ``pad - 1`` blanks immediately **before the back
-    cover**. If ``n_pages`` is already a multiple of 4, no blanks are
-    inserted — accepting that in that edge case story 1 lands on the
-    verso of the cover. The alternative (forcing a recto by adding
-    four extra blanks) would waste an entire A4 sheet for aesthetics,
-    and the rendered A5 PDF still reads correctly; the booklet
-    imposition is the only side that benefits from recto-start.
+    Rule: if any padding is needed, place the blanks at even reader
+    positions starting from position 2 (one after the cover, then
+    every other slot). Story pages fill the remaining odd slots in
+    order. Saddle-stitch imposition pairs reader positions
+    ``(2 + 7), (3 + 6), (4 + 5)`` (and analogues for larger
+    booklets) onto opposite halves of physical sheets — placing
+    blanks at every-other position ensures each pair has at most
+    one blank, so no physical sheet comes out fully blank.
 
-    Replaces the old pad-at-end behaviour where padding ``None`` slots
-    were appended to the source list, which caused the back cover to
-    land on an interior recto and the booklet's outside-back face to
-    come out blank — a bug surfaced the first time a real booklet was
-    folded.
+    Old rule (PR #68) put all padding blanks adjacent to the
+    covers, which meant pad=2 landed both blanks on the verso of
+    the outermost sheet — the imposed A4 PDF then had one entirely
+    blank page, reported on the 2026-04-27 round.
+
+    Trade-off: the older "blank inside-front-cover, blank inside-
+    back-cover" reading shape is replaced with "blank-content
+    blank-content" spreads. Children's-book inside-covers being
+    blank looked clean on the folded artefact but printed as a
+    wasted blank sheet, which was the user-visible cost.
+
+    If ``n_pages`` is already a multiple of 4, no blanks are
+    inserted — story 1 lands on the verso of the cover. (Forcing a
+    recto would cost a whole extra A4 sheet for aesthetics.)
     """
     if n_pages < 2:
         raise ValueError(
@@ -44,11 +55,36 @@ def _reader_sequence(n_pages: int) -> list[int | None]:
     if pad == 0:
         return list(range(1, n_pages + 1))
 
-    before_back_cover = pad - 1
-    sequence: list[int | None] = [1, None]
-    sequence.extend(range(2, n_pages))
-    sequence.extend([None] * before_back_cover)
-    sequence.append(n_pages)
+    total = n_pages + pad
+    # Position 1 = cover; position ``total`` = back cover. Blanks go
+    # in interior positions (2..total-1), preferring even positions
+    # so saddle-stitch pairing — which puts ``(2 + total-1),
+    # (3 + total-2), ..., (k + total-k+1)`` onto opposite halves of
+    # one physical sheet — never lands two blanks on the same
+    # sheet. Even-first ordering achieves that: pos 2 pairs with
+    # pos total-1 (odd), pos 4 pairs with pos total-3 (odd), etc.,
+    # so blanks at even slots always pair with content at odd
+    # slots. Falls back to odd positions only in the degenerate
+    # case where ``pad`` exceeds the count of available even slots
+    # (e.g. n_pages=2 + pad=2: only one even interior position
+    # exists, so the second blank lands on the odd slot — same
+    # physical sheet, unavoidable for a 2-source-page booklet).
+    interior = list(range(2, total))
+    blank_priority = [p for p in interior if p % 2 == 0] + [
+        p for p in interior if p % 2 == 1
+    ]
+    blank_positions = set(blank_priority[:pad])
+    sequence: list[int | None] = []
+    story_iter = iter(range(2, n_pages))  # source pages 2..n-1 are story
+    for pos in range(1, total + 1):
+        if pos == 1:
+            sequence.append(1)
+        elif pos == total:
+            sequence.append(n_pages)
+        elif pos in blank_positions:
+            sequence.append(None)
+        else:
+            sequence.append(next(story_iter))
     return sequence
 
 

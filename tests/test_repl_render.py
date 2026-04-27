@@ -103,10 +103,11 @@ def test_render_slugifies_title_into_filename(tmp_path):
 
     output_dir = tmp_path / ".book-gen" / "output"
     stable = output_dir / "kucuk_ejderha.pdf"
-    versioned = output_dir / "kucuk_ejderha.v1.pdf"
     # Turkish characters ascii-folded, spaces become underscores, all lowercase.
     assert stable.is_file()
-    assert versioned.is_file()
+    # No versioned snapshot — the snapshot system was removed on
+    # the 2026-04-27 round.
+    assert list(output_dir.glob("*.v*.pdf")) == []
 
 
 def test_render_accepts_custom_output_path(tmp_path):
@@ -241,11 +242,12 @@ def test_render_impose_failure_is_reported(tmp_path, monkeypatch):
     assert "imposition broke" in buf.getvalue()
 
 
-def test_render_rerenders_keep_previous_versioned_copy(tmp_path):
-    """Each default-path ``/render`` keeps a ``<slug>-vN.pdf`` snapshot
-    alongside the stable ``<slug>.pdf``. Rendering the same draft twice
-    used to overwrite the single file in place, destroying the earlier
-    PDF; now the first render's versioned copy survives."""
+def test_render_rerenders_overwrite_stable_in_place_no_snapshot(tmp_path):
+    """Each default-path ``/render`` overwrites the stable file in
+    place. The versioned-snapshot system was removed on the
+    2026-04-27 round (user complaint: 4 outputs per render with
+    two pairs identical). Re-rendering the same title produces
+    one stable file, no archive."""
     pdf = _write_pdf(tmp_path, [{"text": "first"}])
 
     repl, _ = _make(
@@ -256,20 +258,18 @@ def test_render_rerenders_keep_previous_versioned_copy(tmp_path):
 
     output_dir = tmp_path / ".book-gen" / "output"
     stable = output_dir / "book.pdf"
-    v1 = output_dir / "book.v1.pdf"
-    v2 = output_dir / "book.v2.pdf"
     assert stable.is_file()
-    assert v1.is_file(), "first render's snapshot must survive the second render"
-    assert v2.is_file(), "second render must produce its own snapshot"
+    # No ``.v*.pdf`` files anywhere.
+    assert list(output_dir.glob("*.v*.pdf")) == []
 
 
-def test_render_writes_versioned_copy_alongside_stable(tmp_path):
-    """A single ``/render`` lands both the stable ``<slug>.pdf`` and a
-    ``<slug>.v1.pdf`` snapshot so nothing is lost if the user renders
-    again later."""
+def test_render_writes_only_stable_files(tmp_path):
+    """A single ``/render`` lands exactly one A5 file at
+    ``<slug>.pdf``. No versioned copy. (Add ``--impose`` for the
+    A4 booklet companion — separate test.)"""
     pdf = _write_pdf(tmp_path, [{"text": "hi"}])
 
-    repl, buf = _make(
+    repl, _ = _make(
         tmp_path,
         [f"/load {pdf}", "/title Book", "/render", "/exit"],
     )
@@ -277,11 +277,9 @@ def test_render_writes_versioned_copy_alongside_stable(tmp_path):
 
     output_dir = tmp_path / ".book-gen" / "output"
     stable = output_dir / "book.pdf"
-    v1 = output_dir / "book.v1.pdf"
     assert stable.is_file()
-    assert v1.is_file()
-    # The snapshot filename surfaces so the user knows a copy was kept.
-    assert "book.v1" in buf.getvalue()
+    # No versioned snapshot.
+    assert list(output_dir.glob("*.v*.pdf")) == []
 
 
 def test_render_custom_path_surfaces_build_failure(tmp_path, monkeypatch):
@@ -307,26 +305,22 @@ def test_render_custom_path_surfaces_build_failure(tmp_path, monkeypatch):
     assert not (out.parent / f"{out.stem}_A4_booklet.pdf").is_file()
 
 
-def test_render_warns_when_stable_copy_is_locked(tmp_path, monkeypatch):
-    """If ``<slug>.pdf`` is held open by a PDF viewer (Windows), the
-    stable mirror raises PermissionError — the REPL reports a
-    yellow hint without aborting. The versioned snapshot still lands."""
-    def fail_replace(_src, _dst):
-        raise PermissionError("file in use")
-
-    monkeypatch.setattr("src.draft.os.replace", fail_replace)
-
+def test_render_custom_path_does_not_version(tmp_path):
+    """An explicit ``/render <path>`` writes exactly to <path>.
+    No versioned copy on the side. Replaces the obsolete
+    ``test_render_warns_when_stable_copy_is_locked`` (locked-stable
+    code path was tied to the versioned-copy mirror, which no
+    longer exists)."""
     pdf = _write_pdf(tmp_path, [{"text": "hi"}])
-    repl, buf = _make(
-        tmp_path, [f"/load {pdf}", "/title Book", "/render", "/exit"]
+    out = tmp_path / "custom" / "book.pdf"
+
+    repl, _ = _make(
+        tmp_path, [f"/load {pdf}", "/title Book", f"/render {out}", "/exit"]
     )
     assert repl.run() == 0
 
-    versioned = tmp_path / ".book-gen" / "output" / "book.v1.pdf"
-    assert versioned.is_file(), "versioned snapshot must still write"
-    output = buf.getvalue().lower()
-    assert "couldn't update" in output
-    assert "viewer" in output or "open" in output
+    assert out.is_file()
+    assert not (out.parent / "book.v1.pdf").is_file()
 
 
 def test_render_custom_path_does_not_version(tmp_path):
@@ -347,17 +341,14 @@ def test_render_custom_path_does_not_version(tmp_path):
     assert not (out.parent / "book.v1.pdf").is_file()
 
 
-def test_versioned_render_auto_prunes_old_snapshots(tmp_path):
+def test_default_render_auto_prunes_orphan_images(tmp_path):
+    """The default ``/render`` flow auto-prunes orphan AI-
+    illustration leftovers from ``.book-gen/images/``. Snapshot
+    cleanup is no longer relevant (no snapshots produced after
+    the 2026-04-27 round) but the orphan-image sweep still earns
+    its keep — every retry of a generate_*_illustration call
+    leaves a file behind."""
     pdf = _write_pdf(tmp_path, [{"text": "hi"}])
-
-    output_dir = tmp_path / ".book-gen" / "output"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    v1 = output_dir / "book.v1.pdf"
-    v1.write_bytes(b"old-v1")
-    v2 = output_dir / "book.v2.pdf"
-    v2.write_bytes(b"old-v2")
-    v3 = output_dir / "book.v3.pdf"
-    v3.write_bytes(b"old-v3")
 
     # Orphan AI-illustration — untracked by the draft, should go.
     images = tmp_path / ".book-gen" / "images"
@@ -371,11 +362,9 @@ def test_versioned_render_auto_prunes_old_snapshots(tmp_path):
     )
     repl.run()
 
-    # The fresh render creates v4. Default keep=3 drops v1, keeps v2/v3/v4.
-    assert (output_dir / "book.v4.pdf").is_file()
-    assert not v1.exists()
-    assert v2.exists()
-    assert v3.exists()
+    # Stable A5 written.
+    output_dir = tmp_path / ".book-gen" / "output"
+    assert (output_dir / "book.pdf").is_file()
     # Orphan image pruned.
     assert not orphan.exists()
 

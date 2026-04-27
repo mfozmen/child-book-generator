@@ -1090,23 +1090,26 @@ def _impose_to_file(repl: Repl, src: Path, booklet: Path) -> bool:
     return True
 
 
-def _resolve_versioned_paths(repl: Repl, source_dir: Path) -> tuple[Path, Path]:
-    from src.draft import next_version_number, slugify
+def _resolve_render_paths(repl: Repl, source_dir: Path) -> tuple[Path, Path]:
+    """Return the two output paths: A5 stable + A4 booklet stable.
+    Versioned snapshots were dropped on the 2026-04-27 round —
+    user complaint was 4 outputs per render with two pairs
+    identical to each other."""
+    from src.draft import slugify
 
     output_dir = source_dir / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     slug = slugify(repl.draft.title)
-    version = next_version_number(output_dir, slug)
     return (
-        output_dir / f"{slug}.v{version}.pdf",
         output_dir / f"{slug}.pdf",
+        output_dir / f"{slug}_A4_booklet.pdf",
     )
 
 
 def _run_custom_render(
     repl: Repl, out: Path, impose: bool, source_dir: Path
 ) -> None:
-    """``/render <path>`` escape hatch — no versioning, no mirroring."""
+    """``/render <path>`` escape hatch."""
     if not _render_to_file(repl, source_dir, out):
         return
     repl._console.print(f"[green]Wrote[/green] {out}")
@@ -1117,36 +1120,26 @@ def _run_custom_render(
         repl._console.print(f"[green]Wrote[/green] {booklet}")
 
 
-def _run_versioned_render(
+def _run_default_render(
     repl: Repl, impose: bool, source_dir: Path
 ) -> None:
-    versioned, stable = _resolve_versioned_paths(repl, source_dir)
-    if not _render_to_file(repl, source_dir, versioned):
+    """The default ``/render`` flow — write A5 + A4 booklet to
+    their stable filenames in ``.book-gen/output/``. No versioning."""
+    a5, booklet = _resolve_render_paths(repl, source_dir)
+    if not _render_to_file(repl, source_dir, a5):
         return
-    stable_ok = _mirror_or_warn(repl, versioned, stable)
-    repl._console.print(f"[green]Wrote[/green] {stable if stable_ok else versioned}")
-    repl._console.print(f"  [dim]snapshot: {versioned.name}[/dim]")
+    repl._console.print(f"[green]Wrote[/green] {a5}")
     if impose:
-        versioned_booklet = versioned.with_name(f"{versioned.stem}_A4_booklet.pdf")
-        stable_booklet = stable.with_name(f"{stable.stem}_A4_booklet.pdf")
-        if not _impose_to_file(repl, versioned, versioned_booklet):
-            _auto_prune(repl, source_dir)
-            return
-        booklet_ok = stable_ok and _mirror_or_warn(
-            repl, versioned_booklet, stable_booklet
-        )
-        repl._console.print(
-            f"[green]Wrote[/green] "
-            f"{stable_booklet if booklet_ok else versioned_booklet}"
-        )
-        repl._console.print(f"  [dim]snapshot: {versioned_booklet.name}[/dim]")
+        if _impose_to_file(repl, a5, booklet):
+            repl._console.print(f"[green]Wrote[/green] {booklet}")
     _auto_prune(repl, source_dir)
 
 
 def _auto_prune(repl: Repl, source_dir: Path) -> None:
-    """Quietly drop orphan images and old snapshots after a versioned
-    render. Only the versioned path uses ``.book-gen/`` as its home, so
-    the custom-path escape hatch deliberately skips this."""
+    """Quietly drop orphan images after a render. Snapshot
+    cleanup is a no-op now (snapshots no longer produced) but the
+    orphan-image sweep still earns its keep — every
+    ``generate_*_illustration`` retry leaves a file behind."""
     from src.prune import prune
 
     session_root = source_dir.parent
@@ -1175,7 +1168,7 @@ def _cmd_render(repl: Repl, args: str) -> None:
             repl, Path(remaining).expanduser(), impose, source_dir
         )
     else:
-        _run_versioned_render(repl, impose, source_dir)
+        _run_default_render(repl, impose, source_dir)
     return None
 
 
