@@ -1,6 +1,140 @@
 # CHANGELOG
 
 
+## v1.20.2 (2026-04-27)
+
+### Bug Fixes
+
+- **render**: Two outputs only + no fully-blank booklet sheet
+  ([#82](https://github.com/mfozmen/littlepress-ai/pull/82),
+  [`400824a`](https://github.com/mfozmen/littlepress-ai/commit/400824a3846d3f94d7362f7917e224848e3db97f))
+
+* fix(render): two outputs only + no fully-blank booklet sheet
+
+Two complaints from the 2026-04-27 live render, fixed together because they both touch the
+  render-output shape.
+
+PROBLEM 1 — four output files for one render. ``render_book`` produced ``<slug>.pdf`` (stable A5)
+  plus ``<slug>.v1.pdf`` (versioned A5 snapshot) plus the same pair for the booklet. User saw two
+  pairs of identical files and asked "why is this producing so much stuff?" The versioned-snapshot
+  system was added for "rollback / compare drafts" but in practice the user just wanted the latest
+  A5 + A4 booklet.
+
+Removed the versioned filenames entirely. ``render_book`` now writes directly to ``<slug>.pdf`` and
+  ``<slug>_A4_booklet.pdf``, overwriting in place on re-render. The same simplification applied to
+  the REPL ``/render`` slash command (renamed ``_run_versioned_render`` → ``_run_default_render``,
+  ``_resolve_versioned_paths`` → ``_resolve_render_paths``).
+
+The atomic-mirror code path (``_mirror_stable``, ``_mirror_or_warn``) is no longer exercised —
+  there's no versioned-vs-stable mirror to atomically swap. ``next_version_number`` and
+  ``atomic_copy`` in ``src/draft.py`` are kept (other call sites + slash-command custom-path render
+  still use ``slugify`` from the same module) but their snapshot-counting path is dead code; a
+  follow-up can prune.
+
+The auto-prune housekeeping still runs but now only sweeps orphan AI-illustration images
+  (snapshot-cleanup half is a no-op with no snapshots).
+
+PROBLEM 2 — fully-blank A4 page in the imposed booklet. The ``_reader_sequence`` rule from PR #68
+  placed pad blanks adjacent to the covers (one after cover, the rest before back cover).
+  Saddle-stitch imposition pairs reader positions onto opposite halves of physical sheets — putting
+  both pad=2 blanks at positions 2 and 7 paired them onto the back side of the outermost sheet,
+  producing one entirely blank page in the imposed PDF.
+
+New rule: blanks at every-OTHER position starting from pos 2 (``{2, 4, 6, ...}`` up to ``pad``
+  slots). Saddle-stitch pairing puts even positions opposite odd positions, so blanks at even slots
+  always land facing content at odd slots — no fully-blank sheet. Falls back to odd positions only
+  in the degenerate n_pages=2 + pad=2 case where one even interior slot exists.
+
+Trade-off documented in the docstring: the old "blank inside-front-cover, blank inside-back-cover"
+  reading shape (clean children's-book bookends) is replaced with "blank-content blank-content"
+  spreads. The user's stated cost was the all-blank imposed sheet, which the new shape eliminates.
+
+Tests:
+
+- 12 tests in ``tests/test_agent_tools.py`` and ``tests/test_repl_render.py`` that pinned
+  versioned-snapshot behaviour deleted or rewritten: * ``...writes_stable_and_versioned_copy`` →
+  ``...writes_only_stable_files_no_versioning`` *
+  ``...second_render_does_not_clobber_the_first_versioned_copy`` →
+  ``...second_render_overwrites_first_no_archive`` * ``...booklet_is_also_versioned`` removed *
+  ``...mentions_versioned_path_in_message`` removed * ``...uses_atomic_copy_for_the_stable_mirror``
+  removed * ``...reports_success_when_stable_copy_is_locked`` removed (locked-stable scenario was
+  tied to the mirror) * ``...auto_prunes_orphans_and_old_snapshots`` →
+  ``...auto_prunes_orphan_images`` (snapshot half no longer applicable) *
+  ``...rerenders_keep_previous_versioned_copy`` →
+  ``...rerenders_overwrite_stable_in_place_no_snapshot`` *
+  ``...writes_versioned_copy_alongside_stable`` → ``...writes_only_stable_files`` *
+  ``...warns_when_stable_copy_is_locked`` removed (mirror is gone) → repurposed as
+  ``...custom_path_does_not_version`` * ``...versioned_render_auto_prunes_old_snapshots`` →
+  ``...default_render_auto_prunes_orphan_images``
+
+- ``tests/test_imposition.py``: * ``..._splits_blanks_around_story_for_pad_two`` →
+  ``..._distributes_blanks_at_even_positions_for_pad_two`` *
+  ``..._puts_extra_blanks_before_back_cover_for_pad_three`` →
+  ``..._distributes_blanks_at_even_positions_for_pad_three`` * ``..._has_blank_insides_of_covers`` →
+  ``..._no_physical_sheet_is_fully_blank`` (pins the new invariant directly).
+
+- The ``test_render_book_message_explains...`` and
+  ``..._names_a5_role_without_booklet_when_impose_false`` tests updated to match the simplified
+  message wording (no more "snapshot at vN" framing).
+
+README updated to describe the new "exactly two PDFs per render, overwrite in place" behaviour.
+
+Full suite: 749 passing (was 755; net -6 from removed tests that no longer make sense, +0 new —
+  every removed test was pinning behaviour the user explicitly asked us to drop).
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(render): address PR #82 review — README, dup test, invariant range, dead code
+
+Four findings, all addressed.
+
+1. (score 100) README L44 said "no versioned snapshots" but L45 immediately below still claimed
+  "Never overwrites a previous render. Each render keeps a numbered snapshot…", and L46 described
+  auto-prune sweeping ``snapshot PDFs beyond the most-recent 3`` with a ``--keep N`` knob. Both
+  claims are obsolete after PR #82's snapshot removal — the consecutive bullets contradicted each
+  other. Deleted L45 entirely; L46 trimmed to mention only the orphan-image sweep (no more
+  ``--keep`` flag — it was tied to snapshot count).
+
+2. (score 100) ``test_render_custom_path_does_not_version`` was defined twice in
+  ``tests/test_repl_render.py`` (lines 308 and 326). Python silently rebinds the name; pytest
+  collected only the second definition, so the first one was dead code. Verified the duplicate
+  happened during this PR's rewrite (I added a new replacement test alongside an existing test that
+  already had the same name and forgot to delete the original). Deleted the first occurrence.
+
+3. (score 75) New invariant test ``test_booklet_order_for_n6_no_physical_sheet_is_fully_blank`` only
+  covered n=6. The PR's "no fully-blank sheet" promise needed coverage across the realistic-book
+  size range, plus the ``n=2`` degenerate case (cover + back only, pad=2, both interior slots forced
+  blank) needed explicit pinning rather than just an inline-comment caveat. Replaced with two tests:
+  * ``test_booklet_order_no_physical_sheet_fully_blank_for_realistic_book_sizes`` iterates n=3..30
+  and asserts no fully-blank pair anywhere. *
+  ``test_booklet_order_n2_is_the_documented_degenerate_exception`` pins n=2 as the ONE case where
+  the invariant cannot hold, by construction.
+
+4. (score 50) Dead imports / orphaned helpers / stale docs: * ``src/agent_tools.py:59`` removed
+  unused ``next_version_number`` and ``atomic_copy`` from the ``from src.draft import ...`` line. *
+  ``_mirror_stable`` in ``src/agent_tools.py`` deleted (dead — caller ``_impose_and_mirror`` was
+  removed in this PR; the new flow writes directly to stable paths). * ``_mirror_or_warn`` in
+  ``src/repl.py`` deleted (dead — caller ``_run_versioned_render`` was removed; the new
+  ``_run_default_render`` writes directly to stable). * ``CLAUDE.md:29`` no longer claims
+  ``next_version_number + atomic_copy`` "support the versioned render flow" — the versioned flow
+  doesn't exist any more. * ``CLAUDE.md:39`` no longer says "every versioned render"; the
+  snapshot-PDF cleanup half of prune is now documented as a no-op (PR #82's snapshot removal). *
+  ``_render_to_file`` docstring in ``src/repl.py`` no longer mentions ".vN.pdf snapshot"; rewrites
+  the description around the default-path + custom-path-escape-hatch shape.
+
+The functions ``next_version_number`` and ``atomic_copy`` themselves stay defined in
+  ``src/draft.py`` — they're library API the reviewer didn't call out for removal, and a future
+  versioning feature could pick them back up. Per CLAUDE.md no preemptive abstraction-pruning beyond
+  what the review asks for.
+
+Full suite: 750 passing (was 749; +1 from splitting the n=6 invariant test into the n>=3 range
+  version + the n=2 exception test).
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+
 ## v1.20.1 (2026-04-27)
 
 ### Bug Fixes
@@ -72,6 +206,11 @@ Line 114 (the REPL ``/render --impose`` slash command description) intentionally
 ---------
 
 Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+### Chores
+
+- **release**: 1.20.1 [skip ci]
+  ([`e31ee81`](https://github.com/mfozmen/littlepress-ai/commit/e31ee81af34311f6b252dd18d19d1f9169645ac1))
 
 
 ## v1.20.0 (2026-04-26)
