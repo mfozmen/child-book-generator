@@ -1,7 +1,85 @@
 # CHANGELOG
 
 
+## v1.20.1 (2026-04-27)
+
+### Bug Fixes
+
+- **render**: Make A4 booklet the default output, not opt-in
+  ([#81](https://github.com/mfozmen/littlepress-ai/pull/81),
+  [`b3995e3`](https://github.com/mfozmen/littlepress-ai/commit/b3995e3c2a37d59ffb1b2944f3e4d8bcf6741fe4))
+
+* fix(render): make A4 booklet the default output, not opt-in
+
+Reported on the 2026-04-27 live render: user got only the A5 reading copy in the output directory —
+  no A4 booklet to print, fold, and staple. Root cause: ``render_book``'s ``impose`` parameter
+  defaulted to ``False``, so an agent calling ``render_book()`` with no args produced only the A5
+  pair.
+
+The booklet IS the print artefact — the user's whole reason for running Littlepress. The A5 stable
+  PDF is the reading copy / viewer-friendly version; the A4 booklet is what gets printed, folded,
+  and stapled into a real book. Defaulting to "no booklet" hid the actual deliverable behind a
+  parameter the agent had to remember.
+
+Default flipped: ``impose`` now defaults to ``True``. Callers who explicitly want A5-only pass
+  ``impose=False`` (escape hatch preserved). The booklet-imposition pass is fast (pypdf 2-up) and
+  the snapshot housekeeping handles the extra files cleanly, so there's no cost reason to keep it
+  opt-in.
+
+Tool description and schema description also updated to name the booklet as the print artefact and
+  the A5 as the reading copy — matches the role-naming used in the success message.
+
+Tests:
+
+- ``test_render_book_default_produces_a5_and_booklet`` (renamed from ``...writes_a5_by_default``)
+  pins the new default: a no-arg call produces BOTH the A5 stable file and the ``_A4_booklet.pdf``
+  companion. - ``test_render_book_message_names_a5_role_without_booklet_when_impose_false`` now
+  passes ``impose=False`` explicitly to exercise the opt-out path (it was passing the default ``{}``
+  before, which under the new default would produce a booklet and bust the negative asserts).
+
+Other render-related tests already pass ``impose=True`` or ``impose=False`` explicitly, so no
+  further updates needed.
+
+Full suite: 755 passing.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* docs(render): address PR #81 review — README + viewer-test scoping
+
+Two findings, both addressed.
+
+1. (score 100, CLAUDE.md violation) README not updated to reflect the new ``impose=True`` default.
+  CLAUDE.md is explicit: user-visible behaviour changes MUST update README in the same PR. Three
+  lines that described the old "optional" / "when you ask" framing rewritten to match the new
+  "produced on every render" reality:
+
+- L10: "plus an **optional** A4 imposed booklet" → "and the matching A4 imposed booklet … generated
+  alongside on every render" - L19: "plus an **optional** A4 imposed booklet for home printing" →
+  "plus the matching A4 imposed booklet … both produced on every render" - L44: "and, **when you
+  ask**, an A4 2-up booklet" → "Writes both an A5 PDF and an A4 2-up booklet … on every render";
+  also names the A5/A4 roles (reading copy / print artefact) and adds the ``impose=false`` opt-out
+  hint for completeness.
+
+Line 114 (the REPL ``/render --impose`` slash command description) intentionally not touched — that
+  surface is a separate from the agent tool's default and isn't changed by this PR.
+
+2. (score 50) ``test_render_book_viewer_failure_is_non_fatal`` was passing ``{}`` to the handler,
+  which under the new ``impose=True`` default also runs real booklet imposition end-to-end. The
+  test's stated purpose is the viewer-failure path; coupling it to pypdf's imposition pipeline means
+  a pypdf regression elsewhere would fail this test for the wrong reason. Updated to pass
+  ``{"impose": False}`` explicitly to scope the test to what it claims to test.
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+
 ## v1.20.0 (2026-04-26)
+
+### Chores
+
+- **release**: 1.20.0 [skip ci]
+  ([`32989f4`](https://github.com/mfozmen/littlepress-ai/commit/32989f47f2340ad46e36d5e3852399d5df6633e3))
 
 ### Features
 
