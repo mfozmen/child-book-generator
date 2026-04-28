@@ -225,6 +225,22 @@ def test_n6_imposition_pairs_match_real_book_shape():
     ]
 
 
+def test_booklet_order_n2_is_the_documented_degenerate_exception():
+    """``_reader_sequence(2)`` is the one case where the
+    "no mid-story blank" promise is vacuous: cover + back cover
+    only, zero story, pad=2. Both interior slots (pos 2 and pos 3)
+    must be blank, and saddle-stitch pairs them onto opposite
+    halves of the single physical sheet — producing one
+    fully-blank A4 sheet by construction.
+
+    Pinned explicitly so a future ``_booklet_order`` refactor
+    (different folding algorithm, different pair grouping) can't
+    silently regress the n=2 case. Practically unreachable from
+    the agent flow (``build_pdf`` always emits cover + back +
+    story pages), but the contract still has to hold."""
+    assert _booklet_order(2) == [2, 1, None, None]
+
+
 def test_n6_blank_a4_page_is_the_inside_of_outer_cover_sheet():
     """The fully-blank pair in the n=6 imposition is specifically
     the verso of the OUTER cover sheet — which becomes the

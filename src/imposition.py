@@ -35,13 +35,29 @@ def _reader_sequence(n_pages: int) -> list[int | None]:
 
     * THIS rule (clean reading flow): blanks at position 2 and
       position total-1. Story flows uninterrupted between them.
-      Imposition pairs position 2 with position total-1 onto the
-      same physical sheet (the verso of the outer cover-sheet) —
-      so the imposed A4 PDF has one fully-blank A4 page. That page
-      becomes the inside-front-cover (left, blank) + inside-back-
-      cover (right, blank) when folded, which IS THE STANDARD
-      LAYOUT IN PRINTED CHILDREN'S BOOKS. Open any picture book —
-      the inside-front and inside-back covers are commonly blank.
+
+      Pad-2 books (n=6, 10, …) — the common case. Imposition
+      pairs position 2 with position total-1 onto the same
+      physical sheet (the verso of the outer cover-sheet) — so
+      the imposed A4 PDF has exactly one fully-blank A4 page.
+      That page becomes the inside-front-cover (left, blank) +
+      inside-back-cover (right, blank) when folded, which IS THE
+      STANDARD LAYOUT IN PRINTED CHILDREN'S BOOKS. Open any
+      picture book — the inside-front and inside-back covers are
+      commonly blank.
+
+      Pad-3 books (n=5, 9, …) — the third blank stacks just
+      before the back cover. Imposition still produces one
+      fully-blank A4 page (verso of the outer cover-sheet, same
+      shape as pad=2) PLUS one extra blank-content A4 page
+      (one of the inner sheets pairs the third blank with story
+      page 1). The story still flows uninterrupted; the extra
+      blank-content spread is on the booklet's first opening
+      after the inside-front blank.
+
+      Pad-1 books (n=3, 7, …) — single blank lands at position 2
+      only. Imposition has one blank-content A4 page (inside-
+      front blank + content); no fully-blank page.
 
     * ALTERNATIVE (PR #82, reverted here): blanks distributed
       across the imposition so every A4 page has at least one
