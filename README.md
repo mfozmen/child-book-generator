@@ -132,6 +132,8 @@ On first launch the shell asks which provider to use — Claude, GPT, Gemini, or
 
 Print the `_A4_booklet.pdf` on A4 paper **double-sided, flipped on the short edge**. Fold the stack in half and staple along the spine — you now have an A5 book.
 
+The settings vary slightly per print dialog (Adobe Reader, browser PDFs, macOS Preview, manual-duplex printers like the Canon MX series). See **[`docs/printing.md`](docs/printing.md)** for a step-by-step guide with viewer-specific instructions, manual-duplex flip orientation, fold + staple steps, and an explanation of why the booklet has one blank A4 page (it's the inside-cover wrap and folds correctly — not a bug).
+
 ## Testing
 
 The project follows **test-driven development**. Every feature and bug fix starts with a failing test.
