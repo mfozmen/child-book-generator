@@ -278,4 +278,13 @@ def collect_metadata(
     collect_series(draft, read_line, console, lang=lang)
     cover = collect_cover_choice(draft, read_line, console, lang=lang)
     back_cover = collect_back_cover(draft, read_line, console, lang=lang)
+    # The child often writes the book title at the top of the first
+    # physical page; OCR captures it and the rendered book ends up
+    # with the title twice (cover + first interior page). Now that
+    # ``draft.title`` is final (series-volume suffix applied), drop
+    # the duplicate header line if the first non-hidden page starts
+    # with one. Idempotent — re-running ``/metadata`` is safe.
+    from src.title_strip import strip_title_header_from_first_page
+
+    strip_title_header_from_first_page(draft)
     return MetadataChoices(cover=cover, back_cover=back_cover)

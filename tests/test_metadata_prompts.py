@@ -684,3 +684,48 @@ def test_collect_metadata_returns_ai_flags_when_ai_branches_chosen(tmp_path):
     # AI branches left cover and back-cover untouched.
     assert draft.cover_image is None
     assert draft.back_cover_text == ""
+
+
+def test_collect_metadata_strips_duplicate_title_header_from_first_page(tmp_path):
+    """Reported 2026-04-28: the cover renders the user-typed title;
+    the first interior story page also begins with a near-identical
+    header from OCR (the child wrote the title at the top of the
+    physical page). Result: title appears twice. After
+    ``collect_metadata`` finishes — title is now known and the
+    series-volume suffix has been applied — a title-header strip
+    pass should drop the duplicate from the first non-hidden page.
+    Casefold + diacritic-fold + sequence similarity covers the
+    typed-vs-OCR'd spelling drift (typed ``Dinazor`` vs OCR'd
+    ``DİNOZOR``)."""
+    from src.draft import DraftPage
+    from src.metadata_prompts import collect_metadata
+
+    # First-page text mimics the OCR result for the yavru_dinozor
+    # input: a header line that the child wrote at the top of the
+    # page, captured by the vision pass.
+    first = DraftPage(
+        text="YAVRU DİNOZOR 1\nBir gün bir yumurta çatlamış...",
+        image=None,
+        layout="text-only",
+    )
+    second = DraftPage(text="Story continues.", image=None, layout="text-only")
+    draft = Draft(source_pdf=tmp_path / "x.pdf", pages=[first, second])
+
+    collect_metadata(
+        draft,
+        _scripted([
+            "Yavru Dinazor",   # title
+            "Ece",              # author
+            "y", "1",           # series + volume → title becomes "Yavru Dinazor - 1"
+            "c",                # cover: poster (no follow-up prompts)
+            "a",                # back-cover: none
+        ]),
+        _console(),
+    )
+
+    # Sanity: title got the volume suffix.
+    assert draft.title == "Yavru Dinazor - 1"
+    # Strip ran: first-page header is gone, body text remains.
+    assert draft.pages[0].text == "Bir gün bir yumurta çatlamış..."
+    # Second page is untouched.
+    assert draft.pages[1].text == "Story continues."
