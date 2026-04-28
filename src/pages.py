@@ -24,11 +24,27 @@ def _wrap(text: str, font: str, size: float, max_width: float) -> list[str]:
     return lines
 
 
+_ORPHAN_MAX_CHARS = 5  # last-line single-word orphan threshold
+
+
 def _wrap_paragraph(
     paragraph: str, font: str, size: float, max_width: float
 ) -> list[str]:
-    """Greedy word-wrap of a single paragraph — words too wide for the
-    line break to the next line on their own."""
+    """Greedy word-wrap of a single paragraph with widow control —
+    words too wide for the line break to the next line on their own,
+    and a short single-word last-line "orphan" gets a friend pulled
+    from the line above so it doesn't sit alone in print.
+
+    The orphan rule fires when the last line is a single token of
+    ≤ ``_ORPHAN_MAX_CHARS`` characters. The previous line's last
+    word gets pulled down to join it, but only if the combined
+    line still fits within ``max_width`` — typography control mustn't
+    create a different problem (overflow). Reported 2026-04-28 from
+    the printed yavru_dinozor booklet, where the OCR-transcribed
+    ``... yumurta dan`` (Samsung Notes spacing artefact — should
+    have been ``yumurtadan``) wrapped as ``... yumurta`` plus a
+    lone ``dan`` on the next line.
+    """
     lines: list[str] = []
     current = ""
     for word in paragraph.split():
@@ -41,7 +57,34 @@ def _wrap_paragraph(
         current = word
     if current:
         lines.append(current)
-    return lines
+    return _avoid_short_orphan(lines, font, size, max_width)
+
+
+def _avoid_short_orphan(
+    lines: list[str], font: str, size: float, max_width: float
+) -> list[str]:
+    """If the last line is a single short token, pull the previous
+    line's last word down to keep them together. No-op when the
+    last line is already multi-word, when the previous line has
+    only one word (nothing to pull), or when the merged line would
+    overflow ``max_width``."""
+    if len(lines) < 2:
+        return lines
+    last = lines[-1].strip()
+    if not last or " " in last or len(last) > _ORPHAN_MAX_CHARS:
+        return lines
+    prev = lines[-2]
+    parts = prev.rsplit(" ", 1)
+    if len(parts) < 2:
+        # Previous line was already a single word — nothing to pull.
+        return lines
+    new_prev, pulled = parts
+    merged = pulled + " " + last
+    if pdfmetrics.stringWidth(merged, font, size) > max_width:
+        # Pulling would overflow — orphan stays. Better an orphan
+        # than a too-wide line.
+        return lines
+    return lines[:-2] + [new_prev, merged]
 
 
 def _draw_text_block(
