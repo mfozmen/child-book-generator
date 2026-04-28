@@ -1,6 +1,94 @@
 # CHANGELOG
 
 
+## v1.20.3 (2026-04-28)
+
+### Bug Fixes
+
+- **imposition**: Revert blank distribution; clean reading flow + inside-cover blanks
+  ([#83](https://github.com/mfozmen/littlepress-ai/pull/83),
+  [`95ce5d7`](https://github.com/mfozmen/littlepress-ai/commit/95ce5d70122080187e5aa22891c8aee27d4c0034))
+
+* fix(imposition): revert blank distribution; pin reading-flow + inside-cover layout
+
+User reviewed the booklet output of the 2026-04-27 PR and rejected the distributed-blanks shape:
+  "page 2's neighbor is blank, page 4 too — you were supposed to only remove in-between blank
+  pages."
+
+The 2026-04-27 round (PR #82) attempted to "fix" the all-blank A4 page by distributing pad blanks
+  across even reader positions. That removed the all-blank A4 page but introduced blank slots facing
+  content slots in the middle of the story flow:
+
+Spread 1: blank + S1 ← entering Spread 2: blank + S2 ← interrupts story Spread 3: S3 + S4 ← clean
+  ... back cover
+
+The user's mental model of the booklet is the FOLDED, READ artefact, not the imposed PDF on screen.
+  From a real-book perspective, blanks should land at the inside-front-cover and inside-back-cover
+  positions — where children's books normally have blank inside-cover pages. Story flows
+  uninterrupted between them.
+
+Reverted ``_reader_sequence`` to the pre-PR-#82 rule: pad ≥ 1 puts one blank at position 2
+  (inside-front-cover, story-on-recto), and the remaining ``pad - 1`` blanks stack at position
+  ``total - 1`` (inside-back-cover, plus an extra slot when pad = 3). Story positions 3..total-pad-1
+  hold source pages contiguously with no None interruptions.
+
+n=6: [1, None, 2, 3, 4, 5, None, 6] Spread 1: blank + S1 ← entering, blank inside-front Spread 2: S2
+  + S3 ← clean middle Spread 3: S4 + blank ← exiting, blank inside-back
+
+The trade-off this carries: imposition pairs position 2 with position total-1 onto the same physical
+  sheet (the verso of the outer cover-sheet). That A4 page in the imposed PDF is fully blank when
+  read on screen — but it FOLDS to the standard children's-book inside-cover wrap (left side blank,
+  right side blank, both hidden inside the booklet's covers). It's the right answer for print, even
+  though it looks odd as a standalone A4 page.
+
+Tests rewritten "düzgün" per the user's request:
+
+- Reading-flow rule pinned for each pad class (1, 2, 3) with explicit sequence assertions. -
+  ``test_reader_sequence_pad_two_story_has_no_mid_flow_blanks`` pins the user-visible promise — no
+  blank interrupts the contiguous story block. -
+  ``test_reader_sequence_story_flows_uninterrupted_for_realistic_book_sizes`` generalises the rule
+  to n=3..30 (every realistic book size). - ``test_n6_imposition_pairs_match_real_book_shape`` walks
+  each A4 sheet of the n=6 imposition explicitly with comments naming the role: outer-outer = cover
+  wrap, outer-inner = inside-cover blanks, inner-outer = first story spread, inner-inner = second
+  story spread. Future imposition tweaks fail this test loudly. -
+  ``test_n6_blank_a4_page_is_the_inside_of_outer_cover_sheet`` pins the EXPECTED location of the
+  all-blank A4 page (the verso of the outer cover sheet, NOT a random middle page) so a regression
+  that puts it elsewhere fires immediately.
+
+Module docstring rewrites the "REAL-BOOK CONTEXT" section so the next contributor doesn't repeat the
+  2026-04-27 round's distributed-blanks attempt.
+
+Full suite: 751 passing.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(imposition): address PR #83 review — pad=3 disclosure + n=2 test reinstated
+
+Three review findings, all addressed.
+
+1. (score 50) The REAL-BOOK CONTEXT docstring claimed "the imposed A4 PDF has one fully-blank A4
+  page" without qualifying for pad. True for pad=2 (n=6, 10, …); for pad=3 (n=5, 9, …) the third
+  blank also creates an extra blank-content spread alongside the fully-blank page. Story flow still
+  uninterrupted, but the docstring under-disclosed the case. Rewrote the trade-off section to spell
+  out all three pad classes (1, 2, 3) and what their respective imposition outputs look like.
+
+2. (score 25) Turkish "düzgün" in the previous commit body. Same class as PR #66 ``sen yaz`` and PR
+  #73 ``samsung notes'tan…``; borderline per CLAUDE.md (commit messages are documentation). Already
+  pushed; logging the avoidance for future commits.
+
+3. (score 75) PR #82's round-2 added a regression test pinning ``_booklet_order(2) == [2, 1, None,
+  None]`` as the documented degenerate exception. PR #83's test rewrite removed it. The surviving
+  range test only covers the reader-sequence layer for n=2..19; the booklet-order pairing for n=2
+  became unpinned. Reinstated as ``test_booklet_order_n2_is_the_documented_ degenerate_exception``
+  so a future ``_booklet_order`` refactor can't silently regress this corner.
+
+Full suite: 752 passing (+1 from reinstated n=2 test).
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+
 ## v1.20.2 (2026-04-27)
 
 ### Bug Fixes
@@ -133,6 +221,11 @@ Full suite: 750 passing (was 749; +1 from splitting the n=6 invariant test into 
 ---------
 
 Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+### Chores
+
+- **release**: 1.20.2 [skip ci]
+  ([`7b37155`](https://github.com/mfozmen/littlepress-ai/commit/7b371551f7c3f40279ff399d4c25fdda39844aee))
 
 
 ## v1.20.1 (2026-04-27)
