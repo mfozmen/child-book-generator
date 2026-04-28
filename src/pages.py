@@ -24,7 +24,18 @@ def _wrap(text: str, font: str, size: float, max_width: float) -> list[str]:
     return lines
 
 
-_ORPHAN_MAX_CHARS = 5  # last-line single-word orphan threshold
+# Last-line single-word orphan threshold. Calibrated for Turkish:
+# catches the common 2–4-char particles that sit alone on a line and
+# look like layout bugs in print — ``bir`` (a/one), ``ve`` (and),
+# ``de`` / ``da`` (also/too), ``ki`` (that), ``bu`` (this), ``o``
+# (he/she/it), and the ``dan`` / ``den`` ablative endings that
+# sometimes get separated by OCR. The yavru_dinozor 2026-04-28 case
+# that drove this rule was exactly that: ``yumurta dan`` greedy-
+# wrapped with ``dan`` orphaned. Threshold lives at the upper edge of
+# Turkish particle length so English short-word orphans (``the``,
+# ``and``, ``of``) get caught too. Lower this to 3 if you want to
+# target only the truly egregious 1–2-char isolates.
+_ORPHAN_MAX_CHARS = 5
 
 
 def _wrap_paragraph(
@@ -64,10 +75,18 @@ def _avoid_short_orphan(
     lines: list[str], font: str, size: float, max_width: float
 ) -> list[str]:
     """If the last line is a single short token, pull the previous
-    line's last word down to keep them together. No-op when the
-    last line is already multi-word, when the previous line has
-    only one word (nothing to pull), or when the merged line would
-    overflow ``max_width``."""
+    line's last word down to keep them together. No-op when:
+
+      * fewer than 2 lines (nothing to pull from),
+      * last line is already multi-word or longer than the threshold,
+      * the previous line has only one word (nothing to pull),
+      * the merged line would overflow ``max_width``,
+      * the pull would relocate the orphan one row up — i.e., what
+        remains on the previous line after the pull is itself a
+        short single-word orphan. ``['aaa bbb', 'cc']`` pulled →
+        ``['aaa', 'bbb cc']`` is not an improvement; it's just the
+        same visual problem shifted up.
+    """
     if len(lines) < 2:
         return lines
     last = lines[-1].strip()
@@ -83,6 +102,11 @@ def _avoid_short_orphan(
     if pdfmetrics.stringWidth(merged, font, size) > max_width:
         # Pulling would overflow — orphan stays. Better an orphan
         # than a too-wide line.
+        return lines
+    new_prev_stripped = new_prev.strip()
+    if " " not in new_prev_stripped and len(new_prev_stripped) <= _ORPHAN_MAX_CHARS:
+        # The pull would strand a new short orphan one line up.
+        # Refuse — we'd be moving the problem, not solving it.
         return lines
     return lines[:-2] + [new_prev, merged]
 

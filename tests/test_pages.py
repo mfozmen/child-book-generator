@@ -141,28 +141,104 @@ def test_wrap_orphan_fix_does_not_overflow_max_width():
     """The orphan-control rule pulls a word from the previous line
     down to merge with the orphan. If the pulled-down combined line
     no longer fits within ``max_width``, the rule must NOT apply —
-    a too-wide line is worse than a short orphan."""
+    a too-wide line is worse than a short orphan.
+
+    Construct an actual overflow case where the merged line would
+    exceed ``max_width`` but the relocation guard does NOT fire —
+    so we know the OVERFLOW guard is what's keeping the orphan in
+    place, not a different early-return.
+
+      * input "a b supercalifragilistic thing" at max_width=160
+      * greedy wrap → ['a b supercalifragilistic', 'thing']
+        ('a b supercalifragilistic' ≈ 153pt ≤ 160;
+         'thing' = 5 chars, qualifies as orphan)
+      * pull would produce ['a b', 'supercalifragilistic thing']
+        (merged 'supercalifragilistic thing' ≈ 168pt > 160 — REJECT)
+
+    The remaining 'a b' is multi-word, so the orphan-relocation
+    guard does not fire — only the overflow guard does. Without it,
+    a 168pt line would be drawn on a 160pt-wide page.
+    """
     register_fonts()
-    # Construct a case where the previous line's last word, if
-    # pulled down, would make the combined orphan-line wider than
-    # max_width. The "long_word" is wide enough that "long_word
-    # short" doesn't fit on one line at this max_width.
+    from src.pages import pdfmetrics as _pdfmetrics
+
     lines = _wrap(
-        "supercalifragilistic short",
+        "a b supercalifragilistic thing",
         "DejaVuSans",
         14,
-        max_width=180,
+        max_width=160,
     )
 
     for ln in lines:
-        from src.pages import pdfmetrics as _pdfmetrics
-        from src.fonts import register_fonts as _r
-        _r()
         w = _pdfmetrics.stringWidth(ln, "DejaVuSans", 14)
-        assert w <= 180 + 1, (
-            f"line {ln!r} width {w:.1f} exceeds max_width 180 — "
+        assert w <= 160 + 1, (
+            f"line {ln!r} width {w:.1f} exceeds max_width 160 — "
             f"orphan-control over-pulled and broke the wrap"
         )
+
+    # Belt-and-braces: confirm the wrap actually exercised the
+    # overflow path (≥2 lines, last line is still the orphan
+    # candidate). Otherwise the test would degenerate into the
+    # early-exit ``len(lines) < 2`` case — which is exactly the
+    # vacuous shape the previous version of this test had.
+    assert len(lines) >= 2, (
+        f"test no longer exercises the overflow guard — wrap "
+        f"produced only {len(lines)} line(s): {lines!r}"
+    )
+    assert lines[-1].strip() == "thing", (
+        f"expected the orphan 'thing' to remain on its own line "
+        f"(overflow guard refused the pull); got lines {lines!r}"
+    )
+
+
+def test_avoid_short_orphan_skips_when_pull_would_relocate_orphan():
+    """If pulling the previous line's last word would leave a NEW
+    short single-word orphan one row up, the rule must not apply —
+    we'd just be relocating the orphan, not solving it.
+
+    Example: ``['aaa bbb', 'cc']`` pulled would give
+    ``['aaa', 'bbb cc']``. ``aaa`` is itself a 3-char single-word
+    orphan now; the visual problem moved up one line. Better to
+    keep the original wrap.
+    """
+    register_fonts()
+    from src.pages import _avoid_short_orphan
+
+    result = _avoid_short_orphan(
+        ["aaa bbb", "cc"], "DejaVuSans", 14, max_width=200
+    )
+
+    assert result == ["aaa bbb", "cc"], (
+        f"orphan-relocation guard failed: returned {result!r}; "
+        f"expected the original wrap unchanged because pulling "
+        f"would have produced a new orphan ('aaa') one line up"
+    )
+
+
+def test_avoid_short_orphan_noops_when_previous_line_is_single_word():
+    """If the previous line is itself a single word — e.g., a long
+    word that wrapped onto its own line — there's nothing to pull
+    down. The rule must no-op and return the input unchanged.
+
+    Path coverage: this exercises the ``len(parts) < 2`` guard
+    inside ``_avoid_short_orphan`` that other tests hit only
+    incidentally.
+    """
+    register_fonts()
+    from src.pages import _avoid_short_orphan
+
+    result = _avoid_short_orphan(
+        ["supercalifragilistic", "do"],
+        "DejaVuSans",
+        14,
+        max_width=200,
+    )
+
+    assert result == ["supercalifragilistic", "do"], (
+        f"single-word-previous-line guard failed: returned "
+        f"{result!r}; expected the input unchanged because the "
+        f"previous line has no second word to pull from"
+    )
 
 
 def test_wrap_breaks_long_word_onto_its_own_line():
