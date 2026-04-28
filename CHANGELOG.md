@@ -1,6 +1,221 @@
 # CHANGELOG
 
 
+## v1.20.4 (2026-04-28)
+
+### Bug Fixes
+
+- **text-wrap**: Orphan-control pulls last word down to avoid short last lines
+  ([#85](https://github.com/mfozmen/littlepress-ai/pull/85),
+  [`4bfa5ed`](https://github.com/mfozmen/littlepress-ai/commit/4bfa5ed5f7253b088128a4246f29d5d0e520e5d8))
+
+* fix(text-wrap): orphan-control pulls last word down to avoid short single-word last lines
+
+Reported 2026-04-28 from the printed yavru_dinozor booklet. The OCR-transcribed first story page
+  reads:
+
+Bir gun bir yumurta catlamis ve icinden yavru bir dinozor cikmis. O dinozor yumurta dan ciktiginda
+  yaninda bir suru yumurta gormus.
+
+The lone ``dan`` on its own line is the source paragraph ``yavru bir dinozor cikmis. O dinozor
+  yumurta dan`` (note the stray space — Samsung Notes / OCR artefact; should have been
+  ``yumurtadan``) hitting the A5 inner-width 335-pt limit at 14pt: the full sentence is 339 pt (just
+  over), so greedy wrap finalises ``... yumurta`` (308.3 pt) and orphans ``dan`` on the next line.
+  Looks awful in print.
+
+New ``_avoid_short_orphan`` rule: when the last line is a single token of <=5 characters, pull the
+  previous line's last word down so the orphan has company. Standard typography "widow control"
+  applied at the paragraph level. The rule no-ops when:
+
+* fewer than 2 lines (nothing to pull from), * last line is already multi-word or longer than the
+  threshold, * the previous line has only one word (nothing to pull), * the merged line would
+  overflow ``max_width`` (better an orphan than a too-wide line that runs off the page).
+
+Tests:
+
+* ``test_wrap_pulls_last_word_down_to_avoid_short_orphan`` — the exact yavru_dinozor sentence at the
+  actual A5 inner width (335 pt). Pinned to fail under greedy-only wrap; pass after the orphan rule
+  applies. * ``test_wrap_orphan_fix_does_not_overflow_max_width`` — constructed long-word case where
+  pulling the previous word would push the merged line beyond ``max_width``. The rule must NOT
+  apply; orphan stays. Asserts every produced line fits within ``max_width``.
+
+The ``apply_text_correction`` review-turn path remains the right fix for source-text artefacts like
+  the literal ``yumurta dan`` spacing — orphan control is the GENERIC defence against the visual
+  problem; merging compound words is a content fix the user controls.
+
+Full suite: 754 passing (+2).
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(text-wrap): address review findings on orphan-control rule
+
+Four findings on PR #85 from the code reviewer (all below 80 confidence threshold; addressing for
+  completeness).
+
+#1 (75): test_wrap_orphan_fix_does_not_overflow_max_width was vacuous. Fixture
+  ``"supercalifragilistic short"`` is 168pt at 14pt DejaVu Sans — fits entirely on one line at the
+  test's max_width=180, so ``_wrap_paragraph`` returns a single-line list and the early-exit ``if
+  len(lines) < 2: return lines`` short-circuits before the overflow guard runs. The test passed
+  without ever exercising the contract it claimed to pin.
+
+Replaced with ``"a b supercalifragilistic thing"`` at max_width=160. Greedy wrap produces ``['a b
+  supercalifragilistic', 'thing']``: 'a b supercalifragilistic' = 153pt fits, 'thing' (5 chars)
+  qualifies as orphan candidate. Pull would produce 'supercalifragilistic thing' = 168pt > 160 →
+  overflow guard fires, orphan stays. The 'a b' prefix is multi-word, so the new orphan-relocation
+  guard (see #2) does NOT fire — only the overflow guard does. Asserts both that no line exceeds
+  max_width AND that the wrap shape genuinely exercises the overflow path (≥2 lines, last line is
+  still the orphan).
+
+#2 (50): The pull could create a NEW short orphan one row up. Example: ``['aaa bbb', 'cc']`` → after
+  pull → ``['aaa', 'bbb
+
+cc']``. ``aaa`` is now itself a 3-char single-word orphan; the problem moved up one line instead of
+  being solved. Added a guard: after computing ``new_prev``, refuse the pull if
+
+``new_prev`` is itself a single token of ≤ ``_ORPHAN_MAX_CHARS`` characters. New test
+  ``test_avoid_short_orphan_skips_when_pull_would_relocate_orphan`` calls ``_avoid_short_orphan``
+  directly with that exact input and asserts the original wrap is returned unchanged. The function
+  docstring now lists this as a no-op case alongside the others.
+
+#3 (25): Added explicit ``test_avoid_short_orphan_noops_when_previous_line_is_single_word`` that
+  calls ``_avoid_short_orphan(['supercalifragilistic', 'do'], …)`` and asserts the input is returned
+  unchanged. Pins the ``len(parts) < 2`` guard's contract — previously hit only incidentally by
+  other tests.
+
+#4 (50): The ``_ORPHAN_MAX_CHARS = 5`` value was deliberately calibrated for Turkish (the rule was
+  driven by the yavru_dinozor book), catching common 2-4 char particles like ``bir``, ``ve``, ``de``
+  / ``da``, ``ki``, ``bu``, ``o``, plus the ``dan`` / ``den`` ablative endings the OCR sometimes
+  isolates. Inline comment expanded to document this calibration rationale and note that 3 would
+  target only the truly egregious 1-2 char isolates.
+
+Suite: 756 passing (+2 net new tests; #1's replacement is non-vacuous, #2 + #3 are new).
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+### Documentation
+
+- **plan**: In-app print help (slash command + /help section)
+  ([`e5e05b2`](https://github.com/mfozmen/littlepress-ai/commit/e5e05b2077bfb1e38359b95d70bfd86730af4799))
+
+Reported 2026-04-28 right after the user confirmed the printed booklet worked. ``docs/printing.md``
+  (PR #84) covers the print steps, but a user already inside the REPL after a render shouldn't have
+  to alt-tab to GitHub to find them.
+
+Fix shape:
+
+(a) New ``/print`` slash command that prints the step-by-step directly to the console — same content
+  as the doc, just surfaced where the user is when they need it.
+
+(b) Extend ``/help`` output with a "Printing the booklet" section that names the file
+  (``<slug>_A4_booklet.pdf``), flags the critical settings (double-sided, short-edge bind, no
+  Booklet mode), and points at ``docs/printing.md`` for the full walk-through.
+
+(c) Extend ``render_book``'s success message with a one-liner ("Type ``/print`` for setup steps") so
+  the help surface is visible right when it's relevant — not buried in ``/help`` that users won't
+  think to type after a render.
+
+Implementation cost is small — the content already exists in ``docs/printing.md``; this is mostly
+  REPL plumbing + a prompt-toolkit completion entry. Tests: pin the new slash command in the
+  slash-menu order, the print substring in ``/help`` output, and the ``/print`` mention in the
+  post-render success message.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+- **plan**: Three new findings from the printed-booklet review
+  ([`a0cab5a`](https://github.com/mfozmen/littlepress-ai/commit/a0cab5a4f691dd037d7aa0ffbed6cfbe867cc90a))
+
+User reviewed the printed yavru_dinozor on 2026-04-28 and flagged three issues. Recording each with
+  enough detail that the fix branch doesn't have to re-derive the problem.
+
+1. Word-wrap orphans short fragments. The OCR-transcribed story 1 reads ``Bir gün bir yumurta
+  çatlamış ve içinden / yavru bir dinozor çıkmış. O dinozor yumurta / dan / çıktığında ...`` —
+  ``dan`` is alone on its own line. Two compounding causes: source already has ``yumurta dan`` with
+  a space (Samsung Notes spacing artefact), and ``_draw_text_block`` has no orphan/widow control.
+  Fix options: cheap orphan-control rule, or switch to a paragraph-shaping wrap (reportlab
+  ``Paragraph``). ``apply_text_correction`` is the existing source-side fix for the spacing artefact
+  and should be documented.
+
+2. Title repeats on first story page. Cover shows ``Yavru Dinazor - 1`` from ``draft.title``; the
+  first story page's transcribed text also starts with ``YAVRU DİNOZOR 1`` because the child wrote a
+  header on the source page. Fix: at OCR-application time, strip a header that closely matches
+  ``draft.title`` from the FIRST story page only. Use a similarity threshold (casefold +
+  diacritic-fold + ≥80% token overlap) to avoid stripping a legitimate "Author's note" or similar
+  header.
+
+3. Multi-provider sessions: per-task LLM selection. Today the active LLM is one global setting;
+  cover generation needs OpenAI but everything else can be Claude. Fix shape: separate
+  ``image_provider`` slot on the REPL, set by a new ``/image-model`` slash command, decoupled from
+  ``llm_provider``. ``generate_cover_illustration`` reads from the new slot; the deterministic
+  metadata-prompt cover-AI branch tells the user which provider will fire. Smaller-step alternative
+  considered (global default + per-tool override), bigger alternative (full per-tool registry); the
+  ``image_provider`` slot is the minimum useful change for the maintainer's "Claude chat + ChatGPT
+  cover" workflow.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+- **printing**: Step-by-step print + fold guide for the A4 booklet
+  ([#84](https://github.com/mfozmen/littlepress-ai/pull/84),
+  [`9c677f7`](https://github.com/mfozmen/littlepress-ai/commit/9c677f76d2d7c3894cbe7a936033b9c873562d5e))
+
+* docs(printing): step-by-step print + fold guide for the A4 booklet
+
+User confirmed the duplex print + fold workflow worked end-to-end on a Canon MX300 with
+  manual-duplex flow ("bastım ilk kitabı dediğin gibi oldu" — printed the first book, came out as
+  you said). Capturing the actual print settings + fold steps so the next user (or the maintainer
+  six months from now) doesn't have to chase the same conversation.
+
+New ``docs/printing.md`` covers:
+
+- Why two files: A5 reading copy vs A4 saddle-stitch print artefact, and why the booklet PDF looks
+  scrambled on screen. - Print settings per viewer: Adobe Acrobat / Reader (with the Turkish UI
+  mapping table the live walk-through covered), Chrome / Edge browser PDF, macOS Preview. - Critical
+  pitfalls: short-edge vs long-edge binding (long-edge inverts every other page), Adobe's "Booklet"
+  mode applying imposition on top of our pre-imposed PDF. - Manual duplex flow for printers without
+  auto-duplex (Canon MX-series being the explicit example): test with one sheet first, common flip
+  orientations, what to do if the back side comes out upside-down. - Fold + staple instructions:
+  stack order (sheet 1 on top), fold direction (spine on the left), staple workflow with both saddle
+  staplers and regular ones. - Reading-order verification list — what the user should see when they
+  open the printed booklet, top to bottom. - "Why the blank page is correct" — the saddle-stitch
+  math the user kept hitting in the live render rounds. Documented now so it's findable, not
+  re-explained per conversation. - Quick-reference cheat sheets at the end (settings + post-print
+  workflow) for users who just want the summary.
+
+README's existing one-line printing section gets a sentence pointing at the new doc, including the
+  Canon-MX-style manual-duplex callout and the explanation pointer for the blank page.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* docs(claude): widen i18n carve-out to cover doc-level reference tables
+
+PR #84 review #1 (score 75): the Turkish UI mapping table in ``docs/printing.md`` (helping
+  Turkish-OS users navigate their localised Adobe Reader print dialog) sits OUTSIDE the existing
+  ``src/metadata_i18n.py``-shaped carve-out. The reviewer flagged two paths to land it cleanly:
+  widen the CLAUDE.md exception, or move the mapping into a locale-gated structure.
+
+Widened the exception. The new bullet covers parallel English-vs-non-English label tables in
+  ``docs/`` files that explain how to use a third-party UI in a non-English locale — the only case
+  where this realistically comes up. Strict shape:
+
+* Must be a parallel English↔non-English table (every English label paired with its non-English
+  equivalent), NOT a one-way Turkish-only block. * English column is canonical; non-English column
+  is the reader-aid for users navigating a localised UI.
+
+Same shape and intent as the structured-i18n carve-out: opposite of the scattered-token leak the
+  original rule was meant to prevent. The reader-aid IS the user-facing localisation mechanism for
+  users on non-English systems; refusing to ship it would force every Turkish-OS user to
+  context-switch to English to follow the doc.
+
+PR #84 review #2 (score 25, Turkish quote in commit body) not addressed — same class as past
+  commit-body Turkish noted as borderline (PR #66 ``sen yaz``, PR #73 ``samsung notes'tan…``, PR #82
+  ``düzgün``). History rewrite for a single quote in a score-25 finding isn't worth the disruption.
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+
 ## v1.20.3 (2026-04-28)
 
 ### Bug Fixes
@@ -87,6 +302,11 @@ Full suite: 752 passing (+1 from reinstated n=2 test).
 ---------
 
 Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+### Chores
+
+- **release**: 1.20.3 [skip ci]
+  ([`91c375b`](https://github.com/mfozmen/littlepress-ai/commit/91c375b39986c1305196be50a8f859354570d705))
 
 
 ## v1.20.2 (2026-04-27)
