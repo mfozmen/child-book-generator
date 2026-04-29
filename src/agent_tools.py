@@ -1774,7 +1774,8 @@ def _impose_to(a5: Path, booklet: Path, message: str) -> str:
         f"{message} "
         f"A4 booklet written to {booklet} — print this one "
         "double-sided (flipped on short edge), fold in half, staple the "
-        "spine."
+        "spine. Type /print in the REPL for the full step-by-step "
+        "(settings, manual duplex, fold + staple walk-through)."
     )
 
 

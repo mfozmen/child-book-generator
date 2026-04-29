@@ -112,6 +112,7 @@ Today's slash commands (still available as escape hatches). Type `/` alone to po
 | `/title [name]` | show or set the book's title |
 | `/author [name]` | show or set the book's author |
 | `/render [--impose] [path]` | build the A5 picture-book PDF from the loaded draft. With `--impose` also writes an A4 2-up booklet ready to print double-sided, fold, and staple. |
+| `/print` | show the in-app print + fold + staple guide for the A4 booklet (also linked from `/help` and from `render_book`'s success message). |
 | `/prune [--dry-run] [--keep N]` | remove orphan images and old snapshot PDFs from `.book-gen/`. Keeps the newest `N` snapshot versions (default 3); `--dry-run` previews without deleting. Runs automatically after every versioned `/render` too. |
 | `/model` | switch the active LLM provider (re-prompts for an API key if required) |
 | `/logout` | forget the saved API key and drop back to offline mode |
