@@ -419,10 +419,10 @@ def test_module_docstring_calibration_ratios_are_accurate():
     by-eye. This test recomputes each ratio against the SAME
     ``_normalise`` and ``SequenceMatcher`` the implementation
     uses, and pins the value to within 1e-4 of what the docstring
-    claims. If you change ``_normalise``, this test will go red
-    AND so will the prose-interleaved boundary test —
-    re-measuring is then mandatory before either can go green
-    again."""
+    claims (assertions match the precision the docstring states).
+    If you change ``_normalise``, this test will go red AND so
+    will the prose-interleaved boundary test — re-measuring is
+    then mandatory before either can go green again."""
     from difflib import SequenceMatcher
 
     from src.title_strip import _normalise
@@ -430,19 +430,21 @@ def test_module_docstring_calibration_ratios_are_accurate():
     def ratio(a: str, b: str) -> float:
         return SequenceMatcher(a=_normalise(a), b=_normalise(b)).ratio()
 
-    # Docstring values are pinned to 4dp.
-    assert abs(ratio("YAVRU DİNOZOR 1", "Yavru Dinazor - 1") - 0.9333) < 1e-3
+    # Pinned to 4dp — actual measured values are 0.933333,
+    # 0.366197, 0.794118; all within 1e-4 of the rounded
+    # docstring claim.
+    assert abs(ratio("YAVRU DİNOZOR 1", "Yavru Dinazor - 1") - 0.9333) < 1e-4
     assert abs(
         ratio(
             "Once upon a time, Yavru Dinazor was a brave little dinosaur.",
             "Yavru Dinazor",
         )
         - 0.3662
-    ) < 1e-3
+    ) < 1e-4
     assert abs(
         ratio(
             "THE ADVENTURES that happened OF TINY BEAR",
             "The Adventures of Tiny Bear",
         )
         - 0.7941
-    ) < 1e-3
+    ) < 1e-4

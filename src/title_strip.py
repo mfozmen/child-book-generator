@@ -19,12 +19,20 @@ allowed under the contract:
     ``draft.title``. The body of the page — every byte after the
     header — is preserved as-is by ``_drop_leading_lines``: no
     ``.strip()``, no whitespace collapse, no smart-quote
-    substitution. (Mechanically, ``"\\n".split("\\n")`` round-
-    trips on the body; if the OCR ever started emitting ``\\r\\n``
-    line endings the ``\\r`` would survive on body lines but the
-    header-detection path's ``line.strip()`` would treat them
-    differently — pinned here as a known limit, not a current
-    bug. OCR pipelines today emit ``\\n``-only.)
+    substitution. Mechanically, ``"\\n".split("\\n")`` round-
+    trips on the body. The Tesseract path on Windows emits
+    ``\\r\\n`` line endings (``pytesseract.image_to_string()``
+    output is ``str.strip()``-ed in ``call_vision_for_transcription``,
+    which trims only outer whitespace; embedded ``\\r`` survives
+    into ``page.text``). On those inputs the header-detection
+    path's ``line.strip()`` correctly removes the trailing
+    ``\\r`` for matching, and ``_drop_leading_lines`` preserves
+    each body line's original ``\\r\\n`` ending byte-for-byte.
+    Header gets stripped; line endings on the body are exactly
+    what the OCR engine produced. Mentioned here so a future
+    reader doesn't take a "no encoding coercion" claim
+    absolutely — the strip's invariant is that body bytes pass
+    through untouched, NOT that line endings are normalised.
 
   * It is a STRUCTURAL DEDUPLICATION, not a polish. The cover
     already prints ``draft.title``. When the same string also
@@ -57,13 +65,19 @@ allowed under the contract:
     ``.book-gen/images/page-NN.*`` (preserved by the
     input-immutable invariant). Reversibility at the *text*
     level is partial: the dropped header text is no longer in
-    the draft, so a user who wants it back can either re-type
-    via ``apply_text_correction(page, text)``, or re-OCR the
-    preserved page image with ``transcribe_page(page)`` —
-    ``.book-gen/images/page-NN.*`` is the practical source of
-    truth (the mirrored input PDF at ``.book-gen/input/`` is the
-    archival original, but the per-page image is what
-    ``transcribe_page`` actually consumes).
+    the draft, so a user who wants it back has two paths.
+    ``apply_text_correction(page, text)`` accepts a verbatim
+    user string and always works regardless of page state.
+    ``transcribe_page(page)`` re-OCRs and works ONLY when
+    ``page.image`` is not ``None``. Title-only pages classified
+    as ``<TEXT>`` during ingestion already had their
+    ``page.image`` cleared (text-only layout, no drawing
+    extracted), so ``transcribe_page`` is not available for
+    those — ``apply_text_correction`` is the path. Pages
+    classified ``<MIXED>`` (text alongside a drawing) keep
+    ``page.image`` populated and so accept either recovery
+    path. The mirrored input PDF at ``.book-gen/input/`` is the
+    archival original of last resort.
 
 Match logic: casefold + Unicode-NFKD + diacritic-fold + keep only
 alphanumeric tokens, then ``difflib.SequenceMatcher.ratio`` ≥
