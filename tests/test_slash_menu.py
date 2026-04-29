@@ -28,7 +28,13 @@ def _scripted(lines):
 
 def test_slash_commands_follow_logical_workflow_order():
     """Commands should appear in the order a user actually goes through
-    them: ingest → inspect → metadata → render → session / auth."""
+    them: ingest → inspect → metadata → render → print → session / auth.
+
+    ``/print`` sits next to ``/render`` because that's the workflow
+    pair: render produces the A4 booklet PDF, ``/print`` walks the
+    user through getting it onto paper. Together they cover the
+    "PDF on disk → physical book in hand" gap.
+    """
     names = [c.name for c in SLASH_COMMANDS]
     assert names == [
         "load",
@@ -36,6 +42,7 @@ def test_slash_commands_follow_logical_workflow_order():
         "title",
         "author",
         "render",
+        "print",
         "prune",
         "model",
         "logout",

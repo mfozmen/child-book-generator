@@ -2979,6 +2979,31 @@ def test_render_book_with_impose_writes_booklet_too(tmp_path):
     assert "booklet" in result.lower()
 
 
+def test_render_book_success_message_points_at_in_app_print_help(tmp_path):
+    """After a successful booklet render the user is one step from
+    a printable artefact but doesn't necessarily know where the
+    print settings live. The success message must surface the
+    in-app help so the user can find it without alt-tabbing to
+    the docs directory.
+
+    Pinned: an ``/print`` mention in the message after a
+    successful imposition. Plain string is fine — the agent
+    forwards tool replies verbatim into the chat, so ``/print``
+    in the reply turns into a visible CTA."""
+    draft = _two_page_draft(tmp_path)
+    tool = render_book_tool(
+        get_draft=lambda: draft,
+        get_session_root=lambda: tmp_path,
+    )
+
+    result = tool.handler({"impose": True})
+
+    assert "/print" in result, (
+        f"render_book success message must surface the /print slash "
+        f"command after a successful booklet imposition; got: {result!r}"
+    )
+
+
 def test_render_book_requires_draft():
     tool = render_book_tool(
         get_draft=lambda: None, get_session_root=lambda: Path(".")

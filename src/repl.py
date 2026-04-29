@@ -924,6 +924,100 @@ def _cmd_help(repl: Repl, _args: str) -> None:
         repl._console.print(
             f"  [cyan]/{cmd.name:<{width}}[/cyan] {cmd.description}"
         )
+    # The booklet → printed-book step trips up first-time users —
+    # the A4 imposition PDF is page-scrambled (looks broken on
+    # screen) and the printer needs three specific settings or
+    # the output comes out unusable. Surface the essentials in
+    # ``/help`` so a user who didn't know ``/print`` exists still
+    # finds the pointer at the long-form doc.
+    repl._console.print()
+    repl._console.print("Printing the booklet:")
+    repl._console.print(
+        "  Print [cyan]<slug>_A4_booklet.pdf[/cyan] (NOT the A5 reading copy)."
+    )
+    repl._console.print(
+        "  Settings: [bold]double-sided[/bold], [bold]flip on short "
+        "edge[/bold], [bold]Booklet mode OFF[/bold]."
+    )
+    repl._console.print(
+        "  Type [cyan]/print[/cyan] for the full step-by-step, or read "
+        "[cyan]docs/printing.md[/cyan] for screenshots + manual-duplex flow."
+    )
+    return None
+
+
+def _cmd_print(repl: Repl, _args: str) -> None:
+    """Print the in-app booklet print + fold + staple guide.
+    Mirror of ``docs/printing.md`` condensed to fit a terminal —
+    full doc is the source of truth for screenshots and OS-
+    specific dialog details."""
+    c = repl._console
+    c.print("[bold]Printing the booklet[/bold]")
+    c.print()
+    c.print(
+        "Every render produces two PDFs in [cyan].book-gen/output/[/cyan]:"
+    )
+    c.print(
+        "  [cyan]<slug>.pdf[/cyan] — A5 reading copy. Open this on "
+        "screen."
+    )
+    c.print(
+        "  [cyan]<slug>_A4_booklet.pdf[/cyan] — A4 saddle-stitch "
+        "imposition. Print THIS one, fold, staple."
+    )
+    c.print()
+    c.print("[bold]Don't try to read the booklet on screen.[/bold]")
+    c.print(
+        "  Its pages are scrambled on purpose — page 4 before page 1, "
+        "etc. That's how saddle-stitch printing works; the order comes "
+        "out right after duplex + fold."
+    )
+    c.print()
+    c.print("[bold]Print settings (any PDF viewer)[/bold]")
+    c.print("  Paper          A4 (Letter works with margin slack)")
+    c.print("  Two-sided      ON (duplex)")
+    c.print(
+        "  Binding        [bold]Short edge[/bold]  ← critical "
+        "(long-edge inverts every other page)"
+    )
+    c.print("  Scale          100% / Actual size")
+    c.print(
+        "  [bold]Booklet mode   OFF[/bold]  ← critical (PDF is "
+        "already imposed; double-imposing scrambles everything)"
+    )
+    c.print()
+    c.print("[bold]Manual duplex (printers without auto-duplex)[/bold]")
+    c.print(
+        "  1. Print front sides only (driver pauses with a "
+        "'flip and reload' prompt)"
+    )
+    c.print(
+        "  2. Take the printed sheets out, flip them so the printed "
+        "side faces DOWN, top edge facing the back of the printer"
+    )
+    c.print(
+        "  3. Reload, click OK in the prompt — printer prints back sides"
+    )
+    c.print(
+        "  Test with one sheet first if unsure of the flip orientation."
+    )
+    c.print()
+    c.print("[bold]Fold + staple[/bold]")
+    c.print("  1. Stack sheets in print order (sheet 1 on top)")
+    c.print(
+        "  2. Fold the stack in half — fold becomes the spine on "
+        "the LEFT"
+    )
+    c.print(
+        "  3. Open to the centre spread, staple THROUGH the fold "
+        "(2 staples, near top + bottom of the spine)"
+    )
+    c.print()
+    c.print(
+        "Full walk-through with screenshots, OS-specific dialog "
+        "details, and the Turkish UI mapping table: "
+        "[cyan]docs/printing.md[/cyan]."
+    )
     return None
 
 
@@ -1278,6 +1372,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("title",  "Show or set the book's title",                        _cmd_title),
     SlashCommand("author", "Show or set the book's author",                       _cmd_author),
     SlashCommand("render", "Build the A5 PDF (add --impose for the A4 booklet)",  _cmd_render),
+    SlashCommand("print",  "Show how to print, fold, and staple the A4 booklet",  _cmd_print),
     SlashCommand("prune",  "Remove orphan images + old snapshots from .book-gen", _cmd_prune),
     SlashCommand("model",  "Switch the active LLM provider",                      _cmd_model),
     SlashCommand("logout", "Forget the saved API key and go offline",             _cmd_logout),
