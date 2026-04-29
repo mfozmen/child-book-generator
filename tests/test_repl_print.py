@@ -63,7 +63,16 @@ def test_print_command_lists_the_three_critical_settings():
       * short-edge bind (NOT long-edge)
       * NO 'Booklet' mode (the PDF is already imposed)
     All three must appear in the ``/print`` output — getting any
-    of them wrong wastes paper."""
+    of them wrong wastes paper.
+
+    The "Booklet mode OFF" assertion is tight on purpose: an
+    earlier loose form (``"booklet" in out and "don't" in out``)
+    silently passed because the unrelated "Don't try to read the
+    booklet on screen." prose already provided both substrings.
+    Pinning the literal ``"booklet mode"`` collocation guarantees
+    the test fails when the actual settings-block line goes
+    missing — the loose form would not.
+    """
     out = _run(["/print", "/exit"])
 
     out_lower = out.lower()
@@ -71,11 +80,12 @@ def test_print_command_lists_the_three_critical_settings():
     assert "short" in out_lower and "edge" in out_lower
     # The "no booklet mode" warning is the most-skipped one — the
     # PDF is already imposed; Adobe's booklet feature would impose
-    # it AGAIN, scrambling the page order.
-    assert "booklet" in out_lower and (
-        "off" in out_lower or "do not" in out_lower or "don't" in out_lower
-        or "avoid" in out_lower
-    )
+    # it AGAIN, scrambling the page order. Anchor on the
+    # ``"booklet mode"`` two-word phrase + its OFF marker so prose
+    # mentioning "booklet" elsewhere doesn't satisfy the
+    # assertion.
+    assert "booklet mode" in out_lower
+    assert "off" in out_lower
 
 
 def test_print_command_covers_fold_and_staple_steps():
@@ -126,3 +136,29 @@ def test_help_print_section_names_the_booklet_filename_pattern():
     out = _run(["/help", "/exit"])
 
     assert "A4_booklet.pdf" in out
+
+
+def test_help_lists_print_in_the_commands_block():
+    """The slash-command catalog's full-list order test catches
+    accidental drops of ``print`` indirectly (any reorder /
+    insertion / removal fails the order assertion). Pin the
+    intent explicitly here too: the rendered ``/help`` output
+    must list ``/print`` under the ``Commands:`` block above the
+    "Printing the booklet" section. Without this assertion the
+    only thing keeping ``/print`` visible in ``/help`` is a
+    full-list equality; deleting just the ``"print"`` entry
+    from ``SLASH_COMMANDS`` would fail that — but adding a
+    bug where the help renderer skips one command silently
+    would not."""
+    out = _run(["/help", "/exit"])
+
+    # Look at the Commands: block specifically — the "Printing
+    # the booklet" extension below also references ``/print``,
+    # but that's not what this test is pinning.
+    commands_section = out[
+        out.index("Commands:"): out.index("Printing the booklet")
+    ]
+    assert "/print" in commands_section, (
+        f"/help Commands: block missed /print. Block was: "
+        f"{commands_section!r}"
+    )
