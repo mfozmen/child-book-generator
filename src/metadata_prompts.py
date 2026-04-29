@@ -45,6 +45,7 @@ from rich.console import Console
 
 from src.draft import Draft
 from src.metadata_i18n import _SUPPORTED, detect_lang, t
+from src.title_strip import strip_title_header_from_first_page
 
 ReadLine = Callable[[], str]
 
@@ -284,7 +285,5 @@ def collect_metadata(
     # ``draft.title`` is final (series-volume suffix applied), drop
     # the duplicate header line if the first non-hidden page starts
     # with one. Idempotent — re-running ``/metadata`` is safe.
-    from src.title_strip import strip_title_header_from_first_page
-
     strip_title_header_from_first_page(draft)
     return MetadataChoices(cover=cover, back_cover=back_cover)

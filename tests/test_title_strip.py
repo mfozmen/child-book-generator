@@ -312,3 +312,73 @@ def test_strip_keeps_prose_that_legitimately_starts_with_title(tmp_path):
     assert draft.pages[0].text == (
         "Once upon a time, Yavru Dinazor was a brave little dinosaur."
     )
+
+
+def test_strip_advances_to_next_page_after_first_was_hidden(tmp_path):
+    """Idempotency of the hide-page branch. After the strip hides
+    page 0 (page consisted of only the header), a second call
+    must advance to the next non-hidden page — and if that page
+    ALSO has a duplicate title header (Samsung Notes pattern: a
+    title page followed by a chapter header on page 2), strip
+    fires again. Pins that ``_first_non_hidden_page`` semantics
+    survive a hide+re-call cycle."""
+    from src.title_strip import strip_title_header_from_first_page
+
+    draft = _draft_with_pages(
+        tmp_path,
+        [
+            "YAVRU DİNOZOR 1",                       # title page only
+            "YAVRU DİNOZOR 1\nReal story body.",      # chapter header + body
+            "Other story page",
+        ],
+        title="Yavru Dinazor",
+    )
+
+    first = strip_title_header_from_first_page(draft)
+    second = strip_title_header_from_first_page(draft)
+    third = strip_title_header_from_first_page(draft)
+
+    # First call hides page 0 (only the header was there).
+    assert first is True
+    assert draft.pages[0].hidden is True
+    assert draft.pages[0].text == ""
+    # Second call advances to page 1, finds the duplicate header
+    # again, strips → ``Real story body.`` survives.
+    assert second is True
+    assert draft.pages[1].hidden is False
+    assert draft.pages[1].text == "Real story body."
+    # Third call is now a no-op — page 1's text starts with the
+    # actual story, page 2 was untouched throughout.
+    assert third is False
+    assert draft.pages[2].text == "Other story page"
+
+
+def test_strip_does_not_match_three_line_candidate_with_interleaved_prose(tmp_path):
+    """Boundary: with ``_MAX_HEADER_LINES = 3``, a 3-line candidate
+    that interleaves story prose between two real header lines
+    must NOT cross the 0.8 threshold. ``THE ADVENTURES that
+    happened OF TINY BEAR`` (header / interleaved prose /
+    header) joined as a 3-line candidate vs title ``The
+    Adventures of Tiny Bear`` lands below 0.8 and is left
+    alone. Pinned as the noise floor of the multi-line match —
+    the reviewer flagged this on PR #86 as currently safe but
+    unverified."""
+    from src.title_strip import strip_title_header_from_first_page
+
+    draft = _draft_with_pages(
+        tmp_path,
+        [
+            "THE ADVENTURES\nthat happened\nOF TINY BEAR\nstory body",
+        ],
+        title="The Adventures of Tiny Bear",
+    )
+
+    stripped = strip_title_header_from_first_page(draft)
+
+    # Implementation tries 1-line / 2-line / 3-line candidates;
+    # none should clear 0.8 on this prose-interleaved input. The
+    # interleaving "that happened" dilutes the sequence overlap.
+    assert stripped is False
+    assert draft.pages[0].text == (
+        "THE ADVENTURES\nthat happened\nOF TINY BEAR\nstory body"
+    )

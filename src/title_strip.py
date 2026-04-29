@@ -11,23 +11,42 @@ header on the first non-hidden page when it closely matches
 PRESERVE-CHILD-VOICE COMPLIANCE — invoked the project-level
 ``preserve-child-voice`` skill on this code path. The skill's
 compliance checklist says no auto-polish between OCR output and
-``page.text``. Title-strip is defensible only because:
+``page.text``. The structural argument for why this strip is
+allowed under the contract:
 
-  * the user explicitly asked for the duplicate to be removed
-    (``"buna gerek yok bunu kaldıralım"`` — 2026-04-28),
-  * the strip is narrow: removes ONLY the header lines whose
-    normalised form is high-similarity to ``draft.title``; the
-    body of the page is preserved byte-for-byte (no leading
-    whitespace collapse, no encoding coercion, no trim),
-  * the threshold (0.8 sequence ratio after casefold + NFKD +
-    diacritic-fold + alphanumeric-only) has been tested against
-    both the real yavru_dinozor case (ratio ≈ 0.93 → strip) and
-    realistic story prose that mentions the title (``Once upon a
-    time, Yavru Dinazor was a brave...`` → ratio ≈ 0.41, no
-    strip),
-  * the strip is fully reversible — ``apply_text_correction`` can
-    restore any line the user disagrees with, ``restore_page``
-    re-attaches the original drawing on a hidden page.
+  * It is narrow by construction. The strip removes ONLY the
+    header line(s) whose normalised form is high-similarity to
+    ``draft.title``. The body of the page — every byte after the
+    header — is preserved verbatim. No whitespace collapse, no
+    encoding coercion, no trim.
+
+  * It is a STRUCTURAL DEDUPLICATION, not a polish. The cover
+    already prints ``draft.title``. When the same string also
+    appears at the top of the first interior page (because the
+    child wrote the title there and OCR captured it, or because
+    the child's drawing of the title was re-typed by the user
+    for the cover), printing it twice is a layout artefact, not
+    the child's voice. The strip removes the duplicate, not the
+    content. The yavru_dinozor 2026-04-28 user report was the
+    instance that surfaced the rule; the rule itself is general.
+
+  * The threshold is calibrated against both ends. The real
+    yavru_dinozor case lands at ratio ≈ 0.93 (typed
+    ``Yavru Dinazor - 1`` vs OCR'd ``YAVRU DİNOZOR 1``); a
+    story prose false-positive risk like ``Once upon a time,
+    Yavru Dinazor was a brave...`` lands at ratio ≈ 0.41. 0.8
+    sits comfortably between them. Both are pinned by tests.
+
+  * The strip is reversible at the page level. ``restore_page``
+    un-hides a page hidden by the empty-after-strip branch and
+    re-attaches the original drawing from
+    ``.book-gen/images/page-NN.*`` (preserved by the
+    input-immutable invariant). Reversibility at the *text*
+    level is partial: the dropped header text is no longer in
+    the draft, so a user who wants it back must re-type via
+    ``apply_text_correction``. The mirrored input PDF at
+    ``.book-gen/input/`` is the source of truth if they need to
+    re-derive the text.
 
 Match logic: casefold + Unicode-NFKD + diacritic-fold + keep only
 alphanumeric tokens, then ``difflib.SequenceMatcher.ratio`` ≥
@@ -44,9 +63,17 @@ match the title.
 Empty-page edge case: if the page consisted ONLY of the header
 (common Samsung Notes pattern — a dedicated title page before the
 story starts), the strip leaves an empty page. We mark it
-``hidden`` rather than letting the renderer print a blank
-interior page; this mirrors the ``<BLANK>`` ingestion semantics.
-``restore_page`` reverses it.
+``hidden`` AND clear ``page.text`` to ``""`` rather than letting
+the renderer print a blank interior page. This is an extension
+of the ``<BLANK>`` semantic, not a strict mirror — ``<BLANK>``
+ingestion only sets ``hidden`` (the page already had no text);
+here we both set ``hidden`` and clear the text we just stripped
+the header off of, since the header WAS that text.
+``restore_page`` reverses the ``hidden`` flag; the original
+header text is recoverable only by re-typing via
+``apply_text_correction`` (or by re-OCRing the page image at
+``.book-gen/images/page-NN.*``, which the input-immutable
+invariant keeps on disk).
 """
 
 from __future__ import annotations
