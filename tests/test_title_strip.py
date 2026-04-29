@@ -316,20 +316,26 @@ def test_strip_keeps_prose_that_legitimately_starts_with_title(tmp_path):
 
 def test_strip_advances_to_next_page_after_first_was_hidden(tmp_path):
     """Idempotency of the hide-page branch. After the strip hides
-    page 0 (page consisted of only the header), a second call
-    must advance to the next non-hidden page — and if that page
-    ALSO has a duplicate title header (Samsung Notes pattern: a
-    title page followed by a chapter header on page 2), strip
-    fires again. Pins that ``_first_non_hidden_page`` semantics
-    survive a hide+re-call cycle."""
+    the first non-hidden page (page consisted of only the
+    header), a second call must advance to the NEXT non-hidden
+    page — and if that page ALSO has a duplicate title header
+    (Samsung Notes pattern: a dedicated title page followed by a
+    chapter header on the next page), strip fires again. Pins
+    that ``_first_non_hidden_page`` semantics survive a hide+re-
+    call cycle.
+
+    All inline references below use 0-indexed ``draft.pages``
+    indices to match the assertion code; the docstring narrative
+    above uses ordinal language (``first / next``) to keep the
+    intent readable without conflating the two systems."""
     from src.title_strip import strip_title_header_from_first_page
 
     draft = _draft_with_pages(
         tmp_path,
         [
-            "YAVRU DİNOZOR 1",                       # title page only
-            "YAVRU DİNOZOR 1\nReal story body.",      # chapter header + body
-            "Other story page",
+            "YAVRU DİNOZOR 1",                       # pages[0]: title page only
+            "YAVRU DİNOZOR 1\nReal story body.",      # pages[1]: header + body
+            "Other story page",                       # pages[2]: no header
         ],
         title="Yavru Dinazor",
     )
@@ -338,17 +344,17 @@ def test_strip_advances_to_next_page_after_first_was_hidden(tmp_path):
     second = strip_title_header_from_first_page(draft)
     third = strip_title_header_from_first_page(draft)
 
-    # First call hides page 0 (only the header was there).
+    # First call hides pages[0] (only the header was there).
     assert first is True
     assert draft.pages[0].hidden is True
     assert draft.pages[0].text == ""
-    # Second call advances to page 1, finds the duplicate header
-    # again, strips → ``Real story body.`` survives.
+    # Second call advances to pages[1], finds the duplicate
+    # header again, strips → ``Real story body.`` survives.
     assert second is True
     assert draft.pages[1].hidden is False
     assert draft.pages[1].text == "Real story body."
-    # Third call is now a no-op — page 1's text starts with the
-    # actual story, page 2 was untouched throughout.
+    # Third call is now a no-op — pages[1]'s text starts with
+    # the actual story; pages[2] was untouched throughout.
     assert third is False
     assert draft.pages[2].text == "Other story page"
 
@@ -356,13 +362,25 @@ def test_strip_advances_to_next_page_after_first_was_hidden(tmp_path):
 def test_strip_does_not_match_three_line_candidate_with_interleaved_prose(tmp_path):
     """Boundary: with ``_MAX_HEADER_LINES = 3``, a 3-line candidate
     that interleaves story prose between two real header lines
-    must NOT cross the 0.8 threshold. ``THE ADVENTURES that
-    happened OF TINY BEAR`` (header / interleaved prose /
-    header) joined as a 3-line candidate vs title ``The
-    Adventures of Tiny Bear`` lands below 0.8 and is left
-    alone. Pinned as the noise floor of the multi-line match —
-    the reviewer flagged this on PR #86 as currently safe but
-    unverified."""
+    must NOT cross the 0.8 threshold.
+
+    Measured ratio for the joined 3-line candidate
+    ``"the adventures that happened of tiny bear"`` (after
+    ``_normalise``) vs ``"the adventures of tiny bear"`` is
+    **0.7941**, leaving only **0.0059** headroom from the 0.8
+    floor. This is the multi-line match's noise floor —
+    deliberately thin so the threshold catches genuine wrapped
+    titles without admitting prose-interleaved false positives.
+
+    Maintenance contract: any future tweak to ``_normalise``
+    (different join character, keeping/dropping different token
+    classes) MUST re-measure this value. If the new ratio is ≥
+    0.8 the threshold OR the normalisation rules need adjusting —
+    otherwise interleaved prose will start triggering false-
+    positive strips silently. The other measured ratios pinned
+    in the module docstring (0.9333 positive / 0.3662 prose
+    false-positive) should be re-measured at the same time so
+    the calibration stays internally consistent."""
     from src.title_strip import strip_title_header_from_first_page
 
     draft = _draft_with_pages(
@@ -376,9 +394,55 @@ def test_strip_does_not_match_three_line_candidate_with_interleaved_prose(tmp_pa
     stripped = strip_title_header_from_first_page(draft)
 
     # Implementation tries 1-line / 2-line / 3-line candidates;
-    # none should clear 0.8 on this prose-interleaved input. The
-    # interleaving "that happened" dilutes the sequence overlap.
+    # none clear 0.8 on this prose-interleaved input. The
+    # interleaving ``that happened`` dilutes the sequence overlap
+    # to 0.7941 (3-line candidate); 1-line and 2-line candidates
+    # score even lower.
     assert stripped is False
     assert draft.pages[0].text == (
         "THE ADVENTURES\nthat happened\nOF TINY BEAR\nstory body"
     )
+
+
+def test_module_docstring_calibration_ratios_are_accurate():
+    """Module docstring claims three measured similarity ratios
+    that calibrate the 0.8 threshold:
+
+      * 0.9333 — yavru_dinozor positive (typed vs OCR'd title)
+      * 0.3662 — story-prose false-positive (``Once upon a time,
+        Yavru Dinazor was a brave...`` vs ``Yavru Dinazor``)
+      * 0.7941 — multi-line interleaved-prose noise floor
+        (``THE ADVENTURES that happened OF TINY BEAR`` vs
+        ``The Adventures of Tiny Bear``)
+
+    Documentation rotting is easy when the threshold is calibrated
+    by-eye. This test recomputes each ratio against the SAME
+    ``_normalise`` and ``SequenceMatcher`` the implementation
+    uses, and pins the value to within 1e-4 of what the docstring
+    claims. If you change ``_normalise``, this test will go red
+    AND so will the prose-interleaved boundary test —
+    re-measuring is then mandatory before either can go green
+    again."""
+    from difflib import SequenceMatcher
+
+    from src.title_strip import _normalise
+
+    def ratio(a: str, b: str) -> float:
+        return SequenceMatcher(a=_normalise(a), b=_normalise(b)).ratio()
+
+    # Docstring values are pinned to 4dp.
+    assert abs(ratio("YAVRU DİNOZOR 1", "Yavru Dinazor - 1") - 0.9333) < 1e-3
+    assert abs(
+        ratio(
+            "Once upon a time, Yavru Dinazor was a brave little dinosaur.",
+            "Yavru Dinazor",
+        )
+        - 0.3662
+    ) < 1e-3
+    assert abs(
+        ratio(
+            "THE ADVENTURES that happened OF TINY BEAR",
+            "The Adventures of Tiny Bear",
+        )
+        - 0.7941
+    ) < 1e-3

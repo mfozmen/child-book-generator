@@ -17,8 +17,14 @@ allowed under the contract:
   * It is narrow by construction. The strip removes ONLY the
     header line(s) whose normalised form is high-similarity to
     ``draft.title``. The body of the page — every byte after the
-    header — is preserved verbatim. No whitespace collapse, no
-    encoding coercion, no trim.
+    header — is preserved as-is by ``_drop_leading_lines``: no
+    ``.strip()``, no whitespace collapse, no smart-quote
+    substitution. (Mechanically, ``"\\n".split("\\n")`` round-
+    trips on the body; if the OCR ever started emitting ``\\r\\n``
+    line endings the ``\\r`` would survive on body lines but the
+    header-detection path's ``line.strip()`` would treat them
+    differently — pinned here as a known limit, not a current
+    bug. OCR pipelines today emit ``\\n``-only.)
 
   * It is a STRUCTURAL DEDUPLICATION, not a polish. The cover
     already prints ``draft.title``. When the same string also
@@ -30,12 +36,20 @@ allowed under the contract:
     content. The yavru_dinozor 2026-04-28 user report was the
     instance that surfaced the rule; the rule itself is general.
 
-  * The threshold is calibrated against both ends. The real
-    yavru_dinozor case lands at ratio ≈ 0.93 (typed
-    ``Yavru Dinazor - 1`` vs OCR'd ``YAVRU DİNOZOR 1``); a
-    story prose false-positive risk like ``Once upon a time,
-    Yavru Dinazor was a brave...`` lands at ratio ≈ 0.41. 0.8
-    sits comfortably between them. Both are pinned by tests.
+  * The threshold is calibrated against both ends, with measured
+    ratios pinned in tests:
+      - Real yavru_dinozor positive: ratio = 0.9333 (typed
+        ``Yavru Dinazor - 1`` vs OCR'd ``YAVRU DİNOZOR 1``).
+      - Story-prose false-positive risk: ratio = 0.3662 (``Once
+        upon a time, Yavru Dinazor was a brave...`` vs title
+        ``Yavru Dinazor``). Well below 0.8.
+      - Multi-line interleaved-prose noise floor: ratio = 0.7941
+        (``THE ADVENTURES that happened OF TINY BEAR`` vs title
+        ``The Adventures of Tiny Bear``). Just below 0.8 with
+        only 0.0059 headroom — the noise floor of the multi-line
+        match is thin. Any future tweak to ``_normalise``
+        (different join character, keeping/dropping different
+        token classes) MUST re-measure this value.
 
   * The strip is reversible at the page level. ``restore_page``
     un-hides a page hidden by the empty-after-strip branch and
@@ -43,10 +57,13 @@ allowed under the contract:
     ``.book-gen/images/page-NN.*`` (preserved by the
     input-immutable invariant). Reversibility at the *text*
     level is partial: the dropped header text is no longer in
-    the draft, so a user who wants it back must re-type via
-    ``apply_text_correction``. The mirrored input PDF at
-    ``.book-gen/input/`` is the source of truth if they need to
-    re-derive the text.
+    the draft, so a user who wants it back can either re-type
+    via ``apply_text_correction(page, text)``, or re-OCR the
+    preserved page image with ``transcribe_page(page)`` —
+    ``.book-gen/images/page-NN.*`` is the practical source of
+    truth (the mirrored input PDF at ``.book-gen/input/`` is the
+    archival original, but the per-page image is what
+    ``transcribe_page`` actually consumes).
 
 Match logic: casefold + Unicode-NFKD + diacritic-fold + keep only
 alphanumeric tokens, then ``difflib.SequenceMatcher.ratio`` ≥
