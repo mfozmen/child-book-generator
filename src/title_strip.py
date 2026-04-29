@@ -22,9 +22,10 @@ allowed under the contract:
     substitution. Mechanically, ``"\\n".split("\\n")`` round-
     trips on the body. The Tesseract path on Windows emits
     ``\\r\\n`` line endings (``pytesseract.image_to_string()``
-    output is ``str.strip()``-ed in ``call_vision_for_transcription``,
-    which trims only outer whitespace; embedded ``\\r`` survives
-    into ``page.text``). On those inputs the header-detection
+    output is ``str.strip()``-ed in
+    ``_call_tesseract_for_transcription``, which trims only outer
+    whitespace; embedded ``\\r`` survives into ``page.text``).
+    On those inputs the header-detection
     path's ``line.strip()`` correctly removes the trailing
     ``\\r`` for matching, and ``_drop_leading_lines`` preserves
     each body line's original ``\\r\\n`` ending byte-for-byte.
