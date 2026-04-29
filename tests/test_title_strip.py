@@ -206,3 +206,109 @@ def test_strip_keeps_first_line_when_title_is_substring_but_too_different(tmp_pa
 
     assert stripped is False
     assert draft.pages[0].text.startswith("Yavru kuş")
+
+
+# --- preserve-child-voice consequences ---------------------------------
+# Each test below pins a property the preserve-child-voice skill says
+# we MUST hold once we accept that title-strip is OCR post-processing.
+# The skill's compliance checklist says "no auto-polish between OCR
+# output and page.text"; title-strip is defensible only if it is
+# narrow, reversible, and never silently mangles the prose around the
+# header. These tests pin the narrowness.
+
+
+def test_strip_preserves_intentional_blank_line_after_header(tmp_path):
+    """``TITLE\\n\\nstory`` — the child put a deliberate blank line
+    between header and body. After the header is stripped, that
+    blank line is part of the child's prose, not part of the
+    header. ``preserve-child-voice`` says the printed page must
+    contain the child's words byte-for-byte; stripping the leading
+    ``\\n`` would silently collapse the gap. Keep it."""
+    from src.title_strip import strip_title_header_from_first_page
+
+    draft = _draft_with_pages(
+        tmp_path,
+        ["YAVRU DİNOZOR 1\n\nBir gün bir yumurta çatlamış..."],
+        title="Yavru Dinazor",
+    )
+
+    stripped = strip_title_header_from_first_page(draft)
+
+    assert stripped is True
+    assert draft.pages[0].text == "\nBir gün bir yumurta çatlamış..."
+
+
+def test_strip_hides_page_when_only_content_was_the_title_header(tmp_path):
+    """If the first page is JUST the title header (no story body
+    on the page — common Samsung Notes pattern: a dedicated title
+    page before the story starts), stripping the header would
+    leave an empty page that still renders. Mark it ``hidden``
+    instead — same shape as the ``<BLANK>`` ingestion path; the
+    user can ``restore_page`` if they actually wanted that page."""
+    from src.title_strip import strip_title_header_from_first_page
+
+    draft = _draft_with_pages(
+        tmp_path,
+        ["YAVRU DİNOZOR 1", "Real story body."],
+        title="Yavru Dinazor",
+    )
+
+    stripped = strip_title_header_from_first_page(draft)
+
+    assert stripped is True
+    # Page 1 was just the header → hide it (don't render an empty
+    # page). Text is cleared to "" so subsequent re-runs see no
+    # mismatch.
+    assert draft.pages[0].hidden is True
+    assert draft.pages[0].text == ""
+    # Page 2 untouched.
+    assert draft.pages[1].text == "Real story body."
+
+
+def test_strip_handles_two_line_header(tmp_path):
+    """A long title can wrap across two lines in the OCR result —
+    e.g. ``THE ADVENTURES\\nOF TINY BEAR`` for title ``The
+    Adventures of Tiny Bear``. Stripping only the first line
+    leaves a ``OF TINY BEAR`` orphan on the page that's clearly
+    still part of the header. Try the first 1, then 2, then 3
+    leading non-empty lines — pick the longest match that's still
+    high-similarity."""
+    from src.title_strip import strip_title_header_from_first_page
+
+    draft = _draft_with_pages(
+        tmp_path,
+        [
+            "THE ADVENTURES\nOF TINY BEAR\nOnce upon a time, the bear...",
+        ],
+        title="The Adventures of Tiny Bear",
+    )
+
+    stripped = strip_title_header_from_first_page(draft)
+
+    assert stripped is True
+    assert draft.pages[0].text == "Once upon a time, the bear..."
+
+
+def test_strip_keeps_prose_that_legitimately_starts_with_title(tmp_path):
+    """A story can legitimately open by naming its protagonist —
+    ``Once upon a time, Yavru Dinazor was a brave little
+    dinosaur.`` mentions the title but is clearly story prose,
+    not a header. The 0.8 sequence-similarity threshold must NOT
+    treat this as a duplicate header. Pinned because the
+    threshold was originally calibrated against one real case;
+    this guards the false-positive boundary the reviewer flagged
+    on PR #86."""
+    from src.title_strip import strip_title_header_from_first_page
+
+    draft = _draft_with_pages(
+        tmp_path,
+        ["Once upon a time, Yavru Dinazor was a brave little dinosaur."],
+        title="Yavru Dinazor",
+    )
+
+    stripped = strip_title_header_from_first_page(draft)
+
+    assert stripped is False
+    assert draft.pages[0].text == (
+        "Once upon a time, Yavru Dinazor was a brave little dinosaur."
+    )
