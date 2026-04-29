@@ -1,6 +1,250 @@
 # CHANGELOG
 
 
+## v1.20.5 (2026-04-29)
+
+### Bug Fixes
+
+- **metadata**: Strip duplicate title header from first story page
+  ([#86](https://github.com/mfozmen/littlepress-ai/pull/86),
+  [`2dede3c`](https://github.com/mfozmen/littlepress-ai/commit/2dede3c675bae628471f506bcd6fb80d252c205d))
+
+* fix(metadata): strip duplicate title header from first story page
+
+Reported 2026-04-28 from the printed yavru_dinozor booklet. The cover rendered the typed
+  ``draft.title`` (``Yavru Dinazor - 1``); the first interior page's OCR-transcribed text ALSO began
+  with ``YAVRU DİNOZOR 1`` because the child wrote that header at the top of the first physical page
+  of their Samsung Notes draft and the vision pass faithfully captured it. Title showed up twice —
+  once on the cover, once at the start of page 1.
+
+New ``src/title_strip.py`` (single public function ``strip_title_header_from_first_page``) drops the
+  duplicate header. Match logic: casefold + Unicode-NFKD + combining-mark strip + alphanumeric-only
+  token join, then ``difflib.SequenceMatcher.ratio`` against a 0.8 threshold. Calibration:
+
+* the real yavru_dinozor case — typed ``Yavru Dinazor - 1`` (note the typo: dinAzor, with an `a`) vs
+  OCR'd ``YAVRU DİNOZOR 1`` (dinOzor, Turkish dotted-İ) — normalises to ``yavru dinazor 1`` vs
+  ``yavru dinozor 1``, ratio ≈ 0.93 * a genuinely different first line like ``Author's note``
+  against title ``Yavru Dinazor`` scores well below 0.5 → stays put, no false-positive strip * 0.8
+  threshold sits comfortably above the false-positive band and below the typed-vs-OCR drift case
+
+Hooked into ``collect_metadata`` as the last step — by then title is final (series-volume suffix
+  already applied) and the ingestion-time OCR has populated ``page.text``. Idempotent: a re-run of
+  ``/metadata`` after a strip leaves the now-clean first-page text alone (the former header line is
+  gone, so the new first line — actual story prose — doesn't match the title).
+
+Edge cases pinned by tests in ``tests/test_title_strip.py``:
+
+* empty title (fresh session before metadata) → no-op * empty pages list → no-op, no crash * all
+  pages hidden → no-op, no crash * empty first-page text (e.g. a ``<BLANK>``-classified page that
+  never got OCR'd) → no-op * user-hidden colophon at index 0 → strip falls through to the actual
+  first non-hidden page * dissimilar header (``Author's note`` vs ``Yavru Dinazor``) → not stripped
+  * second call after a strip → no-op (idempotent) * the real yavru_dinozor accent + case +
+  spelling-drift case → strip fires
+
+Plus an integration test in ``tests/test_metadata_prompts.py`` that drives ``collect_metadata``
+  end-to-end with the OCR'd header on page 1 and asserts the strip ran at the orchestrator level
+  (title gets the volume suffix; first-page header is gone; page 2 untouched).
+
+PLAN entry updated (item 2 of "Next up" → SHIPPED). README gains a bullet describing the behaviour
+  in the metadata-prompts section so users understand why the title only shows up on the cover even
+  when the source PDF has it written on the first interior page too.
+
+Suite: 766 passing (was 756; +9 unit tests in test_title_strip,
+
++1 integration test in test_metadata_prompts).
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(title-strip): address review findings on PR #86
+
+Five findings on PR #86 from the code reviewer (75 / 75 / 50 / 75 / 25 — none above the 80 threshold
+  but all addressed for completeness, especially #4 which was a process check on the
+  preserve-child-voice contract).
+
+#1 (75): ``rest.lstrip("\n")`` collapsed an intentional blank line between the header and the story
+  body. The child put that blank there as a deliberate paragraph break, and ``preserve-child-voice``
+  says the printed page must contain the child's prose byte-for-byte. New ``_drop_leading_lines``
+  helper removes the header line(s) WITHOUT eating any whitespace that follows. Test
+  ``test_strip_preserves_intentional_blank_line_ after_header`` pins the contract: ``"YAVRU DİNOZOR
+  1\n\nBir gün..."`` → strip → ``"\nBir gün..."``.
+
+#2 (75): When the entire first page was just the title header (no story body — common Samsung Notes
+  pattern: a dedicated title page before the story starts), the strip left ``page.text = ""`` and
+  the renderer would still emit a blank interior page. ``strip_title_header_from_first_page`` now
+  sets ``page.hidden = True`` in that case — same shape as the ``<BLANK>`` ingestion semantics;
+  ``restore_page`` reverses it if the user actually wanted that page kept. Test
+  ``test_strip_hides_page_when_only_content_was_the_title_header`` pins the behaviour.
+
+#3 (50): A long title can wrap across multiple OCR lines — ``THE ADVENTURES`` / ``OF TINY BEAR`` for
+  ``The Adventures of Tiny Bear``. Stripping only the first non-empty line left the ``OF TINY BEAR``
+  orphan behind. New ``_match_header_line_count`` helper tries the first 1, 2, then 3 leading
+  non-empty lines (cap ``_MAX_HEADER_LINES``) joined with single spaces and picks the LONGEST match
+  still clearing the 0.8 threshold — so wrapped multi-line headers drop as one unit. Test
+  ``test_strip_handles_two_line_header`` pins the 2-line case.
+
+#4 (75): Process check on ``preserve-child-voice``. The skill was invoked on this code path during
+  the review-fix turn. The title-strip is OCR post-processing — the skill's compliance checklist
+  explicitly flags this shape as "auto-polish risk". Defensible only because: (a) the user
+  explicitly asked for the duplicate to be removed (2026-04-28: ``"buna gerek yok bunu
+  kaldıralım"``); (b) the strip is narrow — only header lines that are high-similarity to
+  ``draft.title`` are touched; story body is preserved byte-for-byte (no leading whitespace
+  collapse, no encoding coercion); (c) the threshold is calibrated against both the real positive
+  case (yavru_dinozor, ratio ≈ 0.93) and a realistic false-positive risk (story prose mentioning the
+  title, ratio ≈ 0.41); (d) the strip is fully reversible — ``apply_text_correction`` restores any
+  line, ``restore_page`` re-attaches the original drawing on a hidden page. Module docstring now
+  documents this compliance reasoning explicitly.
+
+#5 (25): The 0.8 threshold was originally calibrated against one real case. Reviewer flagged risk
+  that prose like ``"Once upon a time, [Title] was a brave..."`` could trip the threshold. New test
+  ``test_strip_keeps_prose_that_legitimately_starts_with_ title`` constructs exactly that case
+  (``Yavru Dinazor`` title + the suggested prose) and pins that the strip does NOT fire — ratio ≈
+  0.41, well below 0.8. The threshold's false-positive boundary is now explicitly tested.
+
+Suite: 770 passing (was 766; +4 new tests in test_title_strip).
+
+* fix(title-strip): address second-round review findings on PR #86
+
+Seven new findings (60 / 75 / 75 / 50 / 50 / 50 / 25; all below 80, none blocking). All addressed.
+
+#1 (UX gap on hide-page reversibility): the docstring's "fully reversible" claim was strictly true
+  (apply_text_correction + restore_page together cover image + text) but glossed over the asymmetry
+  — recovering the stripped header text needs a re-type. Module docstring now spells this out:
+  reversibility is at the page level (restore_page un-hides + re-attaches the original drawing);
+  reversibility at the *text* level is partial because the dropped header is no longer in the draft.
+  The mirrored input PDF at .book-gen/input/ is the source of truth for re-derivation.
+
+#2 (mirrors-<BLANK> overstatement): docstring claimed the hide-page branch "mirrors the <BLANK>
+  ingestion semantics", but <BLANK> only sets hidden=True without clearing page.text. Title-strip
+  clears the text first (since the text WAS the duplicate header). Reworded as "an extension of the
+  <BLANK> semantic, not a strict mirror" with a one-line explanation of why we clear.
+
+#3 (PCV justification book-specific while implementation is universal): the previous docstring
+  leaned on the user's yavru_dinozor request as the justification, but the strip now fires for every
+  book inside collect_metadata. Reframed: the yavru_dinozor case is the INSTANCE that surfaced the
+  rule; the rule itself is a structural deduplication — when draft.title already prints on the cover
+  and the first interior page's header-shaped content is high-similarity to it, printing both is a
+  layout artefact, not the child's voice. The strip removes the duplicate, not the content.
+
+#4 (README missed the hide-page edge case): bullet now describes both branches — the standard
+  "duplicate header dropped" case AND the "page consisted of only the header → auto-hidden" case.
+  Names restore_page as the recovery path. Also mentions the multi-line wrapping fix (up to 3 lines)
+  so the README matches the implementation.
+
+#5 (lazy import inside collect_metadata): no circular dependency justified the lazy import
+  (title_strip only imports src.draft, which metadata_prompts already imports at module top). Moved
+  to top-level imports in src/metadata_prompts.py for consistency.
+
+#6 (idempotency on hide-page branch unpinned): new test
+  ``test_strip_advances_to_next_page_after_first_was_hidden`` constructs a 3-page draft where page 0
+  is just the title header (stripped → hidden), page 1 is title-header + body (second call advances
+  + strips the header, body survives), page 2 is unrelated story prose (third call is a no-op). Pins
+  ``_first_non_hidden_page`` semantics across hide+re-call cycles.
+
+#7 (3-line interleaved boundary unverified): new test
+  ``test_strip_does_not_match_three_line_candidate_with_interleaved _prose`` constructs the
+  reviewer's exact suggested case — ``THE ADVENTURES\nthat happened\nOF TINY BEAR\nstory body``
+  against title ``The Adventures of Tiny Bear``. The interleaving ``that happened`` dilutes the
+  sequence overlap below 0.8 — strip must NOT fire. Pins the noise floor of the multi-line match.
+
+Suite: 772 passing (was 770; +2 new tests).
+
+* docs(title-strip): pin measured similarity ratios and tighten reversibility framing
+
+Three concrete documentation changes; one new test; one README clarification. Drives the docstring's
+  calibration claims to be re-measured on every change to ``_normalise``.
+
+Module docstring now lists the THREE measured ratios that calibrate the 0.8 threshold (previous
+  wording cited only two and mis-stated one):
+
+* 0.9333 — yavru_dinozor positive (typed ``Yavru Dinazor - 1`` vs OCR'd ``YAVRU DİNOZOR 1``). *
+  0.3662 — story-prose false-positive (``Once upon a time, Yavru Dinazor was a brave...`` vs ``Yavru
+  Dinazor``). The prior docstring said "≈ 0.41" — measured value is 0.3662, rounds to 0.37. * 0.7941
+  — multi-line interleaved-prose noise floor (``THE ADVENTURES that happened OF TINY BEAR`` vs ``The
+  Adventures of Tiny Bear``). 0.0059 headroom from the 0.8 floor — the multi-line match is genuinely
+  thin here. Any change to ``_normalise`` (different join character, keeping/dropping different
+  token classes) MUST re-measure this; the docstring now states that contract explicitly.
+
+Reversibility paragraph reframed. The previous version pointed the user at ``.book-gen/input/`` as
+  "the source of truth" if they need to re-derive the stripped header text. The PRACTICAL re-derive
+  tool is ``transcribe_page``, which operates on the preserved page image at
+  ``.book-gen/images/page-NN.*``, not on the input PDF. Reworded so the user reading the docstring
+  is pointed at the actual recovery path: ``apply_text_correction (page, text)`` for re-typing, or
+  ``transcribe_page(page)`` for re-OCRing the per-page image. ``.book-gen/input/`` framed as the
+  archival original.
+
+"No encoding coercion" clause softened. The implementation splits/joins on ``\n``; ``\r\n`` line
+  endings would survive on body lines unchanged but the header-detection path's ``line.strip()``
+  handles them differently. Flagged as a known limit (OCR pipelines today emit ``\n``-only) instead
+  of an absolute guarantee.
+
+New test ``test_module_docstring_calibration_ratios_are_accurate`` recomputes all three pinned
+  ratios against the actual ``_normalise`` + ``SequenceMatcher`` and asserts agreement to 1e-3. If
+  you change ``_normalise``, this test will go red AND so will the prose-interleaved boundary test
+  —- re-measuring is mandatory before either can go green again. The prose-interleaved test's
+  docstring now also pins the measured value (0.7941) and the headroom (0.0059) explicitly.
+
+The hide-page idempotency test had its docstring/inline comments unified — all references now use
+  0-indexed ``draft.pages`` indexing (matching the assertion code) instead of mixing ordinals +
+  0-indexed labels mid-test.
+
+README ``restore_page`` mention now spells out that the user supplies the page number ("telling the
+  agent 'bring page N back' calls ``restore_page(page=N)``"), so a reader doesn't assume it
+  auto-detects which page to un-hide.
+
+Suite: 773 passing (was 772; +1 ratio-calibration self-test).
+
+* docs(title-strip): correct line-ending claim and re-OCR precondition; tighten calibration
+  tolerance to 1e-4
+
+Three docstring corrections; one test tightening. No behaviour change.
+
+The encoding-coercion paragraph claimed "OCR pipelines today emit ``\n``-only" — wrong. The
+  Tesseract path on Windows emits ``\r\n``. ``call_vision_for_transcription``'s tesseract branch
+  calls ``pytesseract.image_to_string(...)`` and applies ``str(reply).strip()``, which trims only
+  outer whitespace; embedded ``\r`` survives into ``page.text``.
+
+Tracing the actual title-strip behaviour on those inputs: ``text.split("\n")`` produces lines with
+  trailing ``\r``; ``line.strip()`` in the header-detection path correctly removes the ``\r`` for
+  matching; ``_drop_leading_lines`` joins with ``\n`` so each body line keeps its original ``\r\n``
+  ending byte-for-byte. Net: header gets stripped, body bytes pass through untouched. The docstring
+  now describes this correctly and explicitly notes that the strip's invariant is "body bytes pass
+  through untouched" — NOT "line endings normalised".
+
+The reversibility paragraph said ``transcribe_page(page)`` is a recovery path "from
+  ``.book-gen/images/page-NN.*``", glossing over that the tool's input schema requires ``page.image
+  is not None``. Title-only pages classified ``<TEXT>`` during ingestion already had ``page.image``
+  cleared by ``_apply_sentinel_result`` (text-only layout, no drawing extracted), so
+  ``transcribe_page`` is not available for the typical hide-page case — only
+  ``apply_text_correction`` is. ``<MIXED>`` pages keep ``page.image`` populated and accept either
+  path. Docstring now spells this out per-sentinel.
+
+The calibration self-test claimed "pins the value to within 1e-4" in its docstring but the
+  assertions used ``< 1e-3`` — 10x looser than the docstring stated. Actual measured ratios are
+  within 1e-4 (0.933333 vs 0.9333 → delta 3.3e-5; 0.366197 vs 0.3662 → delta 3e-6; 0.794118 vs
+  0.7941 → delta 1.8e-5), so tightening to ``< 1e-4`` matches reality and the docstring's claim
+  simultaneously. Comment block now lists the precise measured values so a future maintainer doesn't
+  have to re-derive them.
+
+Suite: 773 passing (no test count change; one tolerance
+
+tightened from 1e-3 to 1e-4).
+
+* docs(title-strip): name the actual pytesseract caller in the encoding-coercion paragraph
+
+The ``\r\n`` line-ending paragraph attributed the ``str.strip()`` call to
+  ``call_vision_for_transcription``. That function (``src/agent_tools.py:829``) is the cloud-vision
+  path (Anthropic / Google / OpenAI message translators); it never calls pytesseract.
+
+The function that actually runs pytesseract and applies ``str(reply).strip()`` is
+  ``_call_tesseract_for_transcription`` (``src/agent_tools.py:918``, with the strip at line 968).
+  Docstring now names that one. No behaviour change; the trace of what happens on ``\r\n`` input was
+  already correct, only the function name was wrong.
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+
 ## v1.20.4 (2026-04-28)
 
 ### Bug Fixes
@@ -93,6 +337,11 @@ Suite: 756 passing (+2 net new tests; #1's replacement is non-vacuous, #2 + #3 a
 ---------
 
 Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+### Chores
+
+- **release**: 1.20.4 [skip ci]
+  ([`8bb9aec`](https://github.com/mfozmen/littlepress-ai/commit/8bb9aec8273eb046f68f6065e520cfc9e487989c))
 
 ### Documentation
 
